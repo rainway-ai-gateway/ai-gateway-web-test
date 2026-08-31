@@ -1,0 +1,7 @@
+{
+  "ctlHost": "http://localhost:8085/login",
+  "apiHost": "http://127.0.0.1:8183",
+  "username": "admin",
+  "password": "admin",
+  "changePassword": "itM@2305"
+}

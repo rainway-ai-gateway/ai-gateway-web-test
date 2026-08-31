@@ -1,0 +1,21 @@
+# 运行日志（内容会持续变化，无需提交）
+*.log
+logs/
+
+# 依赖
+node_modules/
+
+# Playwright 运行产物
+test-reports/
+test-results/
+test-results.json
+playwright-report/
+blob-report/
+auth.json
+components-dist/
+
+# Markdown 报告（每次跑测会覆盖/归档）
+report/
+
+# 系统杂项
+.DS_Store

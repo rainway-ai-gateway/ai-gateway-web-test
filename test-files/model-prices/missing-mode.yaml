@@ -1,0 +1,10 @@
+version: v1.0
+default_currency: 'RMB'
+
+models:
+  - provider: 'qa-import-missmode'
+    model: 'qa-import-missmode-model'
+    base_model: 'qa-import-missmode-model'
+    prices:
+      input_cost_per_token: 0.000001
+      output_cost_per_token: 0.000003

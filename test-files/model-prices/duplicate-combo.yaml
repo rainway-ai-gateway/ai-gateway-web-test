@@ -1,0 +1,16 @@
+version: v1.0
+default_currency: 'RMB'
+
+models:
+  - provider: 'qa-import-dup'
+    model: 'qa-import-dup-model'
+    base_model: 'qa-import-dup-model'
+    mode: 'chat'
+    prices:
+      input_cost_per_token: 0.000001
+  - provider: 'qa-import-dup'
+    model: 'qa-import-dup-model'
+    base_model: 'qa-import-dup-model'
+    mode: 'chat'
+    prices:
+      input_cost_per_token: 0.000002
