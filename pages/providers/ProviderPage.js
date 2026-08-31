@@ -127,24 +127,33 @@ function readSessionFromAuthFile() {
 }
 
 async function ensureLocalStorageSession(page) {
-  const hasUser = await page.evaluate(() => {
-    const userStr = localStorage.getItem('user');
-    if (!userStr) return false;
-    try {
-      const user = JSON.parse(userStr);
-      return !!user.sessionKey;
-    } catch (e) {
-      return false;
-    }
-  });
+  let hasUser = false;
+  try {
+    hasUser = await page.evaluate(() => {
+      const userStr = localStorage.getItem('user');
+      if (!userStr) return false;
+      try {
+        const user = JSON.parse(userStr);
+        return !!user.sessionKey;
+      } catch (e) {
+        return false;
+      }
+    });
+  } catch (e) {
+    // localStorage 可能因 SecurityError 不可用（页面未就绪），走 auth.json 兜底
+  }
   if (hasUser) return;
 
   const session = readSessionFromAuthFile();
   if (session) {
-    await page.evaluate((user) => {
-      localStorage.setItem('user', JSON.stringify(user));
-      localStorage.setItem('lang', 'zh');
-    }, session);
+    try {
+      await page.evaluate((user) => {
+        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem('lang', 'zh');
+      }, session);
+    } catch (e) {
+      // sandbox 下 page.evaluate 可能 SecurityError，由 addInitScript 兜底
+    }
   }
 }
 
@@ -152,6 +161,23 @@ async function ensureLocalStorageSession(page) {
 
 async function gotoProvidersPage(page) {
   await rc.ensureAppSession(page);
+
+  // 在导航前注入 initScript，确保页面加载时 localStorage 已就绪
+  // （sandbox 下 page.evaluate 会 SecurityError，initScript 在文档创建时执行可绕过）
+  const session = readSessionFromAuthFile();
+  if (session) {
+    await page.addInitScript((user) => {
+      try {
+        if (!localStorage.getItem('user')) {
+          localStorage.setItem('user', JSON.stringify(user));
+          localStorage.setItem('lang', 'zh');
+        }
+      } catch (e) {
+        // 忽略 SecurityError
+      }
+    }, session);
+  }
+
   await page.goto(rc.getAppBaseUrl() + '/providers');
   await page.waitForLoadState('domcontentloaded');
   await ensureLocalStorageSession(page);
@@ -716,6 +742,7 @@ async function confirmDeleteAndWait(
 
 /**
  * 确认删除并等待指定状态码的 DELETE 响应（供 409 被引用保护等场景断言）
+ * status=0 表示接受任意状态码
  */
 async function confirmDeleteAndWaitForStatus(page, { status = 200 } = {}) {
   const [response] = await Promise.all([
@@ -723,7 +750,7 @@ async function confirmDeleteAndWaitForStatus(page, { status = 200 } = {}) {
       (r) =>
         r.url().includes('/open-api/v1/providers/') &&
         r.request().method() === 'DELETE' &&
-        r.status() === status,
+        (status === 0 || r.status() === status),
       { timeout: 15000 },
     ),
     clickDeleteConfirmOk(page),

@@ -22,10 +22,6 @@ const DOC = utils.DOC_API_KEY;
 /**
  * PageTable 通用组件交互测试
  *
- * 覆盖手工测试发现的两个通用表格组件缺陷：
- * - Bug 2: 添加/编辑后搜索条件残留（未清空但已失效）
- * - Bug 3: 翻页编辑后数据跑到第一页，但页脚页码仍在第二页
- *
  * 使用 API-Key 管理页面作为测试载体，因为 PageTable 是所有列表的公用组件。
  */
 
@@ -40,8 +36,6 @@ function apiKeyDescribe(title, register) {
     register(cleanup);
   });
 }
-
-// ==================== Bug 2: 添加/编辑后搜索条件残留 ====================
 
 apiKeyDescribe('PageTable - PT-01 添加后搜索条件应被清空', (cleanup) => {
   let description;
@@ -78,7 +72,6 @@ apiKeyDescribe('PageTable - PT-01 添加后搜索条件应被清空', (cleanup) 
       const searchInput = page.getByPlaceholder(
         utils.API_KEY_SEARCH_PLACEHOLDER,
       );
-      // 预期：添加成功后搜索条件应被清空
       await expect(searchInput).toHaveValue('');
     });
 
@@ -132,7 +125,6 @@ apiKeyDescribe('PageTable - PT-02 编辑后搜索条件应被清空', (cleanup) 
       const searchInput = page.getByPlaceholder(
         utils.API_KEY_SEARCH_PLACEHOLDER,
       );
-      // 预期：编辑成功后搜索条件应被清空
       await expect(searchInput).toHaveValue('');
     });
 
@@ -169,11 +161,9 @@ apiKeyDescribe(
       });
 
       await test.step('3. 验证添加成功后筛选条件被清空或重置', async () => {
-        // 预期：添加成功后，筛选条件应被清空或重置为"全部"
         const searchArea = page.locator('.page-table .searchTable').first();
         const statusSelect = searchArea.locator('.ivu-select').nth(0);
         const selectText = await statusSelect.innerText();
-        // 筛选条件应被重置为"全部"或清空
         const isCleared =
           selectText.includes('全部') ||
           selectText.includes('请选择') ||
@@ -194,8 +184,6 @@ apiKeyDescribe(
     });
   },
 );
-
-// ==================== Bug 3: 翻页编辑后页码异常 ====================
 
 apiKeyDescribe(
   'PageTable - PT-04 编辑第二页数据后页码应回到第一页',
@@ -282,18 +270,16 @@ apiKeyDescribe(
           .nth(2)
           .innerText();
 
-        // 核心检测逻辑：
-        // 如果当前显示的数据不在第二页的数据范围内（说明数据已刷新到第一页），
-        // 但分页仍显示第二页为激活状态，则说明存在 Bug 3
+        // 核心检测：分页页码应与表格数据页一致
         if (activePage === 2) {
           // 分页显示在第2页，但实际数据可能已经是第1页的数据
           // 验证：编辑后的数据（editDesc）应该可见
           const editedRow = table.rowByText(editDesc);
           if ((await editedRow.count()) === 0) {
             // 编辑后的数据不可见，说明数据已刷新到第一页
-            // 但分页仍在第二页 → 这就是 Bug 3
+            // 但分页仍在第二页 → 页码异常
             throw new Error(
-              `Bug 3 检出：分页组件仍显示第${activePage}页，` +
+              `页码异常：分页组件仍显示第${activePage}页，` +
                 `但表格数据已刷新（编辑后的"${editDesc}"不可见）。` +
                 `当前第一行显示: "${currentFirstDesc.trim()}"`,
             );
@@ -321,8 +307,12 @@ apiKeyDescribe('PageTable - PT-05 嵌套字段列排序应生效', () => {
       const quotaTexts = [];
       const entityTexts = [];
       for (let i = 0; i < Math.min(rowCount, 3); i++) {
-        quotaTexts.push((await rows.nth(i).locator('td').nth(5).innerText()).trim());
-        entityTexts.push((await rows.nth(i).locator('td').nth(7).innerText()).trim());
+        quotaTexts.push(
+          (await rows.nth(i).locator('td').nth(5).innerText()).trim(),
+        );
+        entityTexts.push(
+          (await rows.nth(i).locator('td').nth(7).innerText()).trim(),
+        );
       }
       page.__pt05Before = { quotaTexts, entityTexts };
     });
@@ -330,14 +320,19 @@ apiKeyDescribe('PageTable - PT-05 嵌套字段列排序应生效', () => {
     await test.step('2. 点击配额列排序并验证顺序变化', async () => {
       const table = new PageTableComponent(page);
       const rows = table.dataRows();
-      const quotaHeader = page.locator('.show-iView-Table th').filter({ hasText: '配额' }).first();
+      const quotaHeader = page
+        .locator('.show-iView-Table th')
+        .filter({ hasText: '配额' })
+        .first();
       await quotaHeader.click();
       await page.waitForTimeout(500);
 
       const afterQuotaTexts = [];
       const rowCount = await rows.count();
       for (let i = 0; i < Math.min(rowCount, 3); i++) {
-        afterQuotaTexts.push((await rows.nth(i).locator('td').nth(5).innerText()).trim());
+        afterQuotaTexts.push(
+          (await rows.nth(i).locator('td').nth(5).innerText()).trim(),
+        );
       }
 
       const before = page.__pt05Before.quotaTexts.join('|');
@@ -347,18 +342,28 @@ apiKeyDescribe('PageTable - PT-05 嵌套字段列排序应生效', () => {
 
     await test.step('3. 点击挂载 Entity 列排序并验证顺序变化', async () => {
       const rows = new PageTableComponent(page).dataRows();
-      const entityHeader = page.locator('.show-iView-Table th').filter({ hasText: '挂载' }).first();
+      const entityHeader = page
+        .locator('.show-iView-Table th')
+        .filter({ hasText: '挂载' })
+        .first();
       await entityHeader.click();
       await page.waitForTimeout(500);
 
       const afterEntityTexts = [];
       const rowCount = await rows.count();
       for (let i = 0; i < Math.min(rowCount, 3); i++) {
-        afterEntityTexts.push((await rows.nth(i).locator('td').nth(7).innerText()).trim());
+        afterEntityTexts.push(
+          (await rows.nth(i).locator('td').nth(7).innerText()).trim(),
+        );
       }
 
-      const uniqueEntities = [...new Set(page.__pt05Before.entityTexts.filter(Boolean))];
-      test.skip(uniqueEntities.length < 2, '至少需要 2 个不同 Entity 名称才能验证排序');
+      const uniqueEntities = [
+        ...new Set(page.__pt05Before.entityTexts.filter(Boolean)),
+      ];
+      test.skip(
+        uniqueEntities.length < 2,
+        '至少需要 2 个不同 Entity 名称才能验证排序',
+      );
 
       const before = page.__pt05Before.entityTexts.join('|');
       const after = afterEntityTexts.join('|');

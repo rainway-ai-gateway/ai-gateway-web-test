@@ -143,15 +143,16 @@ test.describe('AI业务集群管理 - RM-BC-37 业务集群列表与OpenAPI一�
   test('RM-BC-37 业务集群列表与OpenAPI一致', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
-    // 通过API创建集群（引用 Provider）
     await utils.createCluster(
       page,
       await buildClusterPayload(page, clusterName, providerName),
     );
 
-    // 获取API返回的集群列表
     const apiData = await utils.getClusterList(page);
     // API 返回的是数组，不是 { items: [...] }
     const apiClusterNames = Array.isArray(apiData)

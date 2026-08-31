@@ -31,7 +31,7 @@
  * - RM-BC-15 查看AI业务集群详情（不展示「实例配置」面板）
  * - RM-BC-16 编辑向导步骤与创建一致（5 步，无「实例配置」）
  * - RM-BC-21 业务集群名称重复
- * - RM-BC-23 业务集群名称格式校验 [BUG]
+ * - RM-BC-23 业务集群名称格式校验
  * - RM-BC-34 业务集群详情与OpenAPI一致
  * - RM-BC-35 复查页与提交数据一致
  * - RM-BC-36 编辑向导回显与OpenAPI一致（provider 引用）
@@ -146,7 +146,10 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
   test('RM-BC-02 创建AI业务集群-5步向导成功', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.fillCreateWizardThroughReview(page, {
       clusterName,
@@ -161,7 +164,10 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
   test('RM-BC-11 向导第5步复查并提交', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.fillCreateWizardThroughReview(page, {
       clusterName,
@@ -208,10 +214,12 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
 
   // RM-BC-12: 编辑AI业务集群
   test('RM-BC-12 编辑AI业务集群', async ({ page }) => {
-    // 通过API创建集群
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.createCluster(
       page,
@@ -245,10 +253,12 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
 
   // RM-BC-13: 删除AI业务集群-成功
   test('RM-BC-13 删除AI业务集群-成功', async ({ page }) => {
-    // 通过API创建集群
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.createCluster(
       page,
@@ -259,7 +269,6 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
     await page.waitForLoadState('domcontentloaded');
     await utils.ensureBusinessClusterRowVisible(page, clusterName);
 
-    // 点击删除
     await utils
       .businessClusterTable(page)
       .rowAction(clusterName, '删除')
@@ -276,10 +285,12 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
 
   // RM-BC-15: 查看AI业务集群详情
   test('RM-BC-15 查看AI业务集群详情', async ({ page }) => {
-    // 通过API创建集群
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.createCluster(
       page,
@@ -313,10 +324,12 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
 
   // RM-BC-16: 编辑向导步骤与创建一致（5步）
   test('RM-BC-16 编辑向导步骤与创建一致', async ({ page }) => {
-    // 通过API创建集群
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.createCluster(
       page,
@@ -353,9 +366,11 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
   test('RM-BC-21 业务集群名称重复', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
-    // 通过API创建第一个集群
     await utils.createCluster(
       page,
       await buildClusterPayload(page, clusterName, providerName),
@@ -375,35 +390,35 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
 
     await utils.expectWizardStep(page, '基础配置');
     const drawer = utils.ivuDrawer(page).active();
-    await expect(drawer.locator('.ivu-form-item-error-tip').first()).toBeVisible(
-      { timeout: 5000 },
-    );
+    await expect(
+      drawer.locator('.ivu-form-item-error-tip').first(),
+    ).toBeVisible({ timeout: 5000 });
   });
 
   // RM-BC-23: 业务集群名称格式校验
-  // BUG: BaseClustersNameRegCheck 正则为 /^.+$/，仅校验非空，
-  // 错误提示声称"只能包含字母、数字以及-.$+~且长度大于1"但实际未生效
-  test('RM-BC-23 业务集群名称格式校验 [BUG: 前端正则未校验格式]', async ({
-    page,
-  }) => {
+  // API 规范：长度 1-64；仅允许字母、数字、_、-、.；不能以 .-_ 开头或结尾；不能含空白
+  test('RM-BC-23 业务集群名称格式校验', async ({ page }) => {
     await utils.openCreateBusinessClusterDrawer(page);
 
-    // 单字符 - 文档说应被拦截，但实际通过
+    // "test!" 含非法字符 !，应被前端拦截，留在第 1 步
     await utils.fillBasicStep(page, {
-      clusterName: 'a',
+      clusterName: 'test!',
       protocol: 'https',
       hashStrategy: 'CLIENT_ID_ONLY',
     });
     await utils.clickWizardNext(page);
-    // 名称格式校验实际未生效，应能进入下一步
-    await utils.expectWizardStep(page, '超时和重传');
+    // 名称格式校验已生效，应停留在基础配置步
+    await utils.expectWizardStep(page, '基础配置');
   });
 
   // RM-BC-34: 业务集群详情与OpenAPI一致
   test('RM-BC-34 业务集群详情与OpenAPI一致', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.createCluster(
       page,
@@ -427,7 +442,10 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
   test('RM-BC-35 复查页与提交数据一致', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.fillCreateWizardThroughReview(page, {
       clusterName,
@@ -468,7 +486,10 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
   test('RM-BC-36 编辑向导回显与OpenAPI一致', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.createCluster(
       page,
@@ -495,12 +516,13 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
 
   // RM-BC-38: 编辑向导复查页与各步数据一致
   test('RM-BC-38 编辑向导复查页与各步数据一致', async ({ page }) => {
-    // 需要先创建集群
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
-    // 通过API创建集群
     await utils.createCluster(
       page,
       await buildClusterPayload(page, clusterName, providerName),
@@ -510,7 +532,6 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
     await page.waitForLoadState('domcontentloaded');
     await utils.ensureBusinessClusterRowVisible(page, clusterName);
 
-    // 打开编辑向导
     await utils.openEditBusinessClusterDrawer(page, clusterName);
 
     const drawer = utils
@@ -656,7 +677,10 @@ test.describe('AI业务集群管理 - RM-BC-14 删除约束', () => {
   test('RM-BC-14 删除集群-被路由引用', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
-    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
 
     await utils.createCluster(
       page,

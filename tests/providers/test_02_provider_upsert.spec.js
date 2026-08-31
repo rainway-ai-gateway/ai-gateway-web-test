@@ -349,7 +349,6 @@ test.describe('模型服务商 - PR-C-03 编辑服务商-成功', () => {
     const body = response.request().postDataJSON();
     expect(body).toBeTruthy();
     // name 不应出现在编辑请求体中（后端设计：name 仅通过 URL 路径传递）
-    // expect(body.name).toBe(providerName);
     expect(body.description).toBe('修改后描述');
     expect(body.instance_pool).toHaveLength(2);
     expect(body.instance_pool.map((i) => i.port)).toEqual([IP_PORT, 81]);

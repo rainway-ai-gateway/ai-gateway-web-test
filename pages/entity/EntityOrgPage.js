@@ -1074,20 +1074,6 @@ async function expectEntityFormInlineError(
 
 async function expectDrawerFormErrorContains(page, message, drawerTitle) {
   const drawer = ivuDrawer(page).withTitle(drawerTitle);
-  // 调试：打印抽屉内所有错误提示的文本
-  const errorTips = await drawer.locator('.ivu-form-item-error-tip').all();
-  const texts = await Promise.all(
-    errorTips.map((el) => el.textContent().catch(() => '')),
-  );
-  console.log('抽屉内错误提示:', texts);
-  // 调试：打印名称字段的值
-  const nameInput = drawer
-    .locator('.ivu-form-item')
-    .filter({ hasText: '名称' })
-    .locator('input')
-    .first();
-  const nameValue = await nameInput.inputValue().catch(() => '');
-  console.log('名称字段值:', nameValue, '长度:', nameValue.length);
   await expect(
     drawer
       .locator('.ivu-form-item-error-tip')

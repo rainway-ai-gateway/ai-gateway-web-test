@@ -528,7 +528,6 @@ async function fillInstancePortAtRow(
   const body = instanceConfigBody(page, drawerTitle);
   // 端口是 InputNumber 组件，使用 .ivu-input-number-input 选择器
   const rows = body.locator('table tbody tr');
-  // 等待表格行可见
   await rows
     .nth(rowIndex)
     .locator('.ivu-input-number-input')

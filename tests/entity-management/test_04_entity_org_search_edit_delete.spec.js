@@ -654,7 +654,6 @@ entityOrgDescribe('Entity组织管理 - EM-E-12b Entity搜索-按配额', (clean
         resetCycle: '每月',
       });
       const entityData = await utils.findEntityByNameViaApi(page, entityName);
-      console.log('Entity API data:', JSON.stringify(entityData, null, 2));
       if (entityData?.id) {
         entityId = entityData.id;
         cleanup.trackEntityId(entityId);

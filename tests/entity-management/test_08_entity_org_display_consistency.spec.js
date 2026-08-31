@@ -344,7 +344,7 @@ entityOrgDescribe(
 
         // 更新时间
         if (apiData.update_time) {
-          // Bug 1.1 核心检测：更新时间不应为空、不应为"-"
+          // 更新时间不应为空、不应为"-"
           const hasUpdateTimeLabel = drawerText.includes('更新时间');
           if (hasUpdateTimeLabel) {
             const hasUpdateTimeDash =

@@ -498,7 +498,6 @@ apiKeyDescribe('API-Key管理 - EM-K-15b API-Key搜索-按Key值', (cleanup) => 
       // API 返回的 Key 值字段名可能是 api_key / key / secret_key
       keyValue =
         apiKey.api_key || apiKey.key || apiKey.secret_key || apiKey.apiKey;
-      console.log('API-Key 创建响应字段:', Object.keys(apiKey).join(', '));
       cleanup.trackApiKeyId(apiKeyId);
       await utils.reloadApiKeyManagementPage(page);
     });

@@ -128,7 +128,6 @@ test.describe('模型定价 - MP-C-02 编辑模型定价成功', () => {
     expect(created).not.toBeNull();
     await reloadToList(page);
 
-    // 打开编辑抽屉，断言回显
     await mp.openEditDrawer(page, combo.provider);
     expect(await mp.getProviderValue(page)).toBe(combo.provider);
     expect(await mp.getModelValue(page)).toBe(combo.model);
@@ -177,7 +176,6 @@ test.describe('模型定价 - MP-C-03 删除模型定价（确认）', () => {
     expect(created).not.toBeNull();
     await reloadToList(page);
 
-    // 点击删除 → 二次确认弹窗 → 确定
     await mp.clickRowAction(page, combo.provider, '删除');
     await mp.expectDeleteConfirm(page, combo.model);
     await mp.confirmDeleteAndWait(page);

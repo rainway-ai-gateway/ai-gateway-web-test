@@ -529,13 +529,11 @@ function paginationLocator(page) {
 
 async function gotoUserManagementPage(page) {
   const addBtn = page.getByRole('button', { name: '添加用户' });
-  // 强制刷新页面，确保状态干净
   const baseUrl = getAppBaseUrl();
   await page.goto(baseUrl + '/user', {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
   });
-  // 等待按钮出现
   await addBtn.waitFor({ state: 'visible', timeout: 20000 });
 }
 
