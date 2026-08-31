@@ -1,0 +1,6 @@
+version: v1.0
+default_currency: 'RMB'
+models:
+  - provider: 'broken-import'
+    model: 'broken-model'
+    [unclosed-bracket

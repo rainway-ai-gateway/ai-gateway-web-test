@@ -1,0 +1,22 @@
+/**
+ * Copyright(c) 2026 The Rainway AI Gateway (壬远AI网关) Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ElSelectComponent = exports.EL_SELECT_DROPDOWN_VISIBLE = void 0;
+var constants_1 = require("./constants");
+Object.defineProperty(exports, "EL_SELECT_DROPDOWN_VISIBLE", { enumerable: true, get: function () { return constants_1.EL_SELECT_DROPDOWN_VISIBLE; } });
+var ElSelect_1 = require("./ElSelect");
+Object.defineProperty(exports, "ElSelectComponent", { enumerable: true, get: function () { return ElSelect_1.ElSelectComponent; } });

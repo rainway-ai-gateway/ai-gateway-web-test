@@ -1,0 +1,10 @@
+version: v9.9
+default_currency: 'RMB'
+
+models:
+  - provider: 'qa-import-ver'
+    model: 'qa-import-ver-model'
+    base_model: 'qa-import-ver-model'
+    mode: 'chat'
+    prices:
+      input_cost_per_token: 0.000001

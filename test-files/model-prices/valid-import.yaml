@@ -1,0 +1,44 @@
+version: v1.0
+default_currency: 'RMB'
+
+models:
+  - provider: 'qa-import-1'
+    model: 'qa-import-1-model'
+    base_model: 'qa-import-1-model'
+    mode: 'chat'
+    capabilities: ['chat']
+    supported_parameters: ['temperature', 'top_p', 'max_tokens']
+    limits:
+      context_window: 32000
+      max_input_tokens: 32000
+      max_output_tokens: 2048
+    prices:
+      input_cost_per_token: 0.000001
+      output_cost_per_token: 0.000003
+    metadata:
+      source: 'https://qa.example.com/pricing'
+
+  - provider: 'qa-import-2'
+    model: 'qa-import-2-model'
+    base_model: 'qa-import-2-model'
+    mode: 'completion'
+    capabilities: ['chat']
+    supported_parameters: ['temperature', 'max_tokens']
+    limits:
+      context_window: 16000
+      max_input_tokens: 16000
+      max_output_tokens: 1024
+    prices:
+      input_cost_per_token: 0.000002
+      output_cost_per_token: 0.000006
+
+  - provider: 'qa-import-3'
+    model: 'qa-import-3-model'
+    base_model: 'qa-import-3-model'
+    mode: 'embedding'
+    capabilities: ['embedding']
+    limits:
+      context_window: 8000
+      max_input_tokens: 8000
+    prices:
+      input_cost_per_token: 0.0000005
