@@ -1,0 +1,10 @@
+version: v1.0
+default_currency: 'USD'
+
+models:
+  - provider: 'qa-import-usd'
+    model: 'qa-import-usd-model'
+    base_model: 'qa-import-usd-model'
+    mode: 'chat'
+    prices:
+      input_cost_per_token: 0.000001

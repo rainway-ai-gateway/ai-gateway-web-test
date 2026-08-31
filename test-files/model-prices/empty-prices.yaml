@@ -1,0 +1,9 @@
+version: v1.0
+default_currency: 'RMB'
+
+models:
+  - provider: 'qa-import-emptyprices'
+    model: 'qa-import-emptyprices-model'
+    base_model: 'qa-import-emptyprices-model'
+    mode: 'chat'
+    prices: {}

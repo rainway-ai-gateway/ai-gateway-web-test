@@ -1,0 +1,35 @@
+{
+  "scripts": {
+    "test": "playwright test tests/",
+    "test:user": "PW_WORKERS=1 playwright test tests/user/",
+    "test:entity-type": "PW_WORKERS=2 playwright test tests/entity-type/",
+    "test:entity-management": "PW_WORKERS=2 playwright test tests/entity-management/",
+    "test:api-key": "PW_WORKERS=2 playwright test tests/api-key/",
+    "test:cluster": "playwright test tests/cluster/",
+    "test:route": "PW_WORKERS=1 playwright test tests/route/",
+    "test:journey": "playwright test tests/entity-management/test_05_entity_full_journey.spec.js",
+    "report": "node utils/generate_report.js test-results.json report/test-report.md",
+    "cleanup:testdata": "node scripts/cleanup-entity-test-data.cjs",
+    "cleanup:testdata:execute": "node scripts/cleanup-entity-test-data.cjs --execute",
+    "cleanup:user": "node scripts/cleanup-user-test-data.cjs",
+    "cleanup:user:execute": "node scripts/cleanup-user-test-data.cjs --execute",
+    "cleanup:resource": "node scripts/cleanup-resource-test-data.cjs",
+    "cleanup:resource:execute": "node scripts/cleanup-resource-test-data.cjs --execute",
+    "cleanup:route": "node scripts/cleanup-route-test-data.cjs",
+    "cleanup:route:execute": "node scripts/cleanup-route-test-data.cjs --execute",
+    "cleanup:modelprice": "node scripts/cleanup-model-price-test-data.cjs",
+    "cleanup:modelprice:execute": "node scripts/cleanup-model-price-test-data.cjs --execute",
+    "cleanup:provider": "node scripts/cleanup-provider-test-data.cjs",
+    "cleanup:provider:execute": "node scripts/cleanup-provider-test-data.cjs --execute"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "moment": "^2.30.1"
+  }
+}

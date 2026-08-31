@@ -1,0 +1,64 @@
+version: v1.0
+default_currency: 'RMB'
+
+models:
+  - provider: 'deepseek'
+    model: 'deepseek-v3'
+    base_model: 'deepseek-v3'
+    mode: 'chat'
+    capabilities:
+      ['chat', 'reasoning', 'tools', 'structured_outputs', 'prompt_caching']
+    supported_parameters:
+      [
+        'temperature',
+        'top_p',
+        'max_tokens',
+        'tools',
+        'tool_choice',
+        'response_format',
+        'reasoning',
+      ]
+    limits:
+      context_window: 128000
+      max_input_tokens: 128000
+      max_output_tokens: 8192
+      max_tokens: 8192
+    prices:
+      input_cost_per_token: 0.000002
+      output_cost_per_token: 0.000008
+      cache_read_input_token_cost: 0.0000005
+      cache_creation_input_token_cost: 0.000001
+    tier_prices:
+      peak:
+        input_cost_per_token: 0.000004
+        output_cost_per_token: 0.000016
+        cache_read_input_token_cost: 0.000001
+    metadata:
+      source: 'https://platform.deepseek.com/pricing'
+      notes: 'DeepSeek V3 官方 API'
+
+  - provider: 'openai'
+    model: 'gpt-4o'
+    base_model: 'gpt-4o'
+    mode: 'chat'
+    capabilities: ['chat', 'vision', 'tools', 'structured_outputs']
+    supported_parameters:
+      [
+        'temperature',
+        'top_p',
+        'max_tokens',
+        'tools',
+        'tool_choice',
+        'response_format',
+        'image_input',
+      ]
+    limits:
+      context_window: 128000
+      max_input_tokens: 128000
+      max_output_tokens: 4096
+    prices:
+      input_cost_per_token: 0.0000216
+      output_cost_per_token: 0.000108
+    metadata:
+      source: 'https://openai.com/pricing'
+      notes: 'OpenAI GPT-4o（美元报价已按汇率换算为 RMB）'
