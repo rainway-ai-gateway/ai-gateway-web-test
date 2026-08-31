@@ -217,9 +217,3 @@ await page.locator('.ivu-drawer-wrap').click()
 - 分辨率: 1920×1080
 - 网络: 可访问AI网关管理控制台
 - 前置条件: 系统已部署并正常运行
-
-## 相关文档
-
-- [测试用例生成规范](.trae/skills/ai-gateway-test-generation/SKILL.md)
-- [实现模式参考](.trae/skills/ai-gateway-test-generation/reference-patterns.md)
-- [iView 测试陷阱](.trae/skills/ivue-playwright-test-patterns/SKILL.md)
