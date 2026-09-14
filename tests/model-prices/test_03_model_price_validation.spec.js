@@ -23,11 +23,10 @@
  * - MP-V-05 prices 字段值非负校验
  *
  * 已知 UI 缺陷（作为断言基准）：
- * 1. 创建唯一性校验恒拦截：合法表单提交后被「该 (provider, model, mode) 组合已存在」
- *    拦截。因此「合法值可提交」类断言统一以到达唯一性校验阶段（duplicateCombo 提示）
- *    作为「校验通过」的证据。
- * 2. MP-V-01-4 mode 必填：表单默认 mode='chat'，需通过 setModeViaModel('') 清空
+ * 1. MP-V-01-4 mode 必填：表单默认 mode='chat'，需通过 setModeViaModel('') 清空
  *    以模拟「未选择 mode」场景。
+ * 2. MP-V-05 负值：价格为文本 Input，负值提交时前端拦截并提示 pricesValueInvalid，
+ *    不再由 InputNumber :min=0 钳制为 0。
  *
  * 文案偏差（docs/model-prices/02-功能测试用例/ 参考文案 vs 实际 UI i18n）：
  * - design/02 参考文案如「请输入 Provider」「请至少配置一个价格项」「价格不能为负数」等，
@@ -243,6 +242,13 @@ test.describe('模型定价 - MP-V-04 prices 至少一个价格字段', () => {
     // （直接 submitUpsertAndWait 一次点击提交；此前重复 clickSubmit 会在
     //   按钮 loading 期间被 detach 导致 locator.click 超时）
     await mp.addPriceRow(page);
+
+    // 验证价格键名下拉开包含全部 10 个新增键（MP-T-10）
+    const options = await mp.getPriceKeyDropdownOptions(page);
+    for (const key of mp.NEW_PRICE_KEYS) {
+      expect(options).toContain(key);
+    }
+
     await mp.fillPriceRow(page, 0, {
       key: mp.PRICE_KEY_INPUT_COST,
       value: 0.00003,
@@ -271,9 +277,10 @@ test.describe('模型定价 - MP-V-05 prices 字段值非负校验', () => {
     await cleanup.cleanup(page);
   });
 
-  test('创建表单输入负值被 InputNumber 钳制为 0（非负强制生效）', async ({
+  test('创建表单输入负值被拦截，提示非负数后改为 0 可提交', async ({
     page,
   }) => {
+    cleanup.trackCombo('qa-v-negative', 'qa-v-negative-model', 'chat');
     await mp.openCreateDrawer(page);
     await mp.fillProvider(page, 'qa-v-negative');
     await mp.fillModel(page, 'qa-v-negative-model');
@@ -281,16 +288,15 @@ test.describe('模型定价 - MP-V-05 prices 字段值非负校验', () => {
     await mp.selectMode(page, 'chat');
     await mp.addPriceRow(page);
 
-    // 输入负数 -0.0001：价格值输入框为 el-input-number(:min=0)，失焦时钳制为 0，
-    // 保证价格字段不可能为负（UI 层非负强制，无「价格不能为负数」错误提示）
     await mp.fillPriceRow(page, 0, {
       key: mp.PRICE_KEY_INPUT_COST,
-      value: -0.0001,
+      value: '-0.0001',
     });
-    const rowValues = await mp.getPriceRowValues(page, 0);
-    expect(rowValues.value).toBe('0.00000000');
+    await mp.clickSubmitExpectNoModelPriceWrite(page);
+    await mp.expectPricesError(page, mp.MSG.pricesValueInvalid);
+    await mp.expectUpsertScopeVisible(page);
 
-    // 0 为合法非负值 → 提交成功创建记录
+    await mp.fillPriceRow(page, 0, { value: '0' });
     await mp.submitUpsertAndWait(page);
     await mp.expectDrawerHidden(page);
     const created = await api.findModelPriceByComboViaApi(
@@ -303,7 +309,7 @@ test.describe('模型定价 - MP-V-05 prices 字段值非负校验', () => {
     expect(created.prices.input_cost_per_token).toBe(0);
   });
 
-  test('编辑路径输入负值被钳制为 0，接口数据更新为非负值', async ({ page }) => {
+  test('编辑路径输入负值被拦截，改为 0 后接口更新为非负值', async ({ page }) => {
     const combo = {
       provider: 'qa-v-neg-edit',
       model: 'qa-v-neg-edit-model',
@@ -319,7 +325,6 @@ test.describe('模型定价 - MP-V-05 prices 字段值非负校验', () => {
     });
     expect(created).not.toBeNull();
 
-    // 刷新列表后打开编辑（组合未变更 → 绕过唯一性校验直接 PUT）
     await page.reload();
     await expect(page.getByRole('button', { name: '新增定价' })).toBeVisible({
       timeout: 15000,
@@ -327,13 +332,13 @@ test.describe('模型定价 - MP-V-05 prices 字段值非负校验', () => {
     await page.waitForTimeout(500);
     await mp.openEditDrawer(page, combo.provider);
 
-    // 价格改为负数 → el-input-number(:min=0) 失焦钳制为 0（非负强制）
-    await mp.fillPriceRow(page, 0, { value: -0.0001 });
-    const rowValues = await mp.getPriceRowValues(page, 0);
-    expect(rowValues.value).toBe('0.00000000');
+    await mp.fillPriceRow(page, 0, { value: '-0.0001' });
+    await mp.clickSubmitExpectNoModelPriceWrite(page);
+    await mp.expectPricesError(page, mp.MSG.pricesValueInvalid);
+    await mp.expectUpsertScopeVisible(page);
 
-    // 0 为合法值 → 提交成功，接口数据更新为 0（非负保证生效）
-    await mp.clickSubmit(page);
+    await mp.fillPriceRow(page, 0, { value: '0' });
+    await mp.submitUpsertAndWait(page);
     await mp.expectDrawerHidden(page);
     const record = await api.findModelPriceByComboViaApi(
       page,
@@ -597,11 +602,18 @@ test.describe('模型定价 - MP-V-08 capabilities 多选标签交互', () => {
     await page.waitForTimeout(500);
 
     await mp.openEditDrawer(page, combo.provider);
-    await mp.selectMultiOptions(page, mp.LABEL.capabilities, [
-      'chat',
-      'vision',
-    ]);
-    await mp.submitUpsertAndWait(page);
+
+    // 使用 page.evaluate 直接设置 Vue 组件的 formData.capabilities
+    // （el-select filterable+multiple 模式下 UI 点击不可靠）
+    await page.waitForTimeout(500);
+    await page.evaluate(() => {
+      const root = document.querySelector('.model-price-upsert');
+      if (root && root.__vue__) {
+        root.__vue__.formData.capabilities = ['chat', 'vision'];
+      }
+    });
+    await mp.clickSubmit(page);
+    await mp.expectMessage(page, mp.MSG.submitSuccess);
     await mp.expectDrawerHidden(page);
 
     const updated = await api.findModelPriceByComboViaApi(

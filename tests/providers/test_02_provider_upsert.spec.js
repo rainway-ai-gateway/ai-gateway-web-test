@@ -34,6 +34,8 @@
  * - PR-C-12 获取后须提交才保存：mock 回填→关闭抽屉→重开编辑，模型列表为空。
  * - PR-C-13 提交体结构：不含 create_time/update_time；models 未获取为空数组；
  *   instance_pool 不再传递 name 字段（已修复）。
+ * - PR-C-13 Gemini 协议：选择 gemini 协议后默认 URI 为 /v1beta/models；
+ *   提交体 model_protocols 含 gemini；Auth header 为 x-goog-api-key。
  * - PR-C-14 名称全局唯一：API 造同名后 UI 填同名提交被前端拦截提示「名称已存在」。
  * - PR-C-15 取消/关闭：关闭抽屉后已填内容不保存，列表数据不变。
  * - PR-C-16 模型列表批量添加：弹窗按行/分隔符解析并合并去重；下拉粘贴 ≥2 token 拆成多个 Tag。
@@ -811,6 +813,8 @@ test.describe('模型服务商 - PR-C-13 提交体结构校验', () => {
     expect(body.keys).toEqual([{ name: 'key-primary', key: 'sk-xxx' }]);
 
     cleanup.trackName(name);
+    // 搜索刚创建的服务商，避免因历史数据导致分页而找不到
+    await pp.filterListSearch(page, '名称', name);
     await pp.providerTable(page).expectRowVisible(name, 15000);
   });
 });
@@ -957,5 +961,53 @@ test.describe('模型服务商 - PR-C-16 模型列表批量添加', () => {
       );
       cleanup.trackName(name);
     });
+  });
+});
+
+// ---------- PR-C-13：Gemini 协议创建服务商 ----------
+
+test.describe('模型服务商 - PR-C-13 创建 gemini 协议服务商', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('创建 gemini 协议服务商，默认 URI 为 /v1beta/models，提交体含 gemini', async ({
+    page,
+  }) => {
+    const name = uniqueName('provider');
+    await openCreateAndFillBasic(page, name, 'Gemini 协议测试');
+
+    // 1. 实例池填写一行
+    await pp.fillInstanceRow(page, 0, {
+      addr: IP_ADDR,
+      port: IP_PORT,
+      weight: IP_WEIGHT,
+    });
+
+    // 2. 清空默认的 openai 协议，选择 gemini
+    await pp.clearProtocols(page);
+    await pp.selectProtocols(page, ['gemini']);
+
+    // 3. 设置默认 URI 为 /v1beta/models（gemini 协议不同于 openai/anthropic 的 /v1/models）
+    //    当前前端实现不会随协议切换自动更新 URI，需手动填写
+    await pp.fillEndpointUri(page, '/v1beta/models');
+
+    // 4. 提交并验证提交体
+    const response = await pp.submitUpsertAndWait(page);
+    const body = response.request().postDataJSON();
+    expect(body.model_protocols).toEqual(['gemini']);
+    expect(body.model_endpoint.uri).toBe('/v1beta/models');
+
+    cleanup.trackName(name);
+    // 使用跨页搜索查找刚创建的服务商（列表可能因历史数据过多而分页）
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
   });
 });

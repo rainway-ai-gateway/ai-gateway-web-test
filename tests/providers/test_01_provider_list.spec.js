@@ -21,7 +21,7 @@
  *   列头 名称/描述/协议/模型/操作；协议列 join 展示；模型列 2 Tag + `+N`（空模型显示 `-`）。
  * - PR-L-02 名称筛选：本地筛选、大小写不敏感、清空恢复、不触发列表请求。
  * - PR-L-03 描述筛选：本地筛选、空描述不参与匹配、清空恢复。
- * - PR-L-04 协议筛选：下拉选项仅 openai/anthropic；选中后本地筛选，多协议任一命中。
+ * - PR-L-04 协议筛选：下拉选项 openai/anthropic/gemini；选中后本地筛选，多协议任一命中。
  * - PR-L-05 模型筛选：基于 models join 本地筛选、大小写不敏感。
  * - PR-L-06 组合筛选：名称+协议+模型为与关系，任一条件清空后对应过滤失效。
  * - PR-L-07 前端分页：API 造数 21 条，翻页/切 pageSize 不触发列表请求，行分页正确。
@@ -38,7 +38,7 @@
  * 2. filterListSearch 封装（ProviderPage）仅 fill，而 iView Input 的 on-change 在失焦时
  *    才触发（fill 只派发 input 事件，不派发 change）。spec 内以 filterListSearchBlur 包装
  *    补充 blur（沿用 pp.providerTable().searchInput() 定位，不引入裸 selector）。
- * 3. PR-L-04「下拉选项仅 openai/anthropic」为断言型读取：仅枚举 dropdown 选项文本，
+ * 3. PR-L-04「下拉选项 openai/anthropic/gemini」为断言型读取：仅枚举 dropdown 选项文本，
  *    交互仍走 pp.filterListByProtocol。
  * 4. PR-L-11 跨模块断言 ModelPrice 列表页：筛选结果、提供商下拉选中、无匹配提示
  *    走 ModelPricePage 封装；详情 Drawer 以 expectViewScopeHidden 判定未打开。
@@ -305,10 +305,11 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
   });
 });
 
-test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/anthropic）', () => {
+test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anthropic/gemini）', () => {
   let cleanup;
   let pOpenai;
   let pAnthropic;
+  let pGemini;
   let pBoth;
 
   test.beforeEach(async ({ page }) => {
@@ -330,6 +331,14 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/a
         models: [],
       })
     ).name;
+    pGemini = (
+      await createProviderViaApiAndTrack(page, cleanup, {
+        name: base + 'gm',
+        description: '自动化测试-协议筛选',
+        model_protocols: ['gemini'],
+        models: [],
+      })
+    ).name;
     pBoth = (
       await createProviderViaApiAndTrack(page, cleanup, {
         name: base + 'both',
@@ -346,11 +355,10 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/a
     await cleanup.cleanup(page);
   });
 
-  test('下拉选项仅 openai/anthropic；选中后本地筛选，多协议任一命中，不触发请求', async ({
+  test('下拉选项 openai/anthropic/gemini；选中后本地筛选，多协议任一命中，不触发请求', async ({
     page,
   }) => {
-    // 1. 打开协议筛选下拉，枚举选项文本断言仅 openai、anthropic（不含 gemini 等）
-    //    （偏差记录 3：断言型读取，仅枚举选项文本，不驱动交互）
+    // 1. 打开协议筛选下拉，枚举选项文本断言含 openai、anthropic、gemini
     const protocolSelect = pp
       .providerTable(page)
       .searchArea()
@@ -363,25 +371,36 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/a
       .allTextContents();
     expect(
       optionTexts.map((t) => t.trim()).filter(Boolean),
-      '协议筛选下拉应仅含 openai/anthropic',
-    ).toEqual(['openai', 'anthropic']);
+      '协议筛选下拉应含 openai/anthropic/gemini',
+    ).toEqual(['openai', 'anthropic', 'gemini']);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(200);
 
-    // 2. 选 openai → openai 行与双协议行可见，纯 anthropic 行隐藏
+    // 2. 选 openai → openai 行与双协议行可见，纯 anthropic/gemini 行隐藏
     await pp.expectNoListRequestDuring(page, async () => {
       await pp.filterListByProtocol(page, 'openai');
       await pp.providerTable(page).expectRowVisible(pOpenai);
       await pp.providerTable(page).expectRowVisible(pBoth);
       await pp.providerTable(page).expectRowHidden(pAnthropic);
+      await pp.providerTable(page).expectRowHidden(pGemini);
     });
 
-    // 3. 换选 anthropic → anthropic 行与双协议行可见，纯 openai 行隐藏
+    // 3. 换选 anthropic → anthropic 行与双协议行可见，纯 openai/gemini 行隐藏
     await pp.expectNoListRequestDuring(page, async () => {
       await pp.filterListByProtocol(page, 'anthropic');
       await pp.providerTable(page).expectRowVisible(pAnthropic);
       await pp.providerTable(page).expectRowVisible(pBoth);
       await pp.providerTable(page).expectRowHidden(pOpenai);
+      await pp.providerTable(page).expectRowHidden(pGemini);
+    });
+
+    // 4. 换选 gemini → gemini 行可见，其他行隐藏
+    await pp.expectNoListRequestDuring(page, async () => {
+      await pp.filterListByProtocol(page, 'gemini');
+      await pp.providerTable(page).expectRowVisible(pGemini);
+      await pp.providerTable(page).expectRowHidden(pOpenai);
+      await pp.providerTable(page).expectRowHidden(pAnthropic);
+      await pp.providerTable(page).expectRowHidden(pBoth);
     });
   });
 });
