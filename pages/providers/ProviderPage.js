@@ -104,6 +104,9 @@ const DOC = {
   instanceModeIp: 'IP',
   instanceModeDomain: '服务商域名',
   get: '获取',
+  batchAdd: '批量添加',
+  batchConfirm: '确认',
+  batchCancel: '取消',
 };
 
 function readSessionFromAuthFile() {
@@ -1082,6 +1085,53 @@ async function modelTagsText(page) {
   return (await tags.allTextContents()).map((t) => t.trim()).filter(Boolean);
 }
 
+function batchAddModelsButton(page) {
+  return upsertScope(page).getByRole('button', { name: DOC.batchAdd });
+}
+
+function batchModelsModal(page) {
+  return page.locator(
+    '.ivu-modal-wrap.batch-models-modal:not(.ivu-modal-hidden)',
+  );
+}
+
+async function openBatchAddModels(page) {
+  await batchAddModelsButton(page).click();
+  await expect(batchModelsModal(page)).toBeVisible({ timeout: 10000 });
+}
+
+async function fillBatchModelsText(page, text) {
+  await batchModelsModal(page).locator('textarea').fill(text);
+}
+
+async function confirmBatchAddModels(page) {
+  await batchModelsModal(page)
+    .getByRole('button', { name: DOC.batchConfirm })
+    .click();
+  await expect(batchModelsModal(page)).toBeHidden({ timeout: 10000 });
+}
+
+/**
+ * 向模型列表 el-select 派发粘贴事件（≥2 个 token 时应拆成多个 Tag）
+ */
+async function pasteIntoModelsSelect(page, text) {
+  const select = upsertScope(page).locator('.models-row .el-select').first();
+  await select.click();
+  await select.evaluate((el, value) => {
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      configurable: true,
+      value: {
+        getData: function getData() {
+          return value;
+        },
+      },
+    });
+    el.dispatchEvent(event);
+  }, text);
+  await page.waitForTimeout(400);
+}
+
 // ---------- 详情页（ProviderView，PR-D-01/02） ----------
 
 function viewCard(page, title) {
@@ -1274,6 +1324,12 @@ module.exports = {
   expectModelsSelectPlaceholder,
   expectModelTags,
   modelTagsText,
+  batchAddModelsButton,
+  batchModelsModal,
+  openBatchAddModels,
+  fillBatchModelsText,
+  confirmBatchAddModels,
+  pasteIntoModelsSelect,
   viewCard,
   viewCardVisible,
   viewTableRows,

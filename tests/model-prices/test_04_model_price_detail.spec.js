@@ -22,7 +22,7 @@
  * 断言策略：
  * - 通过 API 读取 deepseek/deepseek-v3/chat 记录的原始数据，逐字段与
  *   详情抽屉（ModelPriceView）渲染结果比对，避免硬编码受浮点序列化影响的期望值。
- * - 价格列渲染格式为 `¥{value}`（value 为后端 JSON 数字字符串，如 5e-7）。
+ * - 价格列前缀 ¥；与接口值做数值等价比对（允许科学计数法与十进制两种写法）。
  *
  * 运行：PW_WORKERS=1 npx playwright test tests/model-prices/test_04_model_price_detail.spec.js
  */
@@ -38,18 +38,6 @@ function formatKv(record, keyField) {
     key,
     value: String(obj[key]),
   }));
-}
-
-// 与 ModelPriceView.formatPrice 一致：科学计数法转为小数（如 5e-7 → 0.0000005）
-function formatPriceLikeUi(value) {
-  const num = Number(value);
-  if (Number.isNaN(num)) return '-';
-  if (num === 0) return '0';
-  let str = num.toString();
-  if (/[eE]/.test(str)) {
-    str = num.toFixed(20).replace(/\.?0+$/, '');
-  }
-  return str;
 }
 
 // 后端 prices/limits 为 Go map，JSON 键序不确定 → 转成 {key: value} 对象比较（顺序无关）
@@ -106,16 +94,8 @@ test.describe('模型定价 - MP-D-01 详情页全字段与接口数据一致性
       kvToMap(formatKv(record, 'limits')),
     );
 
-    // prices kv 表（UI 前缀 ¥，value 经 formatPrice 处理：科学计数法转小数）
-    const priceEntries = await mp.viewKvEntries(page, mp.LABEL.prices);
-    expect(kvToMap(priceEntries)).toEqual(
-      kvToMap(
-        Object.keys(record.prices || {}).map((key) => ({
-          key,
-          value: '¥' + formatPriceLikeUi(record.prices[key]),
-        })),
-      ),
-    );
+    // prices kv 表：数值等价（允许 1.5e-6 与 0.0000015），不要按十进制字符串逐字比
+    await mp.expectViewPricesNumericallyEqual(page, record.prices);
 
     // metadata
     const metadata = record.metadata || {};

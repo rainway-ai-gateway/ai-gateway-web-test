@@ -70,6 +70,26 @@ entityOrgDescribe('Entity组织管理 - EM-E-43 名称格式校验', (cleanup) =
       DOC.nameControlCharsErrorMsg,
     );
 
+    await utils.fillEntityFormBasic(page, { name: '@user', typeName });
+    await utils.submitEntityFormExpectRateLimitError(
+      page,
+      DOC.nameFormatErrorMsg,
+    );
+
+    await utils.fillEntityFormBasic(page, { name: 'user@', typeName });
+    await utils.submitEntityFormExpectRateLimitError(
+      page,
+      DOC.nameFormatErrorMsg,
+    );
+
+    const atName = await utils.generateTestEntityAtName('user', 'project');
+    cleanup.trackEntityName(atName);
+    await utils.fillEntityFormBasic(page, { name: atName, typeName });
+    await utils.submitEntityFormAndWaitForSuccess(page);
+    await utils.ensureEntityRowVisible(page, atName);
+    await utils.deleteEntityAndWait(page, atName);
+
+    await utils.openCreateEntityDrawer(page);
     await utils.fillEntityFormBasic(page, { name: entityName, typeName });
     await utils.submitEntityFormAndWaitForSuccess(page);
     await utils.ensureEntityRowVisible(page, entityName);
@@ -153,5 +173,86 @@ entityOrgDescribe('Entity组织管理 - EM-E-46 RPM组合重复校验', (cleanup
       DOC.rpmCombinationDuplicateMsg,
     );
     await utils.cancelEntityForm(page);
+  });
+});
+
+entityOrgDescribe('Entity组织管理 - EM-CV-01 Entity名称仅允许小写字母', (cleanup) => {
+  test('验证大写与空白被拦截，小写合法名可通过', async ({ page }) => {
+    const { entityName, typeName } = await prepareEntityCreate(page, cleanup);
+
+    await utils.fillEntityFormBasic(page, { name: 'ops', typeName });
+    await utils.expectEntityNameFieldValid(page);
+    await utils.fillEntityFormBasic(page, { name: 'ops_team', typeName });
+    await utils.expectEntityNameFieldValid(page);
+    await utils.fillEntityFormBasic(page, { name: 'ops-team', typeName });
+    await utils.expectEntityNameFieldValid(page);
+
+    await utils.fillEntityFormBasic(page, { name: 'Ops', typeName });
+    await utils.submitEntityFormExpectRateLimitError(
+      page,
+      DOC.nameFormatErrorMsg,
+    );
+    await utils.fillEntityFormBasic(page, { name: 'OpsTeam', typeName });
+    await utils.submitEntityFormExpectRateLimitError(
+      page,
+      DOC.nameFormatErrorMsg,
+    );
+    await utils.fillEntityFormBasic(page, { name: 'OPS', typeName });
+    await utils.submitEntityFormExpectRateLimitError(
+      page,
+      DOC.nameFormatErrorMsg,
+    );
+    await utils.fillEntityFormBasic(page, { name: 'Ops Team', typeName });
+    await utils.submitEntityFormExpectRateLimitError(
+      page,
+      DOC.nameFormatErrorMsg,
+    );
+
+    await utils.fillEntityFormBasic(page, { name: entityName, typeName });
+    await utils.submitEntityFormAndWaitForSuccess(page);
+    await utils.ensureEntityRowVisible(page, entityName);
+    await utils.deleteEntityAndWait(page, entityName);
+  });
+});
+
+entityOrgDescribe('Entity组织管理 - EM-CV-02 Entity名称首尾字符限制', (cleanup) => {
+  test('验证不能以 _、-、@ 开头或结尾', async ({ page }) => {
+    const { typeName } = await prepareEntityCreate(page, cleanup);
+
+    await utils.fillEntityFormBasic(page, { name: 'ops-team', typeName });
+    await utils.expectEntityNameFieldValid(page);
+
+    for (const invalid of ['-ops', '_ops', '@ops', 'ops-', 'ops_', 'ops@']) {
+      await utils.fillEntityFormBasic(page, { name: invalid, typeName });
+      await utils.submitEntityFormExpectRateLimitError(
+        page,
+        DOC.nameFormatErrorMsg,
+      );
+    }
+  });
+});
+
+entityOrgDescribe('Entity组织管理 - EM-CV-09 Entity名称允许中间出现@', (cleanup) => {
+  test('验证 user@project 形式可创建，tip 与 placeholder 与原型一致', async ({
+    page,
+  }) => {
+    const { typeName } = await prepareEntityCreate(page, cleanup);
+    await utils.expectEntityNamePlaceholder(page);
+    await utils.expectEntityNameFormTip(page);
+
+    const aliceName = await utils.generateTestEntityAtName('alice', 'default');
+    cleanup.trackEntityName(aliceName);
+    await utils.fillEntityFormBasic(page, { name: aliceName, typeName });
+    await utils.submitEntityFormAndWaitForSuccess(page);
+    await utils.ensureEntityRowVisible(page, aliceName);
+    await utils.deleteEntityAndWait(page, aliceName);
+
+    const userName = await utils.generateTestEntityAtName('user', 'project');
+    cleanup.trackEntityName(userName);
+    await utils.openCreateEntityDrawer(page);
+    await utils.fillEntityFormBasic(page, { name: userName, typeName });
+    await utils.submitEntityFormAndWaitForSuccess(page);
+    await utils.ensureEntityRowVisible(page, userName);
+    await utils.deleteEntityAndWait(page, userName);
   });
 });

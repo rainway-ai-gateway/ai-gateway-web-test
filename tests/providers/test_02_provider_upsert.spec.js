@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 /**
- * 模型服务商 - 创建/编辑服务商（PR-C-01~PR-C-15）
+ * 模型服务商 - 创建/编辑服务商（PR-C-01~PR-C-16）
  *
  * 覆盖用例（docs/providers/02-功能测试用例/02-创建与编辑.md）：
  * - PR-C-01 创建成功（IP 模式）：提交 POST /providers；提交体不含 create_time/update_time；
@@ -34,8 +34,11 @@
  * - PR-C-12 获取后须提交才保存：mock 回填→关闭抽屉→重开编辑，模型列表为空。
  * - PR-C-13 提交体结构：不含 create_time/update_time；models 未获取为空数组；
  *   instance_pool 不再传递 name 字段（已修复）。
+ * - PR-C-13 Gemini 协议：选择 gemini 协议后默认 URI 为 /v1beta/models；
+ *   提交体 model_protocols 含 gemini；Auth header 为 x-goog-api-key。
  * - PR-C-14 名称全局唯一：API 造同名后 UI 填同名提交被前端拦截提示「名称已存在」。
  * - PR-C-15 取消/关闭：关闭抽屉后已填内容不保存，列表数据不变。
+ * - PR-C-16 模型列表批量添加：弹窗按行/分隔符解析并合并去重；下拉粘贴 ≥2 token 拆成多个 Tag。
  *
  * 文档偏差记录（保留 02 验收语义，具体实现差异已在 ProviderPage.js 头部记录）：
  * - 实例池表头：02 验收为「IP/域名」，UI 实际渲染「IP地址」——本 spec 断言首列含
@@ -673,10 +676,10 @@ test.describe('模型服务商 - PR-C-10 模型列表不可手填', () => {
     await pp.openCreateDrawer(page);
 
     // 未回填时展示占位（02 验收为「暂无模型」，UI 实际为 modelsHintDiscoverOnly，见文件头偏差）
-    // UI 支持手动输入模型名回车添加，故占位文本更新为「点击「获取」拉取上游模型列表，或输入模型名回车添加」
+    // UI 支持手动输入与批量添加，占位文本同步 i18n modelsPlaceholder
     await pp.expectModelsSelectPlaceholder(
       page,
-      '点击「获取」拉取上游模型列表，或输入模型名回车添加',
+      '点击「获取」拉取上游模型列表，输入模型名回车添加，或使用「批量添加」',
     );
 
     // 输入框 readonly（el-select__input 为只读，用户无法手动添加模型）
@@ -760,7 +763,7 @@ test.describe('模型服务商 - PR-C-12 获取成功后须「提交」才保存
     await pp.expectModelTags(page, []);
     await pp.expectModelsSelectPlaceholder(
       page,
-      '点击「获取」拉取上游模型列表，或输入模型名回车添加',
+      '点击「获取」拉取上游模型列表，输入模型名回车添加，或使用「批量添加」',
     );
   });
 });
@@ -810,6 +813,8 @@ test.describe('模型服务商 - PR-C-13 提交体结构校验', () => {
     expect(body.keys).toEqual([{ name: 'key-primary', key: 'sk-xxx' }]);
 
     cleanup.trackName(name);
+    // 搜索刚创建的服务商，避免因历史数据导致分页而找不到
+    await pp.filterListSearch(page, '名称', name);
     await pp.providerTable(page).expectRowVisible(name, 15000);
   });
 });
@@ -890,5 +895,119 @@ test.describe('模型服务商 - PR-C-15 取消/关闭抽屉', () => {
 
     // 4. 列表数据不变：未创建任何服务商
     await pp.providerTable(page).expectRowHidden(name);
+  });
+});
+
+test.describe('模型服务商 - PR-C-16 模型列表批量添加', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('批量添加弹窗去重合并，下拉粘贴拆分，提交体与 Tag 一致', async ({
+    page,
+  }) => {
+    const name = uniqueName('provider');
+    const expectedAfterBatch = [
+      'gpt-4o',
+      'gpt-4o-mini',
+      'deepseek-chat',
+      'claude-3',
+    ];
+    const expectedAfterMerge = expectedAfterBatch.concat(['llama-3']);
+    const expectedAfterPaste = expectedAfterMerge.concat(['m1', 'm2', 'm3']);
+
+    await openCreateAndFillBasic(page, name, 'PR-C-16 批量添加');
+    await pp.selectInstanceMode(page, 'IP');
+    await pp.fillInstanceRow(page, 0, {
+      addr: IP_ADDR,
+      port: IP_PORT,
+      weight: IP_WEIGHT,
+    });
+    await pp.selectProtocols(page, ['openai']);
+
+    await test.step('批量添加混合分隔文本，空行与重复被去掉', async () => {
+      await pp.openBatchAddModels(page);
+      await pp.fillBatchModelsText(
+        page,
+        'gpt-4o\n\ngpt-4o-mini, deepseek-chat，gpt-4o;claude-3',
+      );
+      await pp.confirmBatchAddModels(page);
+      await pp.expectModelTags(page, expectedAfterBatch);
+    });
+
+    await test.step('再次批量添加只合并新增，不覆盖已有 Tag', async () => {
+      await pp.openBatchAddModels(page);
+      await pp.fillBatchModelsText(page, 'gpt-4o\nllama-3');
+      await pp.confirmBatchAddModels(page);
+      await pp.expectModelTags(page, expectedAfterMerge);
+    });
+
+    await test.step('下拉框粘贴逗号分隔拆成多个 Tag', async () => {
+      await pp.pasteIntoModelsSelect(page, 'm1,m2,m3');
+      await pp.expectModelTags(page, expectedAfterPaste);
+    });
+
+    await test.step('提交体 models 与 Tag 一致', async () => {
+      const response = await pp.submitUpsertAndWait(page);
+      expect(response.request().postDataJSON().models).toEqual(
+        expectedAfterPaste,
+      );
+      cleanup.trackName(name);
+    });
+  });
+});
+
+// ---------- PR-C-13：Gemini 协议创建服务商 ----------
+
+test.describe('模型服务商 - PR-C-13 创建 gemini 协议服务商', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('创建 gemini 协议服务商，默认 URI 为 /v1beta/models，提交体含 gemini', async ({
+    page,
+  }) => {
+    const name = uniqueName('provider');
+    await openCreateAndFillBasic(page, name, 'Gemini 协议测试');
+
+    // 1. 实例池填写一行
+    await pp.fillInstanceRow(page, 0, {
+      addr: IP_ADDR,
+      port: IP_PORT,
+      weight: IP_WEIGHT,
+    });
+
+    // 2. 清空默认的 openai 协议，选择 gemini
+    await pp.clearProtocols(page);
+    await pp.selectProtocols(page, ['gemini']);
+
+    // 3. 设置默认 URI 为 /v1beta/models（gemini 协议不同于 openai/anthropic 的 /v1/models）
+    //    当前前端实现不会随协议切换自动更新 URI，需手动填写
+    await pp.fillEndpointUri(page, '/v1beta/models');
+
+    // 4. 提交并验证提交体
+    const response = await pp.submitUpsertAndWait(page);
+    const body = response.request().postDataJSON();
+    expect(body.model_protocols).toEqual(['gemini']);
+    expect(body.model_endpoint.uri).toBe('/v1beta/models');
+
+    cleanup.trackName(name);
+    // 使用跨页搜索查找刚创建的服务商（列表可能因历史数据过多而分页）
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
   });
 });

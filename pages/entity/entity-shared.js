@@ -134,7 +134,8 @@ const DOC_ENTITY_ORG = {
   quotaIntegerErrorMsg: '配额总量必须为非负整数',
   quotaMaxErrorMsg: '配额总量超出允许范围',
   quotaDecimal: 5.3,
-  quotaOverMax: '66666666666666660000',
+  quotaTokenMax: 9999999999,
+  quotaOverMax: 10000000000,
   int32Max: '2147483647',
   // 2026-08-16: unit=RMB 时配额上限为 9000 万元（RMB_QUOTA_MAX）
   quotaRmbMax: 90000000,
@@ -168,6 +169,11 @@ const DOC_ENTITY_ORG = {
   nameLeadingTrailingWhitespaceMsg: 'Entity名称不能包含前导或尾随空格',
   nameLengthErrorMsg: 'Entity名称长度不能超过64字符',
   nameControlCharsErrorMsg: 'Entity名称不能包含控制字符',
+  namePlaceholder: 'user@project',
+  nameFormatErrorMsg:
+    '名称须为小写字母、数字、下划线、连字符或 @（如 user@project），且不能以 _、- 或 @ 开头/结尾',
+  nameRuleAtHint: '支持 用户名@项目名',
+  nameRuleEdgeHint: '不能以 _、- 或 @ 开头/结尾',
   tpmCombinationDuplicateMsg:
     '存在相同的TPM规则组合（模型、时间窗口、最大Token数、滑动步长）',
   rpmCombinationDuplicateMsg:
@@ -213,7 +219,8 @@ const DOC_API_KEY = {
   quotaIntegerErrorMsg: '配额总量必须为非负整数',
   quotaMaxErrorMsg: '配额总量超出允许范围',
   quotaDecimal: 5.3,
-  quotaOverMax: '66666666666666660000',
+  quotaTokenMax: 9999999999,
+  quotaOverMax: 10000000000,
   descriptionMaxLength: 512,
   descriptionLengthErrorMsg: '描述不能超过512个字符',
   // 2026-08-16: unit=RMB 时配额上限为 9000 万元（RMB_QUOTA_MAX）
@@ -677,6 +684,16 @@ async function generateTestEntityName() {
   );
 }
 
+async function generateTestEntityAtName(prefix = 'u', suffix = 'p') {
+  return (
+    prefix +
+    moment().format('YYYYMMDDHHmmssSSS') +
+    '@' +
+    suffix +
+    nextTestNameSequence()
+  );
+}
+
 function makeStringOfLength(length, char = 'a') {
   return char.repeat(length);
 }
@@ -767,6 +784,7 @@ module.exports = {
   nextTestNameSequence,
   generateTestEntityTypeName,
   generateTestEntityName,
+  generateTestEntityAtName,
   makeStringOfLength,
   formatRuleValidationMsg,
 

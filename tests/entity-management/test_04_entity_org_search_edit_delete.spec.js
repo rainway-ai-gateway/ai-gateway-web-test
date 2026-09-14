@@ -664,9 +664,9 @@ entityOrgDescribe('Entity组织管理 - EM-E-12b Entity搜索-按配额', (clean
       // 先按名称搜索确认 Entity 存在且可见
       await utils.searchEntityByName(page, entityName);
       await utils.expectEntityVisible(page, entityName);
-      // 配额列的 render 函数返回格式为 "已用 / 总量"，使用千位分隔符
-      // 例如："0 / 500,000"
-      await utils.searchEntityByQuota(page, '500,000');
+      // 配额列 render 与 API Key 列表一致：decimals=0 时 >=1000 缩写为 K/M
+      // 例如："0 tokens / 500.0K tokens"
+      await utils.searchEntityByQuota(page, '500.0K');
       await utils.expectEntityVisible(page, entityName);
     });
 
