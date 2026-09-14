@@ -23,10 +23,11 @@
  * - RM-BC-73 转发模型-多选必填与「全选」：全选快捷操作 + 未选模型被拦截。
  * - RM-BC-74 服务商模型为空：转发模型下拉为空；提交被拦截（复用必填校验）。
  * - RM-BC-75 Keys 非必填与空行过滤：空行不参与校验，提交体 keys 过滤空 name 行。
- * - RM-BC-76 Keys 服务商 Key 下拉与权重：下拉选项为 key 名称、新行权重默认 0、可多行。
+ * - RM-BC-76 Keys 服务商 Key 下拉与权重：下拉选项为 key 名称、新行权重默认 0、可多行；已选 Key 从其他行下拉中过滤。
  * - RM-BC-77 Keys 权重和 = 100（非空时）：80 被拦截、100 通过。
  * - RM-BC-78 服务商无 keys：Keys 行「服务商 Key」下拉无可用选项（表格不隐藏）。
  * - RM-BC-81 模型重定向：source_model → target_model 表格提交与请求体。
+ * - RM-BC-92 模型重定向联动：选目标模型后左侧为空则自动填入同名；已填写则不覆盖。
  * - RM-BC-84 提交体结构：llm_config 含 provider/models/keys/key_policy/key_affinity；
  *   不含 instance_pool / provider_type / model_endpoint / model_list / keys[].key。
  *
@@ -296,12 +297,15 @@ test.describe('AI业务集群 - RM-BC-71~78、81、84 大模型配置 Provider �
     const row0 = await utils.getModelKeyRowValues(page, 0);
     expect(row0.weight).toBe('0');
 
-    // 3. 填写行 0：key-a1 / 50；添加行 1：key-a2 / 50
+    // 3. 填写行 0：key-a1 / 50 后，新行下拉不再出现已选 key
     await utils.fillModelKeyRow(page, 0, { name: KEY_A1, weight: 50 });
     await utils.addModelKeyRow(page);
     await utils.expectModelKeysRowCount(page, 2);
     const row1 = await utils.getModelKeyRowValues(page, 1);
     expect(row1.weight).toBe('0');
+    const row1Options = await utils.getModelKeyRowOptions(page, 1);
+    expect(row1Options).toEqual([KEY_A2]);
+    expect(row1Options).not.toContain(KEY_A1);
     await utils.fillModelKeyRow(page, 1, { name: KEY_A2, weight: 50 });
 
     // 4. 两行非空且权重和 = 100 → 可通过
@@ -402,6 +406,44 @@ test.describe('AI业务集群 - RM-BC-71~78、81、84 大模型配置 Provider �
     const body = request.postDataJSON();
     expect(body.llm_config.model_mappings).toEqual([
       { source_model: MODEL_A1, target_model: MODEL_A2 },
+    ]);
+  });
+
+  test('RM-BC-92 模型重定向：选目标模型后原请求名称自动填入，已填写则不覆盖', async ({
+    page,
+  }) => {
+    const clusterName = utils.generateTestBusinessClusterName();
+    cleanup.trackBusinessCluster(clusterName);
+    const aliasName = 'client-alias-model';
+    const providerA = await createProvider({
+      page,
+      cleanup: providerCleanup,
+      overrides: { models: [MODEL_A1, MODEL_A2] },
+    });
+
+    await navigateToModelStep(page, clusterName);
+    await utils.selectProvider(page, providerA);
+    await utils.selectForwardModels(page, [MODEL_A1, MODEL_A2]);
+
+    await test.step('只选目标模型时，原请求名称自动填入同名', async () => {
+      await utils.fillModelMappingRow(page, 0, { target: MODEL_A1 });
+      await utils.expectModelMappingSource(page, 0, MODEL_A1);
+    });
+
+    await test.step('原请求名称已改过时，再换目标模型不覆盖', async () => {
+      await utils.fillModelMappingRow(page, 0, { source: aliasName });
+      await utils.fillModelMappingRow(page, 0, { target: MODEL_A2 });
+      await utils.expectModelMappingSource(page, 0, aliasName);
+    });
+
+    await utils.clickWizardNext(page);
+    await utils.expectWizardStep(page, '复查&检查');
+    const request = await utils.waitForClusterCreateRequest(page, () =>
+      utils.clickWizardSubmit(page),
+    );
+    const body = request.postDataJSON();
+    expect(body.llm_config.model_mappings).toEqual([
+      { source_model: aliasName, target_model: MODEL_A2 },
     ]);
   });
 

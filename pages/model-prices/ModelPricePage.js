@@ -51,6 +51,7 @@ function readSessionFromAuthFile() {
  * 模型定价（ModelPrices）页面封装
  *
  * UI 技术栈：iView Form/Input/InputNumber + Element UI el-select（混合）
+ * - 价格值：普通 Input（.price-input），失焦按量级格式化；limits 仍为 InputNumber
  * - 列表页：.action-bar（新增定价 / YAML 导入）+ pageTable
  * - 新增/编辑：Drawer 内 ModelPriceUpsert（.model-price-upsert）
  * - 详情：Drawer 内 ModelPriceView（.model-price-view）
@@ -99,6 +100,7 @@ const MSG = {
   deleteSuccess: '删除成功',
   sourceUrlInvalid: 'source 必须是有效的 URL',
   pricesValueInvalid: 'prices 值必须为非负数',
+  pricesOverflow: '价格过大：价格 × 1e8 不得超过 2^53（约 9e15）',
   limitsValueInvalid: 'limits 值必须为非负整数',
   yamlFileRequired: '请选择 YAML 文件',
   yamlVersionRequired: 'version 字段必填',
@@ -106,6 +108,7 @@ const MSG = {
   parseYamlFailed: 'YAML 解析失败',
   importSucc: '导入成功',
   importFailed: '导入失败',
+  noPricingForProvider: '未找到提供商 {provider} 的模型定价',
 };
 
 const DRAWER_TITLE = {
@@ -131,6 +134,31 @@ const MODE_OPTIONS = [
 ];
 
 const PRICE_KEY_INPUT_COST = 'input_cost_per_token';
+const PRICE_KEY_OUTPUT_COST = 'output_cost_per_token';
+const PRICE_KEY_CACHE_CREATION_1H = 'cache_creation_input_token_cost_1h';
+const PRICE_KEY_INPUT_256K = 'input_cost_per_token_above_256k_tokens';
+const PRICE_KEY_OUTPUT_256K = 'output_cost_per_token_above_256k_tokens';
+const PRICE_KEY_INPUT_272K = 'input_cost_per_token_above_272k_tokens';
+const PRICE_KEY_OUTPUT_272K = 'output_cost_per_token_above_272k_tokens';
+const PRICE_KEY_INPUT_512K = 'input_cost_per_token_above_512k_tokens';
+const PRICE_KEY_OUTPUT_512K = 'output_cost_per_token_above_512k_tokens';
+const PRICE_KEY_INPUT_IMAGE = 'input_cost_per_image_token';
+const PRICE_KEY_INPUT_AUDIO = 'input_cost_per_audio_token';
+const PRICE_KEY_OUTPUT_AUDIO = 'output_cost_per_audio_token';
+
+// 10 个新增价格键名（MP-T-10）
+const NEW_PRICE_KEYS = [
+  'cache_creation_input_token_cost_1h',
+  'input_cost_per_token_above_256k_tokens',
+  'output_cost_per_token_above_256k_tokens',
+  'input_cost_per_token_above_272k_tokens',
+  'output_cost_per_token_above_272k_tokens',
+  'input_cost_per_token_above_512k_tokens',
+  'output_cost_per_token_above_512k_tokens',
+  'input_cost_per_image_token',
+  'input_cost_per_audio_token',
+  'output_cost_per_audio_token',
+];
 
 // 与 ModelPriceUpsert.vue 中枚举常量保持一致
 const CAPABILITY_OPTIONS = [
@@ -189,8 +217,15 @@ const PRICE_KEY_OPTIONS = [
   'output_cost_per_token',
   'cache_read_input_token_cost',
   'cache_creation_input_token_cost',
+  'cache_creation_input_token_cost_1h',
   'input_cost_per_token_above_200k_tokens',
   'output_cost_per_token_above_200k_tokens',
+  'input_cost_per_token_above_256k_tokens',
+  'output_cost_per_token_above_256k_tokens',
+  'input_cost_per_token_above_272k_tokens',
+  'output_cost_per_token_above_272k_tokens',
+  'input_cost_per_token_above_512k_tokens',
+  'output_cost_per_token_above_512k_tokens',
   'output_cost_per_image',
   'output_cost_per_pixel',
   'output_cost_per_second',
@@ -201,6 +236,9 @@ const PRICE_KEY_OPTIONS = [
   'output_cost_per_image_hd',
   'output_cost_per_video',
   'output_cost_per_video_per_second',
+  'input_cost_per_image_token',
+  'input_cost_per_audio_token',
+  'output_cost_per_audio_token',
 ];
 
 // 列表搜索行 placeholder
@@ -319,6 +357,22 @@ async function searchField(page, field, keyword) {
     await input.fill(keyword);
     await page.waitForTimeout(500);
   }
+}
+
+async function expectProviderFilterSelected(page, provider) {
+  await expect(
+    modelPriceTable(page)
+      .searchArea()
+      .locator('.ivu-select-selected-value')
+      .filter({ hasText: provider }),
+  ).toBeVisible({ timeout: 15000 });
+}
+
+async function expectNoPricingForProvider(page, provider) {
+  await expectMessage(
+    page,
+    MSG.noPricingForProvider.replace('{provider}', provider),
+  );
 }
 
 async function expectSearchInputVisible(page, field) {
@@ -469,16 +523,44 @@ async function expectModeSelected(page, mode) {
 
 async function selectCapabilities(page, items) {
   const sel = capabilitiesSelect(page);
-  for (const item of items) {
-    await sel.selectOptionFilterable(item);
+  if (items.length === 0) return;
+  if (items.length === 1) {
+    await sel.selectOptionFilterable(items[0]);
+    return;
   }
+  // 多项选择：一次性打开下拉，逐个点击选项（不筛选，方法同 selectMultiOptions）
+  await sel.open();
+  for (const item of items) {
+    await sel
+      .dropdownItems()
+      .filter({ hasText: selectItemTextPattern(item) })
+      .first()
+      .click();
+    await page.waitForTimeout(200);
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
 }
 
 async function selectSupportedParameters(page, items) {
   const sel = supportedParametersSelect(page);
-  for (const item of items) {
-    await sel.selectOptionFilterable(item);
+  if (items.length === 0) return;
+  if (items.length === 1) {
+    await sel.selectOptionFilterable(items[0]);
+    return;
   }
+  // 多项选择：一次性打开下拉，逐个点击选项（不筛选，方法同 selectMultiOptions）
+  await sel.open();
+  for (const item of items) {
+    await sel
+      .dropdownItems()
+      .filter({ hasText: selectItemTextPattern(item) })
+      .first()
+      .click();
+    await page.waitForTimeout(200);
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
 }
 
 // ---------- el-select multiple 多选辅助（capabilities / supported_parameters） ----------
@@ -577,6 +659,28 @@ async function getModeDropdownOptions(page) {
   }
   // 关闭下拉，避免遮挡后续操作
   await page.keyboard.press('Escape');
+  return result;
+}
+
+/**
+ * 获取默认价格区第一个价格行的键名下拉选项（用于断言新增价格键名是否存在）
+ */
+async function getPriceKeyDropdownOptions(page) {
+  const card = pricesCard(page);
+  const keySel = new ElSelectComponent(
+    page,
+    card.locator('.kv-table').first().locator('tbody tr').first().locator('.el-select').first(),
+  );
+  await keySel.open();
+  const items = keySel.dropdownItems();
+  const count = await items.count();
+  const result = [];
+  for (let i = 0; i < count; i += 1) {
+    result.push(((await items.nth(i).textContent()) || '').trim());
+  }
+  // 关闭下拉，避免遮挡后续操作
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
   return result;
 }
 
@@ -713,15 +817,11 @@ async function fillPriceRow(page, index, payload) {
     await keySel.selectOptionFilterable(payload.key);
   }
   if (payload.value !== undefined) {
-    // Element Plus el-input-number 使用 .el-input__inner
-    const numInput = row.locator('.el-input-number .el-input__inner').first();
-    await numInput.click({ clickCount: 3 });
-    await numInput.fill(String(payload.value));
-    await numInput.blur();
-    // Element Plus InputNumber 的 :min 校验依赖 native change 事件
-    await numInput.evaluate((el) => {
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    const valueInput = row.locator('td').nth(1).locator('input').first();
+    await expect(valueInput).toBeVisible({ timeout: 10000 });
+    await valueInput.click({ clickCount: 3 });
+    await valueInput.fill(String(payload.value));
+    await valueInput.blur();
   }
   await page.waitForTimeout(200);
 }
@@ -747,16 +847,53 @@ async function getLimitRowValues(page, index) {
 async function getPriceRowValues(page, index) {
   const row = priceRows(pricesCard(page)).nth(index);
   const keySel = row.locator('.el-select').first();
+  const keyInput = keySel.locator('input').first();
+  const keyFromInput = (await keyInput.inputValue().catch(() => '')) || '';
   const keyText = await keySel
     .locator('.el-input__inner, .el-select__selection')
     .first()
     .textContent();
-  // Element Plus el-input-number 使用 .el-input__inner
   const value = await row
-    .locator('.el-input-number .el-input__inner')
+    .locator('td')
+    .nth(1)
+    .locator('input')
     .first()
     .inputValue();
-  return { key: (keyText || '').trim(), value };
+  return { key: (keyFromInput || keyText || '').trim(), value };
+}
+
+async function findPriceRowIndexByKey(page, key) {
+  const rows = priceRows(pricesCard(page));
+  const count = await rows.count();
+  for (let i = 0; i < count; i += 1) {
+    const vals = await getPriceRowValues(page, i);
+    if (vals.key === key) {
+      return i;
+    }
+  }
+  throw new Error('未找到价格键: ' + key);
+}
+
+async function expectPriceRowInputValue(page, index, expected) {
+  const { value } = await getPriceRowValues(page, index);
+  expect(value).toBe(String(expected));
+}
+
+function expectNumericPriceEqual(actual, expected) {
+  expect(Number(actual)).toBe(Number(expected));
+}
+
+async function expectViewPricesNumericallyEqual(page, prices) {
+  const entries = await viewKvEntries(page, LABEL.prices);
+  const ui = {};
+  entries.forEach((e) => {
+    ui[e.key] = Number(String(e.value).replace(/^¥/, '').trim());
+  });
+  const expected = prices || {};
+  expect(Object.keys(ui).sort()).toEqual(Object.keys(expected).sort());
+  Object.keys(expected).forEach((key) => {
+    expect(ui[key]).toBe(Number(expected[key]));
+  });
 }
 
 // ---------- 表单校验断言 ----------
@@ -781,10 +918,13 @@ async function expectFieldValid(page, label) {
 
 async function expectPricesError(page, message) {
   const err = pricesCard(page).locator('.error-text');
-  await expect(err).toBeVisible({ timeout: 10000 });
   if (message !== undefined) {
-    await expect(err).toHaveText(message);
+    await expect(err.filter({ hasText: message }).first()).toBeVisible({
+      timeout: 10000,
+    });
+    return;
   }
+  await expect(err.first()).toBeVisible({ timeout: 10000 });
 }
 
 async function expectPricesErrorHidden(page) {
@@ -803,6 +943,27 @@ async function expectLimitsError(page, message) {
 
 async function clickSubmit(page) {
   await upsertScope(page).getByRole('button', { name: '提交' }).click();
+}
+
+/**
+ * 前端校验拦截：提交后不应发出 POST/PUT /model-prices
+ */
+async function clickSubmitExpectNoModelPriceWrite(page) {
+  const write = page
+    .waitForResponse(
+      (r) => {
+        if (!r.url().includes('/open-api/v1/model-prices')) {
+          return false;
+        }
+        const method = r.request().method();
+        return method === 'POST' || method === 'PUT';
+      },
+      { timeout: 3000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  await clickSubmit(page);
+  expect(await write).toBe(false);
 }
 
 async function clickCancel(page) {
@@ -860,6 +1021,10 @@ function viewScope(page) {
 
 async function expectViewScopeVisible(page) {
   await expect(viewScope(page)).toBeVisible({ timeout: 10000 });
+}
+
+async function expectViewScopeHidden(page) {
+  await expect(viewScope(page)).toHaveCount(0);
 }
 
 function viewCard(scope, title) {
@@ -987,6 +1152,31 @@ async function clickImportButton(page) {
     .click();
 }
 
+/**
+ * 点击导入并等待后端 POST 响应返回后，断言导入失败消息
+ * （处理后端 422 场景：等待响应完成再检查 iView 错误提示）
+ * 注：后端 422 返回的具体 ErrMsg 会替代 fallback "导入失败"，
+ * 因此此处不检查特定文本，只检查有错误消息显示即可。
+ */
+async function clickImportAndWaitForFailure(page) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes('/model-prices/import') &&
+        r.request().method() === 'POST',
+      { timeout: 15000 },
+    ),
+    clickImportButton(page),
+  ]);
+  // 等待响应体加载完成，确保前端 on-error 已触发
+  await response.finished().catch(() => {});
+  await page.waitForTimeout(500);
+  // 检查任意 iView 错误消息可见（后端 422 ErrMsg 不是固定 "导入失败"）
+  await expect(
+    page.locator('.ivu-message-error').first(),
+  ).toBeVisible({ timeout: 15000 });
+}
+
 async function clickImportCancel(page) {
   // Modal 自定义 footer 中的「取消」按钮（不触发任何导入请求）
   await importModal(page)
@@ -1078,6 +1268,18 @@ module.exports = {
   DRAWER_TITLE,
   MODE_OPTIONS,
   PRICE_KEY_INPUT_COST,
+  PRICE_KEY_OUTPUT_COST,
+  PRICE_KEY_CACHE_CREATION_1H,
+  PRICE_KEY_INPUT_256K,
+  PRICE_KEY_OUTPUT_256K,
+  PRICE_KEY_INPUT_272K,
+  PRICE_KEY_OUTPUT_272K,
+  PRICE_KEY_INPUT_512K,
+  PRICE_KEY_OUTPUT_512K,
+  PRICE_KEY_INPUT_IMAGE,
+  PRICE_KEY_INPUT_AUDIO,
+  PRICE_KEY_OUTPUT_AUDIO,
+  NEW_PRICE_KEYS,
   CAPABILITY_OPTIONS,
   SUPPORTED_PARAMETER_OPTIONS,
   LIMIT_KEY_OPTIONS,
@@ -1093,6 +1295,8 @@ module.exports = {
   rowAction,
   clickRowAction,
   searchField,
+  expectProviderFilterSelected,
+  expectNoPricingForProvider,
   expectSearchInputVisible,
   expectTableHeaders,
   openCreateDrawer,
@@ -1119,6 +1323,7 @@ module.exports = {
   getMultiDropdownOptionCount,
   getMultiDropdownOptions,
   getModeDropdownOptions,
+  getPriceKeyDropdownOptions,
   setModeViaModel,
   addLimitRow,
   addPriceRow,
@@ -1129,18 +1334,24 @@ module.exports = {
   fillPriceRow,
   getLimitRowValues,
   getPriceRowValues,
+  findPriceRowIndexByKey,
+  expectPriceRowInputValue,
+  expectNumericPriceEqual,
+  expectViewPricesNumericallyEqual,
   expectFieldError,
   expectFieldValid,
   expectPricesError,
   expectLimitsError,
   expectPricesErrorHidden,
   clickSubmit,
+  clickSubmitExpectNoModelPriceWrite,
   clickCancel,
   expectDrawerHidden,
   submitUpsertAndWait,
   fillCreateForm,
   viewScope,
   expectViewScopeVisible,
+  expectViewScopeHidden,
   viewInfoValue,
   viewKvEntries,
   viewTags,
@@ -1151,6 +1362,7 @@ module.exports = {
   selectImportMode,
   uploadImportFile,
   clickImportButton,
+  clickImportAndWaitForFailure,
   clickImportCancel,
   clickImportCloseIcon,
   submitImportAndWait,

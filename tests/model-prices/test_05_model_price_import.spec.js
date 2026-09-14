@@ -79,15 +79,13 @@ test.describe('模型定价 - MP-I-02 YAML 校验失败提示', () => {
 
   test('子用例 2：缺少 mode 字段（后端 422）', async ({ page }) => {
     await mp.uploadImportFile(page, filePath('missing-mode.yaml'));
-    await mp.clickImportButton(page);
-    await mp.expectMessage(page, mp.MSG.importFailed);
+    await mp.clickImportAndWaitForFailure(page);
     await mp.expectImportScopeVisible(page);
   });
 
   test('子用例 3：prices 为空对象（后端 422）', async ({ page }) => {
     await mp.uploadImportFile(page, filePath('empty-prices.yaml'));
-    await mp.clickImportButton(page);
-    await mp.expectMessage(page, mp.MSG.importFailed);
+    await mp.clickImportAndWaitForFailure(page);
     await mp.expectImportScopeVisible(page);
   });
 
@@ -95,8 +93,7 @@ test.describe('模型定价 - MP-I-02 YAML 校验失败提示', () => {
     page,
   }) => {
     await mp.uploadImportFile(page, filePath('duplicate-combo.yaml'));
-    await mp.clickImportButton(page);
-    await mp.expectMessage(page, mp.MSG.importFailed);
+    await mp.clickImportAndWaitForFailure(page);
     await mp.expectImportScopeVisible(page);
   });
 
@@ -109,8 +106,7 @@ test.describe('模型定价 - MP-I-02 YAML 校验失败提示', () => {
 
   test('子用例 6：version 非法（后端 422）', async ({ page }) => {
     await mp.uploadImportFile(page, filePath('invalid-version.yaml'));
-    await mp.clickImportButton(page);
-    await mp.expectMessage(page, mp.MSG.importFailed);
+    await mp.clickImportAndWaitForFailure(page);
     await mp.expectImportScopeVisible(page);
   });
 
@@ -381,5 +377,68 @@ test.describe('模型定价 - MP-I-04 YAML 导入取消 / 关闭', () => {
     // 弹窗组件 v-if="importVisible" → 重开时重新创建，所选文件已清空
     await mp.openImportModal(page);
     await expect(mp.importScope(page).locator('.file-name')).toHaveCount(0);
+  });
+});
+
+test.describe('模型定价 - MP-T-10 prices 键名枚举-新增 10 键', () => {
+  let cleanup;
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createModelPriceTestCleanup();
+    await api.ensureBaselineData(page);
+    await mp.gotoModelPricePage(page);
+  });
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('价格键名下拉包含全部 10 个新增键，选择新键可正常提交', async ({ page }) => {
+    cleanup.trackCombo('qa-t10', 'qa-t10-model', 'chat');
+    await mp.openCreateDrawer(page);
+    await mp.fillProvider(page, 'qa-t10');
+    await mp.fillModel(page, 'qa-t10-model');
+    await mp.fillBaseModel(page, 'qa-t10-model');
+    await mp.selectMode(page, 'chat');
+
+    // 添加默认价格行，获取键名下拉开选项
+    await mp.addPriceRow(page);
+
+    // 验证下拉包含全部 10 个新增键
+    const options = await mp.getPriceKeyDropdownOptions(page);
+    for (const key of mp.NEW_PRICE_KEYS) {
+      expect(options).toContain(key);
+    }
+
+    // 清除之前添加的价格行，逐个添加新键并填值（选 3 个新键验证提交）
+    // 使用 cache_creation_input_token_cost_1h / input_cost_per_image_token / output_cost_per_audio_token
+    await mp.fillPriceRow(page, 0, {
+      key: mp.PRICE_KEY_CACHE_CREATION_1H,
+      value: 0.000001,
+    });
+    await mp.addPriceRow(page);
+    await mp.fillPriceRow(page, 1, {
+      key: mp.PRICE_KEY_INPUT_IMAGE,
+      value: 0.000002,
+    });
+    await mp.addPriceRow(page);
+    await mp.fillPriceRow(page, 2, {
+      key: mp.PRICE_KEY_OUTPUT_AUDIO,
+      value: 0.000003,
+    });
+
+    // 提交并验证成功
+    await mp.submitUpsertAndWait(page);
+    await mp.expectDrawerHidden(page);
+
+    // 验证接口返回中包含新键
+    const created = await api.findModelPriceByComboViaApi(
+      page,
+      'qa-t10',
+      'qa-t10-model',
+      'chat',
+    );
+    expect(created).not.toBeNull();
+    expect(created.prices.cache_creation_input_token_cost_1h).toBe(0.000001);
+    expect(created.prices.input_cost_per_image_token).toBe(0.000002);
+    expect(created.prices.output_cost_per_audio_token).toBe(0.000003);
   });
 });

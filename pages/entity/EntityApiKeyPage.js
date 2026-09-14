@@ -352,31 +352,66 @@ async function setApiKeyQuotaTotalModel(
 ) {
   const drawer = ivuDrawer(page).withTitle(drawerTitle);
   await expect(drawer).toBeVisible({ timeout: 15000 });
+  const quotaItem = drawer
+    .locator('.ivu-form-item')
+    .filter({ hasText: '配额总量' })
+    .first();
+  await expect(quotaItem).toBeVisible({ timeout: 15000 });
   const result = await drawer.evaluate((drawerEl, quotaValue) => {
     const formEl = drawerEl.querySelector('.ivu-form');
-    if (!formEl || !formEl.__vue__) return { ok: false, reason: 'no-form-vue' };
+    if (!formEl || !formEl.__vue__) {
+      return { ok: false, reason: 'no-form-vue' };
+    }
     let vm = formEl.__vue__;
     while (vm && !vm.formData) vm = vm.$parent;
-    if (!vm || !vm.formData) return { ok: false, reason: 'no-formData' };
-    // API-Key 表单可能用 quota_plan.quota 或 quota_total
+    if (!vm || !vm.formData) {
+      return { ok: false, reason: 'no-formData' };
+    }
     if (!vm.formData.quota_plan) vm.formData.quota_plan = {};
     const formRef = (vm.$refs && (vm.$refs.formData || vm.$refs.form)) || null;
+    if (!formRef || !Array.isArray(formRef.fields)) {
+      return { ok: false, reason: 'no-form-fields' };
+    }
     if (typeof vm.$set === 'function') {
       vm.$set(vm.formData.quota_plan, 'quota', quotaValue);
     } else {
       vm.formData.quota_plan.quota = quotaValue;
     }
-    // 触发校验
-    if (formRef && Array.isArray(formRef.fields)) {
-      const field = formRef.fields.find(
-        (f) => f.prop === 'quota_plan.quota' || f.prop === 'quota_total',
-      );
-      if (field && typeof field.validate === 'function') {
-        field.validate('blur');
-      }
+    const field = formRef.fields.find(
+      (f) => f.prop === 'quota_plan.quota' || f.prop === 'quota_total',
+    );
+    if (!field || typeof field.validate !== 'function') {
+      return {
+        ok: false,
+        reason: 'no-quota-form-item',
+        props: formRef.fields.map((f) => f.prop),
+      };
     }
-    return { ok: true };
+    return new Promise((resolve) => {
+      if (typeof vm.$set === 'function') {
+        vm.$set(vm.formData.quota_plan, 'quota', quotaValue);
+      } else {
+        vm.formData.quota_plan.quota = quotaValue;
+      }
+      // API-Key 规则 trigger 仅为 change；blur 不会跑校验
+      field.validate('change', (errorMessage) => {
+        resolve({
+          ok: true,
+          validated: true,
+          errorMessage: errorMessage || null,
+          unlimited: vm.formData.quota_plan.unlimited,
+          quota: vm.formData.quota_plan.quota,
+          validateState: field.validateState,
+          validateMessage: field.validateMessage,
+        });
+      });
+    });
   }, value);
+  if (!result || !result.ok) {
+    throw new Error(
+      `未能写入 API-Key 配额总量到 Vue formData: ${JSON.stringify(result || {})}`,
+    );
+  }
   await page.waitForTimeout(300);
   return result;
 }

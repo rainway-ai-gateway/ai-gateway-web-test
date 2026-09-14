@@ -349,7 +349,7 @@ entityOrgDescribe(
     let entityName;
     let typeName;
 
-    test('验证有限配额时配额总量不可超过 int64 上界', async ({ page }) => {
+    test('验证有限配额时配额总量不可超过 9999999999', async ({ page }) => {
       entityName = await utils.generateTestEntityName();
       typeName = await utils.generateTestEntityTypeName();
       cleanup.trackEntityName(entityName);
@@ -373,7 +373,9 @@ entityOrgDescribe(
       await test.step('2-4. 填写基本信息并输入超上界配额总量', async () => {
         await utils.fillEntityFormBasic(page, { name: entityName, typeName });
         await utils.fillEntityQuotaForm(page, { unlimited: false });
-        await utils.fillEntityQuotaTotalAndBlur(page, DOC.quotaOverMax);
+        // InputNumber :max=9999999999 会钳制界面输入，自动化经 Vue 模型注入
+        await utils.setEntityQuotaTotalModel(page, DOC.quotaOverMax);
+        await utils.expectEntityQuotaMaxError(page);
       });
 
       await test.step('5. 提交并验证错误提示', async () => {
@@ -818,6 +820,62 @@ entityOrgDescribe(
 
       await test.step('5. 修改为边界值90000000并提交成功', async () => {
         await utils.setResetQuotaTotalModel(page, DOC.quotaRmbMax);
+        await utils.submitResetQuotaFormAndWaitForSuccess(page);
+        await utils.expectResetQuotaDrawerHidden(page);
+      });
+    });
+  },
+);
+
+entityOrgDescribe(
+  'Entity组织管理 - EM-E-56 重置配额弹窗-total_token 上界校验',
+  (cleanup) => {
+    let entityName;
+    let typeName;
+
+    test('验证重置配额弹窗中 total_token 配额上限同样生效', async ({
+      page,
+    }) => {
+      entityName = await utils.generateTestEntityName();
+      typeName = await utils.generateTestEntityTypeName();
+      cleanup.trackEntityName(entityName);
+      cleanup.trackTypeName(typeName);
+
+      await test.step('前置：创建类型及 unit=total_token 的Entity', async () => {
+        await utils.gotoEntityTypeManagementPage(page);
+        await utils.createEntityTypeViaUI(
+          page,
+          typeName,
+          'Token重置上界校验类型',
+          1,
+        );
+        await utils.createEntityWithTypeViaApi(page, {
+          name: entityName,
+          type: typeName,
+          quotaPlan: { unlimited: false, quota: 1000, unit: 'total_token' },
+        });
+        await utils.gotoEntityOrgManagementPage(page);
+        await utils.searchEntityByName(page, entityName);
+      });
+
+      await test.step('1. 打开详情并点击"重置配额"按钮', async () => {
+        await utils.openEntityDetail(page, entityName);
+        await utils.clickResetEntityQuotaBtn(page);
+        await utils.expectResetQuotaDrawerOpen(page);
+      });
+
+      await test.step('2. 写入超过 9999999999 的配额总量并点击"确认"', async () => {
+        await utils.setResetQuotaTotalModel(page, DOC.quotaOverMax);
+        await utils.submitResetQuotaForm(page);
+      });
+
+      await test.step('验证重置失败并提示上界错误', async () => {
+        await utils.expectErrorNoticeContains(page, DOC.quotaMaxErrorMsg);
+        await utils.expectResetQuotaDrawerOpen(page);
+      });
+
+      await test.step('3. 修改为边界值 9999999999 并提交成功', async () => {
+        await utils.setResetQuotaTotalModel(page, DOC.quotaTokenMax);
         await utils.submitResetQuotaFormAndWaitForSuccess(page);
         await utils.expectResetQuotaDrawerHidden(page);
       });

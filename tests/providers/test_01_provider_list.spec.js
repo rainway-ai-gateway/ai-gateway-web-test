@@ -21,7 +21,7 @@
  *   列头 名称/描述/协议/模型/操作；协议列 join 展示；模型列 2 Tag + `+N`（空模型显示 `-`）。
  * - PR-L-02 名称筛选：本地筛选、大小写不敏感、清空恢复、不触发列表请求。
  * - PR-L-03 描述筛选：本地筛选、空描述不参与匹配、清空恢复。
- * - PR-L-04 协议筛选：下拉选项仅 openai/anthropic；选中后本地筛选，多协议任一命中。
+ * - PR-L-04 协议筛选：下拉选项 openai/anthropic/gemini；选中后本地筛选，多协议任一命中。
  * - PR-L-05 模型筛选：基于 models join 本地筛选、大小写不敏感。
  * - PR-L-06 组合筛选：名称+协议+模型为与关系，任一条件清空后对应过滤失效。
  * - PR-L-07 前端分页：API 造数 21 条，翻页/切 pageSize 不触发列表请求，行分页正确。
@@ -29,8 +29,8 @@
  * - PR-L-09 空列表展示空态（环境依赖：系统已有服务商则跳过，见偏差 1）。
  * - PR-L-10 操作列 5 个按钮（详情/查询模型价格/分段计价配置/编辑/删除），
  *   分段计价配置为 warning 风格。
- * - PR-L-11 查询模型价格跳转 ModelPrice 列表（URL 携带 provider=<name>&autoView=1）；
- *   无定价记录提示「未找到提供商」；有定价记录自动打开详情。
+ * - PR-L-11 查询模型价格跳转 ModelPrice 列表（URL 携带 provider=<name>），
+ *   按该服务商筛选列表，不打开详情；无定价记录时提示「未找到提供商」。
  *
  * 文档/封装偏差记录（02 文档验收断言均已保留，不改 pages/api/其他 spec）：
  * 1. PR-L-09 环境依赖偏差：空列表验收要求「系统无任何服务商」，而测试环境通常已存在
@@ -38,25 +38,21 @@
  * 2. filterListSearch 封装（ProviderPage）仅 fill，而 iView Input 的 on-change 在失焦时
  *    才触发（fill 只派发 input 事件，不派发 change）。spec 内以 filterListSearchBlur 包装
  *    补充 blur（沿用 pp.providerTable().searchInput() 定位，不引入裸 selector）。
- * 3. PR-L-04「下拉选项仅 openai/anthropic」为断言型读取：仅枚举 dropdown 选项文本，
+ * 3. PR-L-04「下拉选项 openai/anthropic/gemini」为断言型读取：仅枚举 dropdown 选项文本，
  *    交互仍走 pp.filterListByProtocol。
- * 4. PR-L-11 跨模块断言 ModelPrice 列表页（ProviderPage 无对应封装）：以文本/可访问性
- *    定位（getByRole/getByText）断言，详情 Drawer 以标题「定价详情」判定自动打开。
+ * 4. PR-L-11 跨模块断言 ModelPrice 列表页：筛选结果、提供商下拉选中、无匹配提示
+ *    走 ModelPricePage 封装；详情 Drawer 以 expectViewScopeHidden 判定未打开。
  * 5. PR-L-08 Tooltip 定位限制：.provider-models-tooltip 为 iView transfer 弹层，凡含
  *    `+N` 折叠 Tag 的行在渲染时即生成该 div（即使未悬停）；封装 expectModelsTooltip 使用
  *    未限定作用域的 locator，表格存在多个 `+N` 行时会触发 strict mode 冲突。spec 在
  *    beforeEach 先按唯一名称前缀本地筛选，确保表格仅剩本用例行（其他 `+N` 行的 Tooltip
  *    随行卸载），再悬停断言。
- * 6. PR-L-11 autoView 一次性 token：ModelPrices 页 handleAutoViewAfterFetch 消费 autoView
- *    后立即 $router.replace 将其从 URL 清除（避免刷新重复打开详情）。「URL 携带
- *    provider=<name>&autoView=1」仅为瞬时状态，spec 在点击前注册 waitForURL 捕获该瞬时
- *    URL；点击后持久 URL 仅含 provider=<name>（与 02 文档「URL 携带 autoView=1」的差异
- *    已在断言侧记录为一次性 token 行为，功能验收以自动打开详情/未找到提示为准）。
  *
  * 运行：npx playwright test tests/providers/test_01_provider_list.spec.js
  */
 const { test, expect } = require('@playwright/test');
 const pp = require('../../pages/providers/ProviderPage');
+const mpp = require('../../pages/model-prices/ModelPricePage');
 const api = require('../../api/provider-api-utils');
 const mpa = require('../../api/model-price-api-utils');
 
@@ -309,10 +305,11 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
   });
 });
 
-test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/anthropic）', () => {
+test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anthropic/gemini）', () => {
   let cleanup;
   let pOpenai;
   let pAnthropic;
+  let pGemini;
   let pBoth;
 
   test.beforeEach(async ({ page }) => {
@@ -334,6 +331,14 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/a
         models: [],
       })
     ).name;
+    pGemini = (
+      await createProviderViaApiAndTrack(page, cleanup, {
+        name: base + 'gm',
+        description: '自动化测试-协议筛选',
+        model_protocols: ['gemini'],
+        models: [],
+      })
+    ).name;
     pBoth = (
       await createProviderViaApiAndTrack(page, cleanup, {
         name: base + 'both',
@@ -350,11 +355,10 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/a
     await cleanup.cleanup(page);
   });
 
-  test('下拉选项仅 openai/anthropic；选中后本地筛选，多协议任一命中，不触发请求', async ({
+  test('下拉选项 openai/anthropic/gemini；选中后本地筛选，多协议任一命中，不触发请求', async ({
     page,
   }) => {
-    // 1. 打开协议筛选下拉，枚举选项文本断言仅 openai、anthropic（不含 gemini 等）
-    //    （偏差记录 3：断言型读取，仅枚举选项文本，不驱动交互）
+    // 1. 打开协议筛选下拉，枚举选项文本断言含 openai、anthropic、gemini
     const protocolSelect = pp
       .providerTable(page)
       .searchArea()
@@ -367,25 +371,36 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项仅 openai/a
       .allTextContents();
     expect(
       optionTexts.map((t) => t.trim()).filter(Boolean),
-      '协议筛选下拉应仅含 openai/anthropic',
-    ).toEqual(['openai', 'anthropic']);
+      '协议筛选下拉应含 openai/anthropic/gemini',
+    ).toEqual(['openai', 'anthropic', 'gemini']);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(200);
 
-    // 2. 选 openai → openai 行与双协议行可见，纯 anthropic 行隐藏
+    // 2. 选 openai → openai 行与双协议行可见，纯 anthropic/gemini 行隐藏
     await pp.expectNoListRequestDuring(page, async () => {
       await pp.filterListByProtocol(page, 'openai');
       await pp.providerTable(page).expectRowVisible(pOpenai);
       await pp.providerTable(page).expectRowVisible(pBoth);
       await pp.providerTable(page).expectRowHidden(pAnthropic);
+      await pp.providerTable(page).expectRowHidden(pGemini);
     });
 
-    // 3. 换选 anthropic → anthropic 行与双协议行可见，纯 openai 行隐藏
+    // 3. 换选 anthropic → anthropic 行与双协议行可见，纯 openai/gemini 行隐藏
     await pp.expectNoListRequestDuring(page, async () => {
       await pp.filterListByProtocol(page, 'anthropic');
       await pp.providerTable(page).expectRowVisible(pAnthropic);
       await pp.providerTable(page).expectRowVisible(pBoth);
       await pp.providerTable(page).expectRowHidden(pOpenai);
+      await pp.providerTable(page).expectRowHidden(pGemini);
+    });
+
+    // 4. 换选 gemini → gemini 行可见，其他行隐藏
+    await pp.expectNoListRequestDuring(page, async () => {
+      await pp.filterListByProtocol(page, 'gemini');
+      await pp.providerTable(page).expectRowVisible(pGemini);
+      await pp.providerTable(page).expectRowHidden(pOpenai);
+      await pp.providerTable(page).expectRowHidden(pAnthropic);
+      await pp.providerTable(page).expectRowHidden(pBoth);
     });
   });
 });
@@ -734,7 +749,7 @@ test.describe('模型服务商 - PR-L-10 操作列 5 个按钮', () => {
   });
 });
 
-test.describe('模型服务商 - PR-L-11 查询模型价格跳转与自动打开详情', () => {
+test.describe('模型服务商 - PR-L-11 查询模型价格跳转并按服务商筛选', () => {
   let cleanup;
   let mpCleanup;
   let providerName;
@@ -762,34 +777,28 @@ test.describe('模型服务商 - PR-L-11 查询模型价格跳转与自动打开
     await cleanup.cleanup(page);
   });
 
-  test('无定价记录：跳转 URL 携带 provider=<name>&autoView=1，提示未找到提供商，不打开详情', async ({
+  test('无定价记录：跳转 URL 携带 provider=<name>，提示未找到提供商，不打开详情', async ({
     page,
   }) => {
-    // 1. 点击「查询模型价格」→ 跳转 ModelPrice 列表。偏差 6：autoView 为一次性 token，
-    //    消费后被应用立即从 URL 清除，故在点击前注册 waitForURL 捕获瞬时 URL
-    //    （provider=<name>&autoView=1）；点击后持久 URL 仅含 provider=<name>
     const urlPromise = page.waitForURL(
       (url) =>
+        url.pathname.includes('/model-prices') &&
         url.searchParams.get('provider') === providerName &&
-        url.searchParams.get('autoView') === '1',
+        !url.searchParams.has('autoView'),
       { timeout: 15000 },
     );
     await pp.clickRowAction(page, providerName, '查询模型价格');
     await urlPromise;
 
-    // 2. 模型定价列表页就绪（筛选该 provider）
     await expect(page.getByRole('button', { name: '新增定价' })).toBeVisible({
       timeout: 15000,
     });
 
-    // 3. 无定价记录 → 提示「未找到提供商 {provider} 的模型定价」，不打开详情、不报错
-    await pp.expectMessageContaining(page, '未找到提供商');
-    await pp.expectMessageContaining(page, providerName);
-    await expect(page.getByText('定价详情')).toHaveCount(0);
+    await mpp.expectNoPricingForProvider(page, providerName);
+    await mpp.expectViewScopeHidden(page);
   });
 
-  test('有定价记录：跳转后自动打开第一条详情', async ({ page }) => {
-    // 前置：API 造数 1 条该 provider 的定价记录（偏差记录 4：跨模块造数走 api 封装）
+  test('有定价记录：跳转后按服务商筛选列表，不打开详情', async ({ page }) => {
     const created = await mpa.createModelPriceViaApi(page, {
       provider: providerName,
       model: MODEL,
@@ -801,23 +810,22 @@ test.describe('模型服务商 - PR-L-11 查询模型价格跳转与自动打开
     mpCleanup.trackCombo(providerName, MODEL, 'chat');
     await pp.providerTable(page).expectRowVisible(providerName);
 
-    // 1. 点击「查询模型价格」→ 跳转 ModelPrice 列表。偏差 6：autoView 为一次性 token，
-    //    消费后被应用立即从 URL 清除，故在点击前注册 waitForURL 捕获瞬时 URL
     const urlPromise = page.waitForURL(
       (url) =>
+        url.pathname.includes('/model-prices') &&
         url.searchParams.get('provider') === providerName &&
-        url.searchParams.get('autoView') === '1',
+        !url.searchParams.has('autoView'),
       { timeout: 15000 },
     );
     await pp.clickRowAction(page, providerName, '查询模型价格');
     await urlPromise;
 
-    // 2. 模型定价列表页就绪
     await expect(page.getByRole('button', { name: '新增定价' })).toBeVisible({
       timeout: 15000,
     });
 
-    // 3. 列表加载后自动打开第一条该 provider 定价记录的详情 Drawer（标题「定价详情」）
-    await expect(page.getByText('定价详情')).toBeVisible({ timeout: 15000 });
+    await mpp.modelPriceTable(page).expectRowVisible(MODEL);
+    await mpp.expectProviderFilterSelected(page, providerName);
+    await mpp.expectViewScopeHidden(page);
   });
 });

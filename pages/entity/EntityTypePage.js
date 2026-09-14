@@ -806,11 +806,10 @@ async function expectEntityEditEchoMatchesApi(
   apiData,
   parentName,
 ) {
-  const { openEditEntityDrawer } = require('./EntityOrgPage');
+  const { openEditEntityDrawer, entityOrgForm } = require('./EntityOrgPage');
   await openEditEntityDrawer(page, entityName);
   const drawer = ivuDrawer(page).withTitle(DRAWER_TITLE.editEntity);
-  // input 的 value 不会出现在 textContent 中，需要直接读取 input 值
-  const nameInput = drawer.locator('input[placeholder="请输入Entity名称"]');
+  const nameInput = entityOrgForm(page, DRAWER_TITLE.editEntity).input('名称');
   await expect(nameInput).toHaveValue(apiData.name);
   const typeFormItem = drawer
     .locator('.ivu-form-item')

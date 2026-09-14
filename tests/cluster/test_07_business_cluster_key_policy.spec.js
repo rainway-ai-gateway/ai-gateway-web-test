@@ -221,7 +221,7 @@ test.describe('AI业务集群 - RM-BC-52~56、79 Key 路由策略与 key_policy'
     expect(body.llm_config.key_policy.retry_backoff_max).toBe(5000);
   });
 
-  test('RM-BC-56 LLM 配置界面 5 张 Card 分组展示（含 Key 亲和性）', async ({
+  test('RM-BC-56 LLM 配置界面 6 张 Card 分组展示（含 Key 亲和性、均衡模式配置）', async ({
     page,
   }) => {
     const clusterName = utils.generateTestBusinessClusterName();
@@ -233,6 +233,7 @@ test.describe('AI业务集群 - RM-BC-52~56、79 Key 路由策略与 key_policy'
       utils.DOC_BUSINESS_CLUSTER.serviceAuthKeysCard,
       utils.DOC_BUSINESS_CLUSTER.keyPolicyCard,
       utils.DOC_BUSINESS_CLUSTER.keyAffinityCard,
+      utils.DOC_BUSINESS_CLUSTER.balanceModeConfigCard,
     ]);
   });
 

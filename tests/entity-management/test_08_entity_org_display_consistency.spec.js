@@ -76,6 +76,21 @@ function formatQuotaNumber(num, decimals) {
   });
 }
 
+// 复刻 EntityList.vue formatNumber：decimals=0 时对 >=1000 做 K/M 缩写（与 ApiKeyList 一致）
+function formatEntityListNumber(num, decimals) {
+  const value = Number(num);
+  if (Number.isNaN(value)) return '-';
+  if (decimals === 0) {
+    if (value >= 1000000) {
+      return (value / 1000000).toFixed(1) + 'M';
+    }
+    if (value >= 1000) {
+      return (value / 1000).toFixed(1) + 'K';
+    }
+  }
+  return formatQuotaNumber(value, decimals);
+}
+
 entityOrgDescribe(
   'EntityOrg展示 - EOD-01 详情页全字段与接口数据一致性',
   (cleanup) => {
@@ -490,11 +505,11 @@ entityOrgDescribe(
         const tokenEntity = await utils.findEntityByNameViaApi(page, tokenName);
         const tq = tokenEntity.quota_plan;
         const tUsed = tq.balance ? Number(tq.balance.used) || 0 : 0;
-        // 前端格式：`{used} tokens / {quota} tokens`
-        const tText = `${formatQuotaNumber(tUsed, 0)} tokens / ${formatQuotaNumber(
-          tq.quota,
+        // 前端格式：`{used} tokens / {quota} tokens`，且 decimals=0 时 >=1000 缩写为 K/M
+        const tText = `${formatEntityListNumber(
+          tUsed,
           0,
-        )} tokens`;
+        )} tokens / ${formatEntityListNumber(tq.quota, 0)} tokens`;
         const tokenRow = page
           .locator('.show-iView-Table .ivu-table tbody tr')
           .filter({ hasText: tokenName })

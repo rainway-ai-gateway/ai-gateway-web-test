@@ -129,13 +129,13 @@ test.describe('AI业务集群 - RM-BC-87~91 Key 亲和性', () => {
     expect(keyPolicyIdx).toBeGreaterThanOrEqual(0);
     expect(keyAffinityIdx).toBeGreaterThan(keyPolicyIdx);
 
-    // 2. 默认启用=关闭
+    // 2. 默认启用=开启
     const defaults = await utils.getKeyAffinityValues(page);
-    expect(defaults.enabled).toBe(false);
-    // 3. 关闭状态下条件字段不显示
-    await utils.expectKeyAffinityFieldsVisible(page, false);
+    expect(defaults.enabled).toBe(true);
+    // 3. 开启状态下条件字段显示
+    await utils.expectKeyAffinityFieldsVisible(page, true);
 
-    // 4. 提交时默认 key_affinity 结构
+    // 4. 提交时默认 key_affinity 结构（enabled=true 时发送完整配置）
     await fillProviderAndModels(page, providerName);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
@@ -144,7 +144,7 @@ test.describe('AI业务集群 - RM-BC-87~91 Key 亲和性', () => {
     );
     const body = request.postDataJSON();
     expect(body.llm_config.key_affinity).toEqual({
-      enabled: false,
+      enabled: true,
       ttl: 600,
       redis_prefix: utils.DOC_BUSINESS_CLUSTER.defaultRedisPrefix,
       penalty_enable: true,
