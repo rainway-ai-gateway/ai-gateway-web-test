@@ -24,7 +24,7 @@
  * - PR-V-05 instance.addr 必填与格式校验（IP 模式仅接受 IP；域名模式接受域名）
  * - PR-V-06 instance.port 范围校验（边界 1/65535/443 通过；空值拦截）
  * - PR-V-07 instance.weight 范围与至少一个 >0（非整数拦截；权重和=100 通过）
- * - PR-V-08 model_protocols 至少 1 个且不重复（选项仅 openai/anthropic）
+ * - PR-V-08 model_protocols 至少 1 个且不重复（选项 openai/anthropic/gemini）
  * - PR-V-09 model_endpoint.schema 校验（下拉仅 http/https，默认 https）
  * - PR-V-10 model_endpoint.uri 校验（不以 / 开头拦截；空值默认 /v1/models）
  * - PR-V-11 keys.name 必填与唯一校验（留空 / 重复 / 129 字符拦截）
@@ -608,7 +608,7 @@ test.describe('模型服务商 - PR-V-08 model_protocols 至少 1 个且不重�
     await cleanup.cleanup(page);
   });
 
-  test('未选协议提交被拦截并提示；重复选择不产生重复 tag；选项仅 openai/anthropic', async ({
+  test('未选协议提交被拦截并提示；重复选择不产生重复 tag；选项 openai/anthropic/gemini', async ({
     page,
   }) => {
     const name = uniqueName('provider');
@@ -631,14 +631,40 @@ test.describe('模型服务商 - PR-V-08 model_protocols 至少 1 个且不重�
     await pp.selectProtocols(page, ['openai']);
     await pp.expectProtocolTagCount(page, 2);
 
-    // 3. 下拉选项仅 openai / anthropic
-    await pp.expectProtocolOptions(page, ['openai', 'anthropic']);
+    // 3. 下拉选项 openai / anthropic / gemini
+    await pp.expectProtocolOptions(page, ['openai', 'anthropic', 'gemini']);
 
     // 4. 提交成功，提交体与所选一致
     const response = await pp.submitUpsertAndWait(page);
     expect(response.request().postDataJSON().model_protocols).toEqual([
       'openai',
       'anthropic',
+    ]);
+    cleanup.trackName(name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
+  });
+
+  test('PR-V-08 协议枚举校验-选 gemini 通过，选非法值拦截', async ({
+    page,
+  }) => {
+    const name = uniqueName('provider');
+    await openCreateAndFillBasic(page, name);
+    await pp.fillInstanceRow(page, 0, {
+      addr: IP_ADDR,
+      port: IP_PORT,
+      weight: IP_WEIGHT,
+    });
+
+    // 1. 清空协议 → 提交被拦截（非法值：未选协议）
+    await pp.clearProtocols(page);
+    await pp.expectFormItemError(page, '模型协议', '请至少选择一种模型协议');
+    await expectSubmitBlocked(page);
+
+    // 2. 选择 gemini → 提交成功，提交体含 gemini
+    await pp.selectProtocols(page, ['gemini']);
+    const response = await pp.submitUpsertAndWait(page);
+    expect(response.request().postDataJSON().model_protocols).toEqual([
+      'gemini',
     ]);
     cleanup.trackName(name);
     await pp.providerTable(page).expectRowVisible(name, 15000);

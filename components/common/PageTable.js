@@ -140,15 +140,29 @@ class PageTableComponent {
   async clearSearch(placeholder = '请输入用户查询') {
     await this.search('', placeholder);
   }
-  async clickPageNumber(pageNum) {
-    const pagination = this.pagination();
-    const pageBtn = pagination
-      .getByRole('listitem')
-      .filter({ hasText: String(pageNum) });
-    if ((await pageBtn.count()) > 0) {
-      await pageBtn.click();
-      await this.page.waitForTimeout(1000);
+  pageNumber(pageNum) {
+    return this.pagination().getByRole('listitem', {
+      name: String(pageNum),
+      exact: true,
+    });
+  }
+  async expectPageNumberVisible(pageNum) {
+    await (0, test_1.expect)(this.pageNumber(pageNum)).toBeVisible();
+  }
+  async expectPageNumbersVisible(...pageNums) {
+    for (const pageNum of pageNums) {
+      await this.expectPageNumberVisible(pageNum);
     }
+  }
+  async expectActivePage(pageNum) {
+    const active = this.pagination().locator('li.number.active');
+    await (0, test_1.expect)(active).toHaveText(String(pageNum));
+  }
+  async clickPageNumber(pageNum) {
+    const pageBtn = this.pageNumber(pageNum);
+    await (0, test_1.expect)(pageBtn).toBeVisible();
+    await pageBtn.click();
+    await this.page.waitForTimeout(1000);
   }
   async clickNextPage() {
     const pagination = this.pagination();

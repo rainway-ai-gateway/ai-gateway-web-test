@@ -740,6 +740,21 @@ async function fillModelMappingRow(
   }
 }
 
+async function expectModelMappingSource(
+  page,
+  rowIndex,
+  expected,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const body = modelStepBody(page, drawerTitle);
+  const card = body
+    .locator('.llm-section-card')
+    .filter({ hasText: DOC_BUSINESS_CLUSTER.modelRedirectCard });
+  const row = card.locator('table tbody tr').nth(rowIndex);
+  const sourceInput = row.locator('input[placeholder*="原模型" i]').first();
+  await expect(sourceInput).toHaveValue(expected, { timeout: 10000 });
+}
+
 async function expectProviderFieldVisible(
   page,
   drawerTitle = DRAWER_TITLE.createBusinessCluster,
@@ -1761,6 +1776,198 @@ async function expectCreateBusinessClusterDrawerHidden(page) {
   ).toBeHidden();
 }
 
+// ===== 2026-09-09 均衡模式配置（RM-BC-93~103）=====
+
+function balanceModeCard(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.llm-section-card')
+    .filter({ hasText: DOC_BUSINESS_CLUSTER.balanceModeConfigCard });
+}
+
+// 获取 balance_mode 当前值（WRR/EPP）
+// 注意：iView Select 选项可能显示中文注释如 "WRR（加权轮询）"，此处剥离括号中文注释
+async function getBalanceModeValue(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  const card = balanceModeCard(page, drawerTitle);
+  const selectedValue = await card
+    .locator('.ivu-select-selected-value')
+    .first()
+    .textContent();
+  const text = (selectedValue || '').trim();
+  const parenIndex = text.indexOf('（');
+  return parenIndex > 0 ? text.substring(0, parenIndex) : text;
+}
+
+// 设置 balance_mode（WRR/EPP）
+// 注意：iView Select 选项可能显示中文注释如 "EPP（弹性代理池）"，使用子串匹配
+async function setBalanceMode(page, mode, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  const card = balanceModeCard(page, drawerTitle);
+  await card.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+  await page
+    .locator('.ivu-select-dropdown:visible .ivu-select-item')
+    .filter({ hasText: mode })
+    .first()
+    .click();
+  // 关闭下拉菜单，避免后续定位器匹配到下拉列表中的元素
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  await waitAfterResourceMutation(page, 300);
+}
+
+// iView Select 显示中文标签，需映射回英文值
+const SCHEDULING_PROFILE_LABEL_MAP = {
+  '延迟优先': 'latency-first',
+  '平衡': 'balanced',
+  '吞吐优先': 'throughput-first',
+};
+const CACHE_AFFINITY_LABEL_MAP = {
+  '低': 'low',
+  '中': 'medium',
+  '高': 'high',
+};
+const SCHEDULING_PROFILE_VALUE_MAP = {
+  'latency-first': '延迟优先',
+  'balanced': '平衡',
+  'throughput-first': '吞吐优先',
+};
+const CACHE_AFFINITY_VALUE_MAP = {
+  'low': '低',
+  'medium': '中',
+  'high': '高',
+};
+
+// 获取 epp_config 当前值
+async function getEppConfigValues(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  const card = balanceModeCard(page, drawerTitle);
+  const schedulingProfile = await card
+    .locator('.ivu-select-selected-value')
+    .nth(1)
+    .textContent()
+    .catch(() => '');
+  const cacheAffinity = await card
+    .locator('.ivu-select-selected-value')
+    .nth(2)
+    .textContent()
+    .catch(() => '');
+  const prefixCacheAffinity = await card
+    .locator('.ivu-switch')
+    .first()
+    .evaluate((el) => el.classList.contains('ivu-switch-checked'))
+    .catch(() => false);
+  const sessionAffinityEnabled = await card
+    .locator('.ivu-switch')
+    .nth(1)
+    .evaluate((el) => el.classList.contains('ivu-switch-checked'))
+    .catch(() => false);
+  const kvCacheUtilizationMax = await card
+    .locator('.ivu-input-number-input')
+    .first()
+    .inputValue()
+    .catch(() => '');
+  return {
+    schedulingProfile: SCHEDULING_PROFILE_LABEL_MAP[(schedulingProfile || '').trim()] || (schedulingProfile || '').trim(),
+    cacheAffinity: CACHE_AFFINITY_LABEL_MAP[(cacheAffinity || '').trim()] || (cacheAffinity || '').trim(),
+    prefixCacheAffinity,
+    sessionAffinityEnabled,
+    kvCacheUtilizationMax,
+  };
+}
+
+// 设置 epp_config 各字段值
+async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  const card = balanceModeCard(page, drawerTitle);
+  
+  if (values.schedulingProfile !== undefined) {
+    // 第2个 Select（第1个是 balance_mode）；使用中文标签匹配下拉选项
+    const selects = card.locator('.ivu-select-selection');
+    await selects.nth(1).click();
+    await page.waitForTimeout(200);
+    await page
+      .locator('.ivu-select-dropdown:visible .ivu-select-item')
+      .filter({ hasText: SCHEDULING_PROFILE_VALUE_MAP[values.schedulingProfile] || values.schedulingProfile })
+      .first()
+      .click();
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.cacheAffinity !== undefined) {
+    const selects = card.locator('.ivu-select-selection');
+    await selects.nth(2).click();
+    await page.waitForTimeout(200);
+    await page
+      .locator('.ivu-select-dropdown:visible .ivu-select-item')
+      .filter({ hasText: CACHE_AFFINITY_VALUE_MAP[values.cacheAffinity] || values.cacheAffinity })
+      .first()
+      .click();
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.prefixCacheAffinity !== undefined) {
+    const switches = card.locator('.ivu-switch');
+    const isChecked = await switches.first().evaluate((el) =>
+      el.classList.contains('ivu-switch-checked'),
+    );
+    if (values.prefixCacheAffinity !== isChecked) {
+      await switches.first().click();
+      await waitAfterResourceMutation(page, 200);
+    }
+  }
+  if (values.sessionAffinityEnabled !== undefined) {
+    const switches = card.locator('.ivu-switch');
+    const isChecked = await switches.nth(1).evaluate((el) =>
+      el.classList.contains('ivu-switch-checked'),
+    );
+    if (values.sessionAffinityEnabled !== isChecked) {
+      await switches.nth(1).click();
+      await waitAfterResourceMutation(page, 200);
+    }
+  }
+  if (values.sessionAffinityHeader !== undefined) {
+    const headerItem = card
+      .locator('.ivu-form-item')
+      .filter({ hasText: DOC_BUSINESS_CLUSTER.sessionAffinityHeaderLabel })
+      .locator('input');
+    await headerItem.fill(values.sessionAffinityHeader);
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.kvCacheUtilizationMax !== undefined) {
+    const inputs = card.locator('.ivu-input-number-input');
+    await inputs.first().fill('');
+    await inputs.first().fill(String(values.kvCacheUtilizationMax));
+    await inputs.first().blur();
+    await waitAfterResourceMutation(page, 200);
+  }
+}
+
+// 等待编辑集群的 GET 请求完成
+async function waitForClusterGetResponse(page, action) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (res) =>
+        res.url().includes('/clusters/') &&
+        res.request().method() === 'GET' &&
+        res.status() === 200,
+      { timeout: 15000 },
+    ),
+    action(),
+  ]);
+  return response;
+}
+
+// 等待集群复查请求（用于验证展示数据）
+async function waitForClusterReviewRequest(page, action) {
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.method() === 'POST' && req.url().includes('/clusters'),
+      { timeout: 30000 },
+    ),
+    action(),
+  ]);
+  return request;
+}
+
 module.exports = {
   openCreateBusinessClusterDrawer,
   openEditBusinessClusterDrawer,
@@ -1813,6 +2020,7 @@ module.exports = {
   selectForwardModels,
   selectAllForwardModels,
   fillModelMappingRow,
+  expectModelMappingSource,
   fillProvider,
   expectProviderFieldVisible,
   expectProviderValue,
@@ -1846,4 +2054,12 @@ module.exports = {
   cancelCreateBusinessCluster,
   expectCreateBusinessClusterDrawerHidden,
   DOC_BUSINESS_CLUSTER,
+  // 2026-09-09 均衡模式配置（RM-BC-93~103）
+  balanceModeCard,
+  getBalanceModeValue,
+  setBalanceMode,
+  getEppConfigValues,
+  fillEppConfig,
+  waitForClusterGetResponse,
+  waitForClusterReviewRequest,
 };

@@ -233,6 +233,37 @@ async function fillEntityFormBasic(
   }
 }
 
+async function expectEntityNamePlaceholder(
+  page,
+  placeholder = DOC_ENTITY_ORG.namePlaceholder,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  await expect(
+    entityOrgForm(page, drawerTitle).input('名称'),
+  ).toHaveAttribute('placeholder', placeholder);
+}
+
+async function expectEntityNameFormTip(
+  page,
+  texts = [DOC_ENTITY_ORG.nameRuleAtHint, DOC_ENTITY_ORG.nameRuleEdgeHint],
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const tip = entityOrgForm(page, drawerTitle)
+    .item('名称')
+    .locator('.form-tip')
+    .first();
+  for (const text of texts) {
+    await expect(tip).toContainText(text);
+  }
+}
+
+async function expectEntityNameFieldValid(
+  page,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  await entityOrgForm(page, drawerTitle).expectFieldValid('名称');
+}
+
 async function selectEntityFormSelect(
   page,
   label,
@@ -372,7 +403,7 @@ async function fillEntityQuotaTotal(
 ) {
   const num = Number(total);
   // InputNumber：:min=0 拦负数，:precision=0 拦小数；须写 Vue 模型 + FormItem.validate
-  // 超大上界字符串可能超出 Number 安全整数，仍走输入框路径（EM-E-24）
+  // 超大上界值由用例经 setEntityQuotaTotalModel 注入，避免 InputNumber :max 钳制
   if (Number.isFinite(num) && (num < 0 || !Number.isInteger(num))) {
     return setEntityQuotaTotalModel(page, num, drawerTitle);
   }
@@ -1766,6 +1797,9 @@ module.exports = {
   selectEntityBlockModels,
   expectEntityAllowModelsDefault,
   fillEntityFormBasic,
+  expectEntityNamePlaceholder,
+  expectEntityNameFormTip,
+  expectEntityNameFieldValid,
   selectEntityFormSelect,
   expectParentEntityOptionVisible,
   selectEntityQuotaUnlimited,

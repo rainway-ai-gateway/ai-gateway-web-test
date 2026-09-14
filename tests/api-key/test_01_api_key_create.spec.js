@@ -682,7 +682,7 @@ test.describe('API-Key管理 - EM-K-27 创建API-Key-配额总量小数校验', 
 test.describe('API-Key管理 - EM-K-28 创建API-Key-配额总量上界校验', () => {
   let description;
 
-  test('验证无限配额=否时配额总量不可超过 int64 上界', async ({ page }) => {
+  test('验证无限配额=否时配额总量不可超过 9999999999', async ({ page }) => {
     description = DOC.createSuccess.description + '_max_' + Date.now();
 
     await test.step('1. 点击"添加"按钮', async () => {
@@ -693,7 +693,9 @@ test.describe('API-Key管理 - EM-K-28 创建API-Key-配额总量上界校验', 
     await test.step('2-4. 填写描述并输入超上界配额总量', async () => {
       await utils.fillApiKeyDescription(page, description);
       await utils.selectApiKeyUnlimitedQuota(page, '否');
-      await utils.fillApiKeyQuotaTotalAndBlur(page, DOC.quotaOverMax);
+      // InputNumber :max=9999999999 会钳制界面输入，自动化经 Vue 模型注入
+      await utils.setApiKeyQuotaTotalModel(page, DOC.quotaOverMax);
+      await utils.expectApiKeyQuotaMaxError(page);
     });
 
     await test.step('5. 提交并验证错误提示', async () => {
@@ -1100,6 +1102,57 @@ test.describe('API-Key管理 - EM-K-59 重置配额弹窗-unit=RMB-9000万上界
 
     await test.step('5. 修改为边界值90000000并提交成功', async () => {
       await utils.setResetQuotaTotalModel(page, DOC.quotaRmbMax);
+      await utils.submitResetQuotaFormAndWaitForSuccess(page);
+      await utils.expectResetQuotaDrawerHidden(page);
+    });
+
+    await test.step('清理测试数据', async () => {
+      await utils.searchApiKeyByDescription(page, description);
+      const row = page
+        .locator('.show-iView-Table .ivu-table tbody tr')
+        .filter({ hasText: description })
+        .first();
+      const apiKeyId = await row.getAttribute('data-row-key');
+      if (apiKeyId) {
+        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      }
+    });
+  });
+});
+
+test.describe('API-Key管理 - EM-K-61 重置配额弹窗-total_token 上界校验', () => {
+  let description;
+
+  test('验证重置配额弹窗中 total_token 配额上限同样生效', async ({ page }) => {
+    description = DOC.createSuccess.description + '_token_reset_' + Date.now();
+
+    await test.step('前置：创建 unit=total_token 的API-Key', async () => {
+      await utils.gotoApiKeyManagementPage(page);
+      await utils.createApiKeyWithQuotaViaUI(page, description, {
+        total: 1000,
+        unit: 'total_token',
+      });
+      await utils.ensureApiKeyRowVisible(page, description);
+    });
+
+    await test.step('1. 打开详情并点击"重置配额"按钮', async () => {
+      await utils.openApiKeyDetail(page, description);
+      await utils.clickResetApiKeyQuotaBtn(page);
+      await utils.expectResetQuotaDrawerOpen(page);
+    });
+
+    await test.step('2. 写入超过 9999999999 的配额总量并点击"确认"', async () => {
+      await utils.setResetQuotaTotalModel(page, DOC.quotaOverMax);
+      await utils.submitResetQuotaForm(page);
+    });
+
+    await test.step('验证重置失败并提示上界错误', async () => {
+      await utils.expectErrorNoticeContains(page, DOC.quotaMaxErrorMsg);
+      await utils.expectResetQuotaDrawerOpen(page);
+    });
+
+    await test.step('3. 修改为边界值 9999999999 并提交成功', async () => {
+      await utils.setResetQuotaTotalModel(page, DOC.quotaTokenMax);
       await utils.submitResetQuotaFormAndWaitForSuccess(page);
       await utils.expectResetQuotaDrawerHidden(page);
     });
