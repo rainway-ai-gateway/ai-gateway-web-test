@@ -405,9 +405,13 @@ test.describe('操作日志 - OL-L-09 服务端分页', () => {
       });
     }
 
-    if (total <= 20) {
-      test.skip(true, `日志总数 ${total} 不足 21 条，跳过分页用例`);
-    }
+    // 确认前置造数后的数据量是否满足分页需求
+    await test.step('确认造数后数据量满足分页条件', async () => {
+      expect(
+        total,
+        `日志总数 ${total} 仍不足 21 条，无法执行分页测试（造数后应 ≥ 21）`,
+      ).toBeGreaterThan(20);
+    });
 
     await test.step('第 1 页展示 20 条且页码 1、2 可见', async () => {
       const table = olp.operationLogTable(page);

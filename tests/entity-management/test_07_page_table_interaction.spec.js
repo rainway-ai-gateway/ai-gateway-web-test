@@ -290,84 +290,131 @@ apiKeyDescribe(
   },
 );
 
-apiKeyDescribe('PageTable - PT-05 嵌套字段列排序应生效', () => {
-  test('验证配额列与挂载 Entity 列排序后行顺序发生变化', async ({ page }) => {
-    await test.step('前置：进入 API-Key 管理页面', async () => {
+apiKeyDescribe('PageTable - PT-05 嵌套字段列排序应生效', (cleanup) => {
+  // 列索引（iView 渲染后的 td 顺序）：
+  // 0=id 1=key 2=description 3=enabled 4=quota_plan_unlimited(配额类型)
+  // 5=quota_plan_used(配额) 6=rate_limit_policy_enabled 7=entity_name(挂载Entity) 8=操作
+  const QUOTA_TYPE_COL = 4;
+  const ENTITY_COL = 7;
+  // 配额类型列是布尔值：unlimited=true 显示「无限」，false 显示「有限」。
+  // 造数按 [无限, 有限, 无限] 排列，保证升序/降序结果互不相同且都不等于原始顺序。
+  const QUOTA_TYPE_ASC = ['有限', '无限', '无限'];
+  const QUOTA_TYPE_DESC = ['无限', '无限', '有限'];
+
+  test('验证配额类型列与挂载 Entity 列排序后行顺序按升/降序变化', async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const prefix = `${DOC.searchDescription}_pt05_${stamp}`;
+    const typeName = await utils.generateTestEntityTypeName();
+    const entityNames = [];
+    const quotaPlans = [
+      { unlimited: true, unit: 'total_token' },
+      { unlimited: false, quota: 100000, unit: 'total_token' },
+      { unlimited: true, unit: 'total_token' },
+    ];
+
+    // 读取指定列的前 N 行文本
+    const readColumnTexts = async (columnIndex, limit = 3) => {
+      const rows = new PageTableComponent(page).dataRows();
+      const rowCount = await rows.count();
+      const texts = [];
+      for (let i = 0; i < Math.min(rowCount, limit); i++) {
+        texts.push(
+          (await rows.nth(i).locator('td').nth(columnIndex).innerText()).trim(),
+        );
+      }
+      return texts;
+    };
+
+    // iView 表头排序的可点击区域是标题 span.ivu-table-cell-sort；
+    // 直接点 th 中心落在空白处不触发。点标题会在 normal → asc → desc 间切换。
+    const clickSortIcon = async (headerText) => {
+      const header = page
+        .locator('.show-iView-Table .ivu-table-header th')
+        .filter({ hasText: headerText })
+        .first();
+      await header.locator('span.ivu-table-cell-sort').click();
+      await page.waitForTimeout(500);
+    };
+
+    cleanup.trackTypeName(typeName);
+
+    await test.step('前置：创建类型与 3 个挂载名称各不相同的 Entity', async () => {
+      await utils.gotoEntityTypeManagementPage(page);
+      await utils.createEntityTypeViaApi(page, typeName, `${prefix}_type`, 1);
+      await page.waitForTimeout(2000);
+      for (let i = 0; i < 3; i++) {
+        const entityName = await utils.generateTestEntityName();
+        await utils.createEntityWithTypeViaApi(page, {
+          name: entityName,
+          type: typeName,
+        });
+        cleanup.trackEntityName(entityName);
+        entityNames.push(entityName);
+      }
+    });
+
+    await test.step('前置：创建 3 条挂载不同 Entity、配额类型不同的 API-Key', async () => {
+      for (let i = 0; i < 3; i++) {
+        const entity = await utils.findEntityByNameViaApi(page, entityNames[i]);
+        const apiKey = await utils.createApiKeyViaApi(page, {
+          description: `${prefix}_${i}`,
+          enabled: true,
+          entity_id: entity?.id,
+          quota_plan: quotaPlans[i],
+        });
+        expect(apiKey).not.toBeNull();
+        if (apiKey?.id) {
+          cleanup.trackApiKeyId(apiKey.id);
+        }
+      }
+    });
+
+    await test.step('前置：进入 API-Key 管理页并筛选出造数数据', async () => {
       await utils.gotoApiKeyManagementPage(page);
       await utils.reloadApiKeyManagementPage(page);
-    });
-
-    await test.step('1. 读取排序前的配额列与 Entity 列', async () => {
-      const table = new PageTableComponent(page);
-      const rows = table.dataRows();
-      await expect(rows.first()).toBeVisible({ timeout: 5000 });
-      const rowCount = await rows.count();
-      test.skip(rowCount < 2, '至少需要 2 条 API-Key 数据才能验证排序');
-
-      const quotaTexts = [];
-      const entityTexts = [];
-      for (let i = 0; i < Math.min(rowCount, 3); i++) {
-        quotaTexts.push(
-          (await rows.nth(i).locator('td').nth(5).innerText()).trim(),
-        );
-        entityTexts.push(
-          (await rows.nth(i).locator('td').nth(7).innerText()).trim(),
-        );
-      }
-      page.__pt05Before = { quotaTexts, entityTexts };
-    });
-
-    await test.step('2. 点击配额列排序并验证顺序变化', async () => {
-      const table = new PageTableComponent(page);
-      const rows = table.dataRows();
-      const quotaHeader = page
-        .locator('.show-iView-Table th')
-        .filter({ hasText: '配额' })
-        .first();
-      await quotaHeader.click();
-      await page.waitForTimeout(500);
-
-      const afterQuotaTexts = [];
-      const rowCount = await rows.count();
-      for (let i = 0; i < Math.min(rowCount, 3); i++) {
-        afterQuotaTexts.push(
-          (await rows.nth(i).locator('td').nth(5).innerText()).trim(),
-        );
-      }
-
-      const before = page.__pt05Before.quotaTexts.join('|');
-      const after = afterQuotaTexts.join('|');
-      expect(after).not.toBe(before);
-    });
-
-    await test.step('3. 点击挂载 Entity 列排序并验证顺序变化', async () => {
+      await utils.searchApiKeyByDescription(page, prefix);
       const rows = new PageTableComponent(page).dataRows();
-      const entityHeader = page
-        .locator('.show-iView-Table th')
-        .filter({ hasText: '挂载' })
-        .first();
-      await entityHeader.click();
-      await page.waitForTimeout(500);
+      await expect(rows).toHaveCount(3, { timeout: 5000 });
+    });
 
-      const afterEntityTexts = [];
-      const rowCount = await rows.count();
-      for (let i = 0; i < Math.min(rowCount, 3); i++) {
-        afterEntityTexts.push(
-          (await rows.nth(i).locator('td').nth(7).innerText()).trim(),
-        );
-      }
+    await test.step('1. 读取排序前的配额类型列与挂载 Entity 列', async () => {
+      const quotaTypeTexts = await readColumnTexts(QUOTA_TYPE_COL);
+      const entityTexts = await readColumnTexts(ENTITY_COL);
 
-      const uniqueEntities = [
-        ...new Set(page.__pt05Before.entityTexts.filter(Boolean)),
-      ];
-      test.skip(
-        uniqueEntities.length < 2,
-        '至少需要 2 个不同 Entity 名称才能验证排序',
-      );
+      // 前置校验：配额类型列存在「无限/有限」两种值，Entity 列存在 3 个不同名称
+      expect(quotaTypeTexts).toEqual(['无限', '有限', '无限']);
+      expect(new Set(entityTexts).size).toBe(3);
 
-      const before = page.__pt05Before.entityTexts.join('|');
-      const after = afterEntityTexts.join('|');
-      expect(after).not.toBe(before);
+      page.__pt05QuotaTypeBefore = quotaTypeTexts;
+      page.__pt05EntityBefore = entityTexts;
+    });
+
+    await test.step('2. 点击配额类型列排序并验证升序、降序结果', async () => {
+      await clickSortIcon('配额类型');
+      const ascTexts = await readColumnTexts(QUOTA_TYPE_COL);
+      expect(ascTexts).toEqual(QUOTA_TYPE_ASC);
+      expect(ascTexts).not.toEqual(page.__pt05QuotaTypeBefore);
+
+      await clickSortIcon('配额类型');
+      const descTexts = await readColumnTexts(QUOTA_TYPE_COL);
+      expect(descTexts).toEqual(QUOTA_TYPE_DESC);
+      expect(descTexts).not.toEqual(ascTexts);
+    });
+
+    await test.step('3. 点击挂载 Entity 列排序并验证升序、降序结果', async () => {
+      const expectedAsc = [...entityNames].sort((a, b) => a.localeCompare(b));
+      const expectedDesc = [...expectedAsc].reverse();
+
+      await clickSortIcon('挂载');
+      const ascTexts = await readColumnTexts(ENTITY_COL);
+      expect(ascTexts).toEqual(expectedAsc);
+
+      await clickSortIcon('挂载');
+      const descTexts = await readColumnTexts(ENTITY_COL);
+      expect(descTexts).toEqual(expectedDesc);
+      expect(descTexts).not.toEqual(ascTexts);
     });
   });
 });

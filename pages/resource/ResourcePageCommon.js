@@ -218,19 +218,15 @@ async function ensureAuthenticatedShell(page) {
   await umUtils.handleUrlInvalidAlert(page);
 
   const currentUrl = page.url();
-  const isAppPage =
-    currentUrl.includes('/instance-pool-ai') || currentUrl.includes('/cluster');
+  const isAppPage = currentUrl.includes('/cluster');
   if (
     currentUrl.includes('/login') ||
     (!isAppPage && currentUrl !== 'about:blank')
   ) {
     common.log('当前不在产品页，先加载首页: ' + page.url());
     await ensureChineseLang(page);
-    await page.goto(getAppBaseUrl() + '/instance-pool-ai');
+    await page.goto(getAppBaseUrl());
     await page.waitForLoadState('domcontentloaded');
-    await expect(page.getByRole('button', { name: '编辑' })).toBeVisible({
-      timeout: 15000,
-    });
     await umUtils.handleUrlInvalidAlert(page);
   }
 }
@@ -326,51 +322,6 @@ async function expectRowVisibleInAllPages(
   }
 
   throw new Error('在所有页面中未找到 ' + label + ': ' + rowKey);
-}
-
-async function isGatewayPoolPageReady(page) {
-  const breadcrumb = page
-    .locator('.bfe-breadcrumb')
-    .getByText('AI网关实例池', { exact: true });
-  const editBtn = page.getByRole('button', { name: '编辑' });
-  return (await isVisibleSafe(breadcrumb)) && (await isVisibleSafe(editBtn));
-}
-
-async function gotoGatewayPoolManagementPage(page) {
-  if (await isGatewayPoolPageReady(page)) {
-    common.log('已在 AI 网关实例池页面，跳过导航');
-    await umUtils.handleUrlInvalidAlert(page);
-    return;
-  }
-
-  await ensureAppSession(page);
-
-  const navigated = await navigateBySidebar(page, [
-    'AI网关实例池',
-    'AI Gateway Instance Pool Manage',
-  ]);
-  if (!navigated) {
-    const url = getAppBaseUrl() + '/instance-pool-ai';
-    common.log('使用直连 URL 进入 AI 网关实例池页面: ' + url);
-    await ensureChineseLang(page);
-    await page.goto(url);
-    await page.waitForLoadState('domcontentloaded');
-  }
-
-  await umUtils.handleUrlInvalidAlert(page);
-
-  const submitBtn = page.getByRole('button', { name: '提交' });
-  if (await submitBtn.isVisible().catch(() => false)) {
-    common.log('检测到页面处于编辑模式，点击「取消」回到列表模式');
-    await page.getByRole('button', { name: '取消' }).click();
-    await expect(page.getByRole('button', { name: '编辑' })).toBeVisible({
-      timeout: 10000,
-    });
-  }
-
-  await expect(page.getByRole('button', { name: '编辑' })).toBeVisible({
-    timeout: 15000,
-  });
 }
 
 async function gotoBusinessClusterManagementPage(page) {
@@ -564,16 +515,13 @@ function createResourceTestCleanup() {
 
 module.exports = {
   PRODUCT_PREFIX,
-  GATEWAY_POOL_PREFIX,
   DRAWER_TITLE,
   INSTANCE_POOL_SEARCH_PLACEHOLDER,
   BUSINESS_CLUSTER_SEARCH_PLACEHOLDER,
-  DOC_GATEWAY_POOL,
   DOC_BUSINESS_POOL,
   DOC_BUSINESS_CLUSTER,
   BUSINESS_CLUSTER_STEPS,
   ivuDrawer,
-  gatewayPoolTable,
   businessPoolTable,
   businessPoolDetailTable,
   businessClusterTable,
@@ -581,28 +529,20 @@ module.exports = {
   waitAfterResourceMutation,
   waitForVisibleSelectItems,
   ensureAppSession,
-  gotoGatewayPoolManagementPage,
-  ensureOnGatewayPoolManagementPage: gotoGatewayPoolManagementPage,
   gotoBusinessClusterManagementPage,
   expectBusinessClusterPageLayout,
-  generateTestGatewayPoolShortName,
   generateTestBusinessPoolShortName,
   generateTestBusinessClusterName,
-  toGatewayPoolFullName,
   toBusinessPoolFullName,
   toBusinessPoolShortName,
   expectRowVisibleInAllPages,
   expectSuccessNotice,
-  waitForBfePoolsListResponse,
   waitForProductInstancePoolsListResponse,
   waitForClustersListResponse,
   createResourceTestCleanup,
   // API re-exports
   getProductInstancePool: apiUtils.getProductInstancePool,
   getProductInstancePoolList: apiUtils.getProductInstancePoolList,
-  getBfePool: apiUtils.getBfePool,
-  getBfePoolList: apiUtils.getBfePoolList,
-  updateBfePool: apiUtils.updateBfePool,
   deleteProductInstancePool: apiUtils.deleteProductInstancePool,
   createProductInstancePool: apiUtils.createProductInstancePool,
   getClusterList: apiUtils.getClusterList,

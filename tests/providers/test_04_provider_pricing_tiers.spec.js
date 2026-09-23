@@ -69,7 +69,7 @@ async function setupProvider({ page }) {
     description: '自动化测试-分段计价',
     model_protocols: ['openai'],
     model_endpoint: { schema: 'https', uri: '/v1/models' },
-    models: [],
+    models: ['qa-tier-model'],
     keys: [{ name: 'key-primary', key: 'sk-test' }],
     instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
   });
@@ -433,7 +433,7 @@ test.describe('模型服务商 - PR-T-08 提交 PUT pricing-tiers', () => {
       description: '自动化测试-分段计价',
       model_protocols: ['openai'],
       model_endpoint: { schema: 'https', uri: '/v1/models' },
-      models: [],
+      models: ['qa-tier-model'],
       keys: [{ name: 'key-primary', key: 'sk-test' }],
       instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
     });

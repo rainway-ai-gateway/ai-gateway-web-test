@@ -107,7 +107,7 @@ async function parseApiResponse(response, label) {
 async function getEppPool(page) {
   const userData = await getUserData(page);
   const response = await page.request.get(
-    getOpenApiBaseUrl() + '/products/' + getProductName() + '/epp-pool',
+    getOpenApiBaseUrl() + '/epp-pool',
     { headers: authHeaders(userData.sessionKey) },
   );
   return parseApiResponse(response, 'GET epp-pool');
@@ -122,7 +122,7 @@ async function patchEppPool(page, poolData) {
   try {
     const userData = await getUserData(page);
     const response = await page.request.patch(
-      getOpenApiBaseUrl() + '/products/' + getProductName() + '/epp-pool',
+      getOpenApiBaseUrl() + '/epp-pool',
       {
         data: poolData,
         headers: authHeaders(userData.sessionKey),
@@ -145,8 +145,7 @@ async function patchEppPool(page, poolData) {
  */
 async function getEppAssignments(page, cluster) {
   const userData = await getUserData(page);
-  let url =
-    getOpenApiBaseUrl() + '/products/' + getProductName() + '/epp-assignments';
+  let url = getOpenApiBaseUrl() + '/epp-assignments';
   if (cluster) {
     url += '?cluster=' + encodeURIComponent(cluster);
   }
@@ -164,8 +163,6 @@ async function putEppAssignment(page, cluster, assignmentData) {
     const userData = await getUserData(page);
     const response = await page.request.put(
       getOpenApiBaseUrl() +
-        '/products/' +
-        getProductName() +
         '/epp-assignments/' +
         encodeURIComponent(cluster),
       {
@@ -205,6 +202,253 @@ function createEppPoolTestCleanup() {
   };
 }
 
+/**
+ * 为 EPP 调度分配测试批量创建前置数据
+ *
+ * 策略：
+ * 1. 创建 13 组双实例的 EPP 实例池 + 30 个 EPP 集群（满足 ASGN-01~04/06）
+ * 2. 集群创建时 AssignCluster 自动分配，reconciler 周期兜底
+ *
+ * 注意：unassigned_clusters 无法通过 Open API 持久化产生，原因：
+ *   - PATCH /epp-pool 同步调用 RepairDangling 修复所有悬空分配
+ *   - Reconcile（30s 周期）回填所有未分配集群
+ *   - PUT /epp-assignments 校验 primary_instance_id 必须在指定实例组内存在
+ *   因此 ASGN-05 需要环境中天然存在未分配/降级集群才能完整验证
+ *
+ * @param {object} page Playwright page（需已登录）
+ * @returns {Promise<{ originalPool: object, createdClusters: string[], providerName: string, testGroups: object[], unassignedClusters: string[] }>}
+ */
+async function setupEppAssignmentTestData(page) {
+  const userData = await getUserData(page);
+  const headers = authHeaders(userData.sessionKey);
+  const baseUrl = getOpenApiBaseUrl();
+  const createdClusters = [];
+
+  // ---- 0) 清理残留的测试数据（防止上次 teardown 失败导致冲突） ----
+  const testProviderName = 'epp-test-provider';
+  try {
+    // 先删除所有测试集群（名称模式：epp-test-c01 ~ epp-test-c30）
+    for (let i = 1; i <= 30; i++) {
+      const clusterName = 'epp-test-c' + String(i).padStart(2, '0');
+      try {
+        await page.request.delete(
+          baseUrl + '/clusters/' + encodeURIComponent(clusterName),
+          { headers, timeout: 10000 },
+        );
+      } catch (_) { /* 不存在则忽略 */ }
+    }
+    // 再删除 provider
+    const delResp = await page.request.delete(
+      baseUrl + '/providers/' + encodeURIComponent(testProviderName),
+      { headers, timeout: 10000 },
+    );
+    common.log('[setup] 清理残留 provider: ' + testProviderName + ' ' + (await delResp.json()).ErrNum);
+  } catch (_) { /* 不存在则忽略 */ }
+
+  // ---- 1) 保存原始实例池数据 ----
+  let originalPool = null;
+  try {
+    originalPool = await getEppPool(page);
+  } catch (e) {
+    common.log('[setup] 获取原始池失败: ' + e.message);
+  }
+
+  // ---- 2) 扩展实例池到 13 组（g1-g13 双实例） ----
+  const totalGroups = 13;
+  const totalClusters = 30;
+  const testGroups = [];
+  for (let i = 1; i <= totalGroups; i++) {
+    const base = 100 + i * 10;
+    testGroups.push({
+      name: 'g' + i,
+      instances: [
+        { id: 'epp-g' + i + 'a', host: '10.0.' + base + '.1', port: 9002 },
+        { id: 'epp-g' + i + 'b', host: '10.0.' + base + '.2', port: 9002 },
+      ],
+    });
+  }
+
+  const ok = await patchEppPool(page, { groups: testGroups });
+  if (!ok) {
+    common.log('[setup] 实例池 PATCH 失败，跳过集群创建');
+    return { originalPool, createdClusters: [], providerName: '', testGroups, unassignedClusters: [] };
+  }
+  common.log(`[setup] 实例池已扩展至 ${totalGroups} 组`);
+
+  // ---- 3) 创建服务商 ----
+  const providerName = 'epp-test-provider';
+  const models = [];
+  for (let i = 1; i <= totalClusters; i++) {
+    models.push('epp-model-' + String(i).padStart(2, '0'));
+  }
+
+  const providerResp = await page.request.post(baseUrl + '/providers', {
+    data: {
+      name: providerName,
+      description: 'EPP自动化测试',
+      model_protocols: ['openai'],
+      model_endpoint: { schema: 'https', uri: '/v1/models' },
+      models,
+      keys: [],
+      instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+    },
+    headers,
+  });
+  const provBody = await providerResp.json();
+  if (provBody.ErrNum !== 200) {
+    common.log('[setup] 服务商创建失败: ' + JSON.stringify(provBody));
+    return { originalPool, createdClusters: [], providerName: '', testGroups, unassignedClusters: [] };
+  }
+  common.log('[setup] 服务商 ' + providerName + ' 创建成功');
+
+  // ---- 4) 创建 30 个 EPP 集群（AssignCluster 在创建时自动分配） ----
+  const buildClusterData = (name, model) => ({
+    name,
+    basic: {
+      protocol: 'https',
+      connection: { max_idle_conn_per_rs: 2, cancel_on_client_close: false },
+      retries: { max_retry_in_cluster: 2 },
+      buffers: { req_write_buffer_size: 512 },
+      timeouts: {
+        timeout_conn_serv: 2000,
+        timeout_response_header: 60000,
+        timeout_readbody_client: 30000,
+        timeout_read_client_again: 60000,
+        timeout_write_client: 60000,
+      },
+    },
+    sticky_sessions: {
+      enabled: true,
+      hash_strategy: 'CLIENT_ID_ONLY',
+      hash_header: 'Cookie:USERID',
+    },
+    passive_health_check: {
+      schema: 'http',
+      failnum: 10,
+      interval: 1000,
+      host: 'www.test1.com',
+      uri: '/interface',
+      statuscode: 200,
+    },
+    llm_config: {
+      provider: providerName,
+      models: [model],
+      model_mappings: [],
+      keys: [],
+      key_policy: {
+        strategy: 'weighted_random',
+        max_retries: 0,
+        retry_backoff_initial: 500,
+        retry_backoff_max: 5000,
+      },
+      key_affinity: {
+        enabled: false,
+        ttl: 600,
+        redis_prefix: 'bfe:ai:key_affinity',
+        penalty_enable: true,
+      },
+    },
+    balance_mode: 'EPP',
+    epp_config: {
+      scheduling_profile: 'balanced',
+      cache_affinity: 'medium',
+      prefix_cache_affinity: false,
+      kv_cache_utilization_max: 0.5,
+    },
+  });
+
+  for (let i = 1; i <= totalClusters; i++) {
+    const name = 'epp-test-c' + String(i).padStart(2, '0');
+    const model = 'epp-model-' + String(i).padStart(2, '0');
+    const data = buildClusterData(name, model);
+
+    try {
+      const resp = await page.request.post(baseUrl + '/clusters', {
+        data,
+        headers,
+        timeout: 15000,
+      });
+      const body = await resp.json();
+      if (body.ErrNum === 200) {
+        createdClusters.push(name);
+        common.log('[setup] 集群 ' + name + ' 创建成功');
+      } else {
+        common.log('[setup] 集群 ' + name + ' 创建失败: ' + JSON.stringify(body));
+      }
+    } catch (e) {
+      common.log('[setup] 集群 ' + name + ' 异常: ' + e.message);
+    }
+  }
+
+  // ---- 5) 等待 reconciler 兜底分配 ----
+  await page.waitForTimeout(3000);
+
+  // 验证分配状态
+  try {
+    const assignments = await getEppAssignments(page);
+    const assignedCount = (assignments?.clusters || []).length;
+    common.log(`[setup] 验证: ${assignedCount}/${createdClusters.length} 个集群已分配`);
+  } catch (e) {
+    common.log('[setup] 验证分配状态失败: ' + e.message);
+  }
+
+  common.log(`[setup] 创建完成: ${createdClusters.length} 个EPP集群, provider=${providerName}`);
+  return {
+    originalPool,
+    createdClusters,
+    providerName,
+    testGroups,
+    unassignedClusters: [],
+  };
+}
+
+/**
+ * 还原 EPP 测试前置数据
+ *
+ * @param {object} page Playwright page
+ * @param {object} ctx setupEppAssignmentTestData 返回的上下文
+ */
+async function restoreEppAssignmentTestData(page, ctx) {
+  const userData = await getUserData(page);
+  const headers = authHeaders(userData.sessionKey);
+  const baseUrl = getOpenApiBaseUrl();
+
+  // 1) 删除创建的集群
+  for (const name of (ctx.createdClusters || [])) {
+    try {
+      const resp = await page.request.delete(
+        baseUrl + '/clusters/' + encodeURIComponent(name),
+        { headers, timeout: 10000 },
+      );
+      const body = await resp.json();
+      if (body.ErrNum === 200) {
+        common.log('[teardown] 集群 ' + name + ' 已删除');
+      }
+    } catch (e) {
+      common.log('[teardown] 集群 ' + name + ' 删除异常: ' + e.message);
+    }
+  }
+
+  // 2) 删除服务商
+  if (ctx.providerName) {
+    try {
+      const resp = await page.request.delete(
+        baseUrl + '/providers/' + encodeURIComponent(ctx.providerName),
+        { headers, timeout: 10000 },
+      );
+      common.log('[teardown] 服务商 ' + ctx.providerName + ' 删除: ' + (await resp.json()).ErrNum);
+    } catch (e) {
+      common.log('[teardown] 服务商删除异常: ' + e.message);
+    }
+  }
+
+  // 3) 还原实例池
+  if (ctx.originalPool) {
+    await patchEppPool(page, { groups: ctx.originalPool.groups });
+    common.log('[teardown] 实例池已还原');
+  }
+}
+
 module.exports = {
   DEFAULT_PRODUCT_NAME,
   getOpenApiBaseUrl,
@@ -215,4 +459,6 @@ module.exports = {
   getEppAssignments,
   putEppAssignment,
   createEppPoolTestCleanup,
+  setupEppAssignmentTestData,
+  restoreEppAssignmentTestData,
 };

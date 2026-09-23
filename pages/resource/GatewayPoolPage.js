@@ -157,10 +157,6 @@ async function expectCreateInstancePoolDrawerHidden(page) {
   ).toBeHidden();
 }
 
-async function submitCreateGatewayPoolFormAndWaitForSuccess(page) {
-  await waitForBfePoolsListResponse(page, () => submitInstancePoolForm(page));
-}
-
 async function submitCreateBusinessPoolFormAndWaitForSuccess(page) {
   await waitForProductInstancePoolsListResponse(page, () =>
     submitInstancePoolForm(page),
@@ -433,17 +429,11 @@ module.exports = {
   submitInstancePoolForm,
   clickCreateInstanceRow,
   deleteInstanceRow,
-  submitCreateGatewayPoolFormAndWaitForSuccess,
   submitCreateBusinessPoolFormAndWaitForSuccess,
   expectCreateInstancePoolDrawerHidden,
   expectInstancePoolFormFieldError,
   cancelInstancePoolForm,
   expectInstanceRowDeleteButtonState,
-  confirmDeleteGatewayPool,
-  searchGatewayPool,
-  searchGatewayPoolAndWait,
-  expectGatewayPoolVisibleInAllPages,
-  ensureGatewayPoolRowVisible,
   confirmDeleteBusinessPool,
   searchBusinessPool,
   searchBusinessPoolAndWait,
@@ -455,15 +445,4 @@ module.exports = {
   closeBusinessPoolEditDrawer,
   expectBusinessPoolEditFormMatchesApi,
   expectBusinessPoolDetailMatchesApi,
-  openGatewayPoolEditMode,
-  expectGatewayPoolEditMode,
-  expectGatewayPoolListMode,
-  fillGatewayPoolEditRow,
-  clickGatewayPoolCreateRow,
-  deleteGatewayPoolEditRow,
-  submitGatewayPoolEditForm,
-  submitGatewayPoolEditAndWaitForSuccess,
-  cancelGatewayPoolEdit,
-  expectGatewayPoolEditSuccess,
-  expectGatewayPoolEditRowDeleteButtonState,
 };

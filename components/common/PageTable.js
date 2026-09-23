@@ -50,7 +50,7 @@ class PageTableComponent {
   }
   /** 数据区行（排除 searchTable 搜索行和 iView 空态行） */
   dataRows() {
-    return this.root.locator('.show-iView-Table .ivu-table tbody tr:not(:has-text("暂无筛选结果"))');
+    return this.root.locator('.show-iView-Table .ivu-table tbody tr:not(:has-text("暂无筛选结果")):not(:has-text("暂无数据"))');
   }
   rowByText(text) {
     const dataRow = this.dataRows().filter({ hasText: text }).first();
@@ -141,10 +141,9 @@ class PageTableComponent {
     await this.search('', placeholder);
   }
   pageNumber(pageNum) {
-    return this.pagination().getByRole('listitem', {
-      name: String(pageNum),
-      exact: true,
-    });
+    return this.pagination().locator('li.number').filter({
+      hasText: String(pageNum),
+    }).first();
   }
   async expectPageNumberVisible(pageNum) {
     await (0, test_1.expect)(this.pageNumber(pageNum)).toBeVisible();

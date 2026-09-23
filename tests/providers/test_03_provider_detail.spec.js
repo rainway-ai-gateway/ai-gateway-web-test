@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 /**
- * 模型服务商 - 详情页验证（PR-D-01 / PR-D-02）
+ * 模型服务商 - 详情页验证（PR-D-01 / PR-D-02 / PR-D-03）
  *
  * 覆盖用例（docs/providers/02-功能测试用例/03-详情页验证.md）：
- * - PR-D-01：详情页全字段与接口数据一致性（基本信息 / 实例池 / 模型服务配置 /
- *   服务鉴权 Keys / 模型列表 / 分段计价配置，只读卡片形态不渲染输入框）
+ * - PR-D-01：详情页全字段与接口数据一致性（基本信息 / 实例池 / 模型服务配置
+ *   （含模型列表 Tag） / 服务鉴权 Keys / 分段计价配置，只读卡片形态不渲染输入框）
  * - PR-D-02：详情页分段计价配置 Card（已配置展示时区 + 忙时（peak）+ 时间段表；
  *   未配置展示「未配置」提示、不渲染空表；Card 仅展示不含编辑入口）
+ * - PR-D-03：详情页协议路径映射卡片展示（已配置展示映射，未配置不展示）
  *
  * 文档偏差记录（docs/providers/02 验收优先，已保留 02 验收断言）：
  * 1. PR-D-01 预期 Key 值脱敏形如「sk-a****aaaa」（示例性表述，首尾少量字符+中间掩码）：
@@ -30,6 +31,11 @@
  * 2. PR-D-02 预期未配置时提示「未配置分段计价」（文档示例性表述）：当前 UI 详情 Card
  *    展示 i18n「未配置」（ProviderPage.js 文件头偏差记录 3 一致）。spec 断言「未配置」+
  *    不渲染空表 + Card 无编辑入口，符合 02 验收「展示提示、不渲染空表、仅展示」。
+ * 3. PR-D-03 预期「openai → /v1, anthropic → /v2」：protocol_paths 为 map，
+ *    后端 JSON 序列化按 key 字典序返回（anthropic 在前）且 UI 按返回顺序渲染；
+ *    02 未约定行序，spec 改为按协议名定位行后校验路径（不做位置断言）。
+ * 4. PR-D-03 预期未配置时「不展示卡片，或展示提示」：UI 采用后者，Card 保留并展示
+ *    空态「-」（ProviderView.vue .empty-text），不渲染映射表；spec 按此断言。
  *
  * 运行：npx playwright test tests/providers/test_03_provider_detail.spec.js
  */
@@ -171,14 +177,16 @@ test.describe('模型服务商 - PR-D-01 详情页全字段与接口数据一致
     await expect(keyRows.nth(0)).toContainText('****');
     await expect(keyRows.nth(0)).not.toContainText('sk-aaaaaaaaaaaa');
 
-    // 6. 模型列表：全部模型 Tag 展示
-    // 注：viewCard 按 hasText 子串匹配，『模型服务配置』Card 内的「模型列表接口」
-    // 标签与「模型列表」Card 标题存在子串重叠，命中 2 张 Card；DOM 顺序中
-    // 「模型列表」Card 位于「模型服务配置」之后，取 .last() 精确锁定
-    const modelCard = pp.viewCard(page, '模型列表').last();
-    await expect(modelCard).toBeVisible();
+    // 6. 模型列表：全部模型 Tag 展示（UI 已并入「模型服务配置」Card，为其中一行）
+    // 注：「模型列表接口」与「模型列表」为子串包含关系，filter({ hasText }) 会同时命中
+    // 两行且 .first() 指向「模型列表接口」；故按 .info-label 精确文本定位该行
+    const modelCard = pp.viewCard(page, '模型服务配置');
+    const modelRow = modelCard
+      .locator('.info-row')
+      .filter({ has: page.locator('.info-label', { hasText: /^模型列表$/ }) });
+    await expect(modelRow).toBeVisible();
     for (const model of ['gpt-4o-mini', 'deepseek-chat']) {
-      await expect(modelCard).toContainText(model);
+      await expect(modelRow).toContainText(model);
     }
 
     // 7. 分段计价配置：时区 / 忙时（peak）/ 时间段表（适用时段 / 开始时间 / 结束时间）
@@ -222,7 +230,7 @@ test.describe('模型服务商 - PR-D-02 详情页分段计价配置 Card', () =
       description: '自动化测试-已配置分段计价',
       model_protocols: ['openai'],
       model_endpoint: { schema: 'https', uri: '/v1/models' },
-      models: [],
+      models: ['qa-detail-tier-cfg'],
       keys: [{ name: 'key-primary', key: 'sk-test' }],
       instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
       time_zone: 'Asia/Shanghai',
@@ -237,7 +245,7 @@ test.describe('模型服务商 - PR-D-02 详情页分段计价配置 Card', () =
       description: '自动化测试-未配置分段计价',
       model_protocols: ['openai'],
       model_endpoint: { schema: 'https', uri: '/v1/models' },
-      models: [],
+      models: ['qa-detail-tier-nocfg'],
       keys: [{ name: 'key-primary', key: 'sk-test' }],
       instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
     });
@@ -304,5 +312,108 @@ test.describe('模型服务商 - PR-D-02 详情页分段计价配置 Card', () =
       pp.viewCard(page, '分段计价配置').locator('button'),
     ).toHaveCount(0);
     await pp.expectViewNoInputs(page);
+  });
+});
+
+test.describe('模型服务商 - PR-D-03 详情页协议路径映射卡片展示', () => {
+  let cleanup;
+  let configuredName;
+  let unconfiguredName;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    const ts = Date.now().toString(36);
+    configuredName = 'provider_' + ts + '_pp';
+    unconfiguredName = 'provider_' + ts + '_nopp';
+
+    // 已配置 protocol_paths
+    const cfg = await api.createProviderViaApi(page, {
+      name: configuredName,
+      description: '自动化测试-已配置协议路径映射',
+      model_protocols: ['openai', 'anthropic'],
+      model_endpoint: { schema: 'https', uri: '/v1/models' },
+      models: ['qa-detail-pp-cfg'],
+      keys: [{ name: 'key-primary', key: 'sk-test' }],
+      instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+      protocol_paths: { openai: '/v1', anthropic: '/v2' },
+    });
+    expect(cfg).not.toBeNull();
+    cleanup.trackName(configuredName);
+
+    // 未配置 protocol_paths
+    const nocfg = await api.createProviderViaApi(page, {
+      name: unconfiguredName,
+      description: '自动化测试-未配置协议路径映射',
+      model_protocols: ['openai'],
+      model_endpoint: { schema: 'https', uri: '/v1/models' },
+      models: ['qa-detail-pp-nocfg'],
+      keys: [{ name: 'key-primary', key: 'sk-test' }],
+      instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+    });
+    expect(nocfg).not.toBeNull();
+    cleanup.trackName(unconfiguredName);
+
+    await pp.gotoProvidersPage(page);
+    await pp.providerTable(page).expectRowVisible(configuredName);
+    await pp.providerTable(page).expectRowVisible(unconfiguredName);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('已配置 protocol_paths 时展示只读卡片，未配置时不展示', async ({
+    page,
+  }) => {
+    await test.step('已配置 protocol_paths：展示「协议路径映射」卡片，映射内容正确', async () => {
+      await pp.openViewDrawer(page, configuredName);
+      await pp.expectViewScopeVisible(page);
+
+      // 卡片可见
+      await pp.viewCardVisible(page, '协议路径映射');
+
+      // 表头：02 约定为「协议」/「上游 API 基路径」
+      await pp.expectViewTableHeaders(page, '协议路径映射', [
+        pp.DOC.protocolPathProto,
+        pp.DOC.protocolPathHeader,
+      ]);
+
+      // 映射内容：openai → /v1, anthropic → /v2
+      // 注：protocol_paths 为 map，后端 JSON 序列化按 key 字典序返回（anthropic 在前），
+      // UI 按接口返回顺序渲染；02 仅约定「协议名 → 路径」对应关系，未约定行序，
+      // 故按协议名定位行后校验路径，不做位置断言
+      const rows = pp.viewTableRows(page, '协议路径映射');
+      await expect(rows).toHaveCount(2);
+      const openaiRow = rows.filter({ hasText: 'openai' });
+      const anthropicRow = rows.filter({ hasText: 'anthropic' });
+      await expect(openaiRow).toHaveCount(1);
+      await expect(openaiRow).toContainText('/v1');
+      await expect(anthropicRow).toHaveCount(1);
+      await expect(anthropicRow).toContainText('/v2');
+
+      // 该 Card 仅展示，不含编辑入口
+      await expect(
+        pp.viewCard(page, '协议路径映射').locator('button'),
+      ).toHaveCount(0);
+    });
+
+    await test.step('未配置 protocol_paths：卡片展示空态「-」，不渲染空表，仅展示形态', async () => {
+      // 返回列表，关闭已配置详情
+      await pp.gotoProvidersPage(page);
+      await pp.providerTable(page).expectRowVisible(unconfiguredName);
+
+      await pp.openViewDrawer(page, unconfiguredName);
+      await pp.expectViewScopeVisible(page);
+
+      // 02 允许「不展示卡片」或「展示提示」；UI 采用后者：Card 保留并展示空态「-」，
+      // 不渲染映射表（记入文件头偏差 4）
+      const ppCard = pp.viewCard(page, '协议路径映射');
+      await expect(ppCard).toHaveCount(1);
+      await expect(ppCard.locator('.empty-text')).toHaveText('-');
+      await expect(ppCard.locator('table.kv-table')).toHaveCount(0);
+
+      // 详情仅展示，不含编辑入口
+      await pp.expectViewNoInputs(page);
+    });
   });
 });

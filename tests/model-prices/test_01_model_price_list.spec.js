@@ -19,7 +19,7 @@
  * 覆盖用例：
  * - MP-L-01 列表页加载与数据展示（P1）
  * - MP-L-02 Provider 筛选（P1）
- * - MP-L-03 Model 名称搜索（P1）
+ * - MP-L-03 Model 单独查询被后端拒绝（P1）
  * - MP-L-04 Mode 筛选（P1）
  * - MP-L-05 Provider + Mode 组合筛选（P1）
  * - MP-L-06 分页功能（P1）
@@ -140,10 +140,12 @@ test.describe('模型定价 - MP-L-02/03/04/05 筛选与搜索', () => {
     await mp.modelPriceTable(page).expectRowHidden('gpt-4o');
   });
 
-  test('MP-L-03 Model 搜索：输入完整 model 名触发接口精确匹配，列表仅展示对应记录', async ({
+  test('MP-L-03 Model 搜索：model 单独查询被后端拒绝（422），前端提示失败且列表不变', async ({
     page,
   }) => {
-    // 后端 model 为精确匹配，必须输全名；输入 gpt-4o 应只剩 1 条
+    // 后端契约（api-define §3.4/§3.6，issue #170）：列表过滤仅支持 provider/mode，
+    // 不含 model；带 model 但 provider/model/mode 三参不齐时一律返回 422 参数错误。
+    // 故 UI 的 model 搜索框发出的 model=... 请求会被后端拒绝。
     const respPromise = page.waitForResponse(
       (r) =>
         r.url().includes('/open-api/v1/model-prices') &&
@@ -152,10 +154,12 @@ test.describe('模型定价 - MP-L-02/03/04/05 筛选与搜索', () => {
     );
     await mp.searchField(page, 'model', 'gpt-4o');
     const resp = await respPromise;
-    expect(resp.status()).toBe(200);
+    expect(resp.status()).toBe(422);
 
+    // 前端提示加载失败，列表保持基线数据（既不清空也不过滤）
+    await mp.expectMessage(page, '加载模型定价失败');
     await mp.modelPriceTable(page).expectRowVisible('gpt-4o');
-    await mp.modelPriceTable(page).expectRowHidden('deepseek-v3');
+    await mp.modelPriceTable(page).expectRowVisible('deepseek-v3');
   });
 
   test('MP-L-04 Mode 筛选：下拉选择后触发接口请求，列表仅展示对应 mode', async ({
@@ -211,7 +215,7 @@ test.describe('模型定价 - MP-L-06 分页功能', () => {
     await cleanup.cleanup(page);
   });
 
-  test('预置 25 条记录：pageSize 切换生效、翻页正常、total 正确', async ({
+  test('预置 25 条记录：默认 pageSize=50 全量展示，切换分页生效，翻页正常', async ({
     page,
   }) => {
     // 基线固定 2 条（deepseek + openai）
@@ -234,14 +238,29 @@ test.describe('模型定价 - MP-L-06 分页功能', () => {
     const totalCount = 25 + baselineCount;
     const table = mp.modelPriceTable(page);
 
-    // 1. pageSize=20 → 第 1 页渲染 20 条，存在页码 2
-    expect(await table.dataRows().count()).toBe(20);
+    // 1. 默认 pageSize=50 → 27 条全部展示在第 1 页，无页码 2
+    expect(await table.dataRows().count()).toBe(totalCount);
     const pagination = table.pagination();
+    await expect(
+      pagination.getByRole('listitem').filter({ hasText: '2' }),
+    ).toBeHidden();
+
+    // 2. 切换 pageSize 50 → 20：第 1 页渲染 20 条，页码 2 可见
+    const sizeResp20 = page.waitForResponse(
+      (r) =>
+        r.url().includes('/open-api/v1/model-prices') &&
+        r.url().includes('page_size=20'),
+      { timeout: 10000 },
+    );
+    await table.changePageSize('20');
+    const resp20 = await sizeResp20;
+    expect(resp20.status()).toBe(200);
+    expect(await table.dataRows().count()).toBe(20);
     await expect(
       pagination.getByRole('listitem').filter({ hasText: '2' }),
     ).toBeVisible();
 
-    // 2. 点击下一页 → 跳转到第 2 页，渲染剩余 totalCount - 20 条
+    // 3. 点击下一页 → 第 2 页渲染剩余 totalCount - 20 条
     const nextResp = page.waitForResponse(
       (r) =>
         r.url().includes('/open-api/v1/model-prices') &&
@@ -253,19 +272,17 @@ test.describe('模型定价 - MP-L-06 分页功能', () => {
     expect(resp2.status()).toBe(200);
     expect(await table.dataRows().count()).toBe(totalCount - 20);
 
-    // 3. 切换每页条数 20 → 30：触发 GET page_size=30，列表渲染 30 条
-    const sizeResp = page.waitForResponse(
+    // 4. 切换 pageSize 20 → 50（默认值）：页码重置为 1，全量展示
+    const sizeResp50 = page.waitForResponse(
       (r) =>
         r.url().includes('/open-api/v1/model-prices') &&
-        r.url().includes('page_size=30'),
+        r.url().includes('page_size=50'),
       { timeout: 10000 },
     );
-    await table.changePageSize('30');
-    const resp3 = await sizeResp;
-    expect(resp3.status()).toBe(200);
-    // totalCount 条中最多 30 条渲染在一页
-    const expectedOnPage30 = Math.min(totalCount, 30);
-    expect(await table.dataRows().count()).toBe(expectedOnPage30);
+    await table.changePageSize('50');
+    const resp50 = await sizeResp50;
+    expect(resp50.status()).toBe(200);
+    expect(await table.dataRows().count()).toBe(totalCount);
   });
 });
 
