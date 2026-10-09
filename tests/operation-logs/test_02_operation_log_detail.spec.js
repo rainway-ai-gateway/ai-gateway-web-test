@@ -29,12 +29,16 @@ test.describe('操作日志 - OL-D-01 打开详情 Drawer', () => {
       await olp.gotoOperationLogPage(page);
     });
 
-    await test.step('打开第一条日志详情', async () => {
+    await test.step('前置：确保有操作日志数据', async () => {
       const row = olp.operationLogTable(page).dataRows().first();
       const count = await row.count();
       if (count === 0) {
         test.skip(true, '当前环境无操作日志数据，跳过详情打开用例');
       }
+    });
+
+    await test.step('打开第一条日志详情', async () => {
+      const row = olp.operationLogTable(page).dataRows().first();
       await row.getByRole('button', { name: olp.DOC.detailButton }).click();
       await olp.expectDetailDrawerOpen(page);
     });

@@ -148,13 +148,15 @@ async function ensureTwoClusters(page) {
     ['test-model'],
   );
   if (!ok) {
-    common.log('创建测试集群失败，跳过测试');
-    test.skip();
-    return [];
+    throw new Error('创建测试集群失败，无法构造两集群环境');
   }
   // 等待集群创建生效
   await page.waitForTimeout(2000);
-  return await utils.getAvailableClustersForRule(page);
+  clusters = await utils.getAvailableClustersForRule(page);
+  if (clusters.length < 2) {
+    throw new Error(`创建集群后仍不足 2 个集群（当前: ${clusters.length}），无法执行权重和校验测试`);
+  }
+  return clusters;
 }
 
 test.describe('路由管理 - RT-V-05 权重和必须等于100', () => {

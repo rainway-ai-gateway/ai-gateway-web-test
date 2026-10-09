@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 /**
- * 模型服务商 - 创建/编辑服务商（PR-C-01~PR-C-16）
+ * 模型服务商 - 创建/编辑服务商（PR-C-01~PR-C-19）
  *
  * 覆盖用例（docs/providers/02-功能测试用例/02-创建与编辑.md）：
  * - PR-C-01 创建成功（IP 模式）：提交 POST /providers；提交体不含 create_time/update_time；
@@ -31,14 +31,20 @@
  * - PR-C-09 「获取」置灰：未选协议或未填实例地址任一不满足即置灰，条件满足后可用。
  * - PR-C-10 模型列表不可手填：el-select 输入 readonly；手动输入不生效；仅可通过「获取」回填。
  * - PR-C-11 Keys 行操作：无权重列；添加/删除行；删除最后一行时 UI 保留一个空行。
- * - PR-C-12 获取后须提交才保存：mock 回填→关闭抽屉→重开编辑，模型列表为空。
- * - PR-C-13 提交体结构：不含 create_time/update_time；models 未获取为空数组；
+ * - PR-C-12 获取后须提交才保存：mock 回填→关闭抽屉→重开编辑，模型列表回退为
+ *   已保存值（02 预期 2「为空 / 展示原已保存数据」取后者，因 models 已必填）。
+ * - PR-C-13 提交体结构：不含 create_time/update_time；models 为必填非空数组；
  *   instance_pool 不再传递 name 字段（已修复）。
  * - PR-C-13 Gemini 协议：选择 gemini 协议后默认 URI 为 /v1beta/models；
  *   提交体 model_protocols 含 gemini；Auth header 为 x-goog-api-key。
  * - PR-C-14 名称全局唯一：API 造同名后 UI 填同名提交被前端拦截提示「名称已存在」。
  * - PR-C-15 取消/关闭：关闭抽屉后已填内容不保存，列表数据不变。
  * - PR-C-16 模型列表批量添加：弹窗按行/分隔符解析并合并去重；下拉粘贴 ≥2 token 拆成多个 Tag。
+ * - PR-C-17 协议路径映射-添加/删除映射行：表头「上游 API 基路径」、placeholder「例如 /v1」、
+ *   空态文案；已用协议不可再选；提交体 protocol_paths 为 {protocol: path}。
+ * - PR-C-18 协议路径映射-路径格式校验：非 / 开头、以 / 结尾、含 ? $ # .. 均拦截并提示。
+ * - PR-C-19 协议路径映射-清空映射须显式提交空对象：删除全部映射行后 PATCH 请求体
+ *   显式含 protocol_paths:{}（不得省略或为 null）；重开保持空态，未修改再提交仍为 {}。
  *
  * 文档偏差记录（保留 02 验收语义，具体实现差异已在 ProviderPage.js 头部记录）：
  * - 实例池表头：02 验收为「IP/域名」，UI 实际渲染「IP地址」——本 spec 断言首列含
@@ -51,6 +57,9 @@
  * - PR-C-11 预期「Keys 可删空（可为空数组）」：UI 删除最后一行时自动补一个空行，
  *   提交时空行被过滤为 keys:[]，仍满足「可选字段」语义。
  * - PR-C-15 预期「存在未保存修改时提示确认（以设计为准）」：当前 UI 关闭无确认提示。
+ * - PR-C-13 预期 3「models 仅当『获取』回填后才存在；未获取时不传或传空」：后端自
+ *   09-17 起 Provider.models 必填（空数组返回 422），前端 validateModels 同步拦截；
+ *   本 spec 造数/填单统一通过「批量添加」补非空 models。
  *
  * 运行：npx playwright test tests/providers/test_02_provider_upsert.spec.js
  */
@@ -64,6 +73,9 @@ const IP_ADDR_3 = '127.0.0.3';
 const IP_PORT = 80;
 const IP_WEIGHT = 100;
 const DOMAIN = 'api.deepseek.com';
+// Provider.models 必填（09-17 起后端 422 / 前端 validateModels 拦截），
+// 创建流程统一补一个非空模型；需要空列表的场景显式传 models: []
+const DEFAULT_MODEL = 'qa-upsert-model';
 
 let nameSeq = 0;
 
@@ -72,11 +84,22 @@ function uniqueName(prefix) {
   return prefix + '_' + Date.now().toString(36) + '_' + nameSeq;
 }
 
-async function openCreateAndFillBasic(page, name, description) {
+async function openCreateAndFillBasic(
+  page,
+  name,
+  description,
+  models = [DEFAULT_MODEL],
+) {
   await pp.openCreateDrawer(page);
   await pp.fillName(page, name);
   if (description) {
     await pp.fillDescription(page, description);
+  }
+  if (models && models.length) {
+    await pp.openBatchAddModels(page);
+    await pp.fillBatchModelsText(page, models.join('\n'));
+    await pp.confirmBatchAddModels(page);
+    await pp.expectModelTags(page, models);
   }
 }
 
@@ -158,7 +181,7 @@ async function createProviderAndOpenList({ page, cleanup, overrides = {} }) {
     description: '自动化测试-编辑',
     model_protocols: ['openai'],
     model_endpoint: { schema: 'https', uri: '/v1/models' },
-    models: [],
+    models: [DEFAULT_MODEL],
     keys: [{ name: 'key-old', key: 'sk-old' }],
     instance_pool: [{ addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT }],
     ...overrides,
@@ -356,7 +379,7 @@ test.describe('模型服务商 - PR-C-03 编辑服务商-成功', () => {
     expect(body.instance_pool).toHaveLength(2);
     expect(body.instance_pool.map((i) => i.port)).toEqual([IP_PORT, 81]);
     expect(body.keys).toEqual([{ name: 'key-new', key: 'sk-new' }]); // 全量替换（key-old 已不存在）
-    expect(body.models).toEqual([]);
+    expect(body.models).toEqual([DEFAULT_MODEL]); // 编辑回显已保存模型，未改动则原样提交
 
     // 6. 接口读回复核：服务端已持久化全量替换结果
     const saved = await api.getProviderViaApi(page, providerName);
@@ -746,10 +769,10 @@ test.describe('模型服务商 - PR-C-12 获取成功后须「提交」才保存
     await cleanup.cleanup(page);
   });
 
-  test('获取回填后不提交直接关闭抽屉，重开编辑模型列表为空', async ({
+  test('获取回填后不提交直接关闭抽屉，重开编辑模型列表回退为已保存值', async ({
     page,
   }) => {
-    // 1. 打开编辑，mock 探测并回填模型
+    // 1. 打开编辑，mock 探测并回填模型（discover 全量覆盖 models）
     await pp.openEditDrawer(page, providerName);
     await pp.mockDiscoverModels(page, ['deepseek-chat']);
     await pp.discoverModelsAndWait(page);
@@ -758,13 +781,9 @@ test.describe('模型服务商 - PR-C-12 获取成功后须「提交」才保存
     // 2. 不点「提交」，直接关闭抽屉
     await pp.closeUpsertDrawer(page);
 
-    // 3. 重新打开编辑：模型列表为空（回填结果未保存）
+    // 3. 重新打开编辑：回填结果未保存，模型列表回退为创建时已保存的模型
     await pp.openEditDrawer(page, providerName);
-    await pp.expectModelTags(page, []);
-    await pp.expectModelsSelectPlaceholder(
-      page,
-      '点击「获取」拉取上游模型列表，输入模型名回车添加，或使用「批量添加」',
-    );
+    await pp.expectModelTags(page, [DEFAULT_MODEL]);
   });
 });
 
@@ -780,7 +799,7 @@ test.describe('模型服务商 - PR-C-13 提交体结构校验', () => {
     await cleanup.cleanup(page);
   });
 
-  test('提交体不含 create_time/update_time，instance_pool[].name=addr，models 未获取为空数组', async ({
+  test('提交体不含 create_time/update_time，instance_pool[].name=addr，models 为非空数组', async ({
     page,
   }) => {
     const name = uniqueName('provider');
@@ -800,8 +819,8 @@ test.describe('模型服务商 - PR-C-13 提交体结构校验', () => {
     expect(body).not.toHaveProperty('create_time');
     expect(body).not.toHaveProperty('update_time');
 
-    // 2. 未获取模型时 models 为空数组
-    expect(body.models).toEqual([]);
+    // 2. models 必填：提交体为填单时的非空数组（见文件头偏差）
+    expect(body.models).toEqual([DEFAULT_MODEL]);
 
     // 3. 实例对象：不再传递 name 字段（已修复）
     expect(body.instance_pool).toHaveLength(1);
@@ -923,7 +942,7 @@ test.describe('模型服务商 - PR-C-16 模型列表批量添加', () => {
     const expectedAfterMerge = expectedAfterBatch.concat(['llama-3']);
     const expectedAfterPaste = expectedAfterMerge.concat(['m1', 'm2', 'm3']);
 
-    await openCreateAndFillBasic(page, name, 'PR-C-16 批量添加');
+    await openCreateAndFillBasic(page, name, 'PR-C-16 批量添加', []);
     await pp.selectInstanceMode(page, 'IP');
     await pp.fillInstanceRow(page, 0, {
       addr: IP_ADDR,
@@ -1007,6 +1026,226 @@ test.describe('模型服务商 - PR-C-13 创建 gemini 协议服务商', () => {
 
     cleanup.trackName(name);
     // 使用跨页搜索查找刚创建的服务商（列表可能因历史数据过多而分页）
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
+  });
+});
+
+// ---------- PR-C-17：协议路径映射-添加/删除映射行 ----------
+
+test.describe('模型服务商 - PR-C-17 协议路径映射-添加/删除映射行', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('协议路径映射-添加/删除映射行，提交体含 protocol_paths', async ({ page }) => {
+    const name = uniqueName('provider');
+
+    await test.step('打开创建抽屉并填写基本信息', async () => {
+      await openCreateAndFillBasic(page, name, '协议路径映射测试');
+      await pp.selectInstanceMode(page, 'IP');
+      await pp.fillInstanceRow(page, 0, {
+        addr: IP_ADDR,
+        port: IP_PORT,
+        weight: IP_WEIGHT,
+      });
+      await pp.clearProtocols(page);
+      await pp.selectProtocols(page, ['openai', 'anthropic']);
+    });
+
+    await test.step('初始状态：0行，展示空态文案，添加按钮可用', async () => {
+      await pp.expectProtocolPathRowCount(page, 0);
+      await pp.expectProtocolPathHeader(page);
+      await pp.expectProtocolPathEmptyState(page);
+      await pp.expectProtocolPathAddEnabled(page);
+    });
+
+    await test.step('添加第1行→填写 openai /v1', async () => {
+      await pp.addProtocolPath(page);
+      await pp.expectProtocolPathRowCount(page, 1);
+      await pp.expectProtocolPathEmptyStateHidden(page);
+      await pp.expectProtocolPathValuePlaceholder(page, 0);
+      await pp.fillProtocolPathRow(page, 0, {
+        protocol: 'openai',
+        path: '/v1',
+      });
+    });
+
+    await test.step('添加第2行→填写 anthropic /v2，所有协议已用→添加按钮禁用', async () => {
+      await pp.addProtocolPath(page);
+      await pp.expectProtocolPathRowCount(page, 2);
+      await pp.fillProtocolPathRow(page, 1, {
+        protocol: 'anthropic',
+        path: '/v2',
+      });
+      await pp.expectProtocolPathAddDisabled(page);
+    });
+
+    await test.step('删除第1行→行数变1，添加按钮恢复可用', async () => {
+      await pp.removeProtocolPath(page, 0);
+      await pp.expectProtocolPathRowCount(page, 1);
+      await pp.expectProtocolPathAddEnabled(page);
+    });
+
+    await test.step('重新添加 openai /v1 行并提交', async () => {
+      await pp.addProtocolPath(page);
+      await pp.expectProtocolPathRowCount(page, 2);
+      await pp.fillProtocolPathRow(page, 1, {
+        protocol: 'openai',
+        path: '/v1',
+      });
+    });
+
+    const response = await pp.submitUpsertAndWait(page);
+    const body = response.request().postDataJSON();
+    expect(body.protocol_paths).toEqual({ openai: '/v1', anthropic: '/v2' });
+
+    cleanup.trackName(name);
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
+  });
+});
+
+// ---------- PR-C-19：协议路径映射-清空映射须显式提交空对象 ----------
+
+test.describe('模型服务商 - PR-C-19 协议路径映射-清空映射须显式提交空对象', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('清空协议路径映射后提交体显式含 protocol_paths:{}，重开保持空态', async ({
+    page,
+  }) => {
+    const name = uniqueName('provider');
+
+    await test.step('API 造数：model_protocols 含 openai/anthropic，预置 protocol_paths {openai:/v1}', async () => {
+      const data = await api.createProviderViaApi(page, {
+        name,
+        description: '协议路径清空语义测试',
+        model_protocols: ['openai', 'anthropic'],
+        protocol_paths: { openai: '/v1' },
+        model_endpoint: { schema: 'https', uri: '/v1/models' },
+        models: [DEFAULT_MODEL],
+        keys: [{ name: 'key-1', key: 'sk-1' }],
+        instance_pool: [{ addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT }],
+      });
+      expect(data, 'API 造数服务商应成功').not.toBeNull();
+      cleanup.trackName(name);
+    });
+
+    await test.step('打开编辑抽屉：已有映射行回显（1行）', async () => {
+      await pp.gotoProvidersPage(page);
+      await pp.providerTable(page).expectRowVisible(name);
+      await pp.openEditDrawer(page, name);
+      await pp.expectProtocolPathRowCount(page, 1);
+      await pp.expectProtocolPathHeader(page);
+      await pp.expectProtocolPathEmptyStateHidden(page);
+    });
+
+    await test.step('删除全部映射行：行数归零并展示空态文案', async () => {
+      await pp.removeProtocolPath(page, 0);
+      await pp.expectProtocolPathRowCount(page, 0);
+      await pp.expectProtocolPathEmptyState(page);
+    });
+
+    const firstResponse = await submitEditAndWait(page, name);
+    expect(firstResponse, '应捕获 PATCH /providers/{name} 200 响应').not.toBeNull();
+    const firstBody = firstResponse.request().postDataJSON();
+    expect(firstBody.protocol_paths).toEqual({});
+
+    await test.step('重新打开编辑抽屉：映射已清空且展示空态', async () => {
+      await pp.providerTable(page).expectRowVisible(name);
+      await pp.openEditDrawer(page, name);
+      await pp.expectProtocolPathRowCount(page, 0);
+      await pp.expectProtocolPathEmptyState(page);
+    });
+
+    await test.step('未做修改再次提交：请求体仍显式含 protocol_paths:{}', async () => {
+      const secondResponse = await submitEditAndWait(page, name);
+      expect(secondResponse, '应捕获 PATCH /providers/{name} 200 响应').not.toBeNull();
+      const secondBody = secondResponse.request().postDataJSON();
+      expect(secondBody.protocol_paths).toEqual({});
+    });
+  });
+});
+
+// ---------- PR-C-18：协议路径映射-路径格式校验 ----------
+
+test.describe('模型服务商 - PR-C-18 协议路径映射-路径格式校验', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('协议路径映射-路径格式校验，非 / 开头/结尾含/、含非法字符被拦截，合法路径提交成功', async ({
+    page,
+  }) => {
+    const name = uniqueName('provider');
+
+    await test.step('打开创建抽屉，填写基本信息，选择IP模式，填写实例行，选择 openai 协议', async () => {
+      await openCreateAndFillBasic(page, name, '协议路径格式校验测试');
+      await pp.selectInstanceMode(page, 'IP');
+      await pp.fillInstanceRow(page, 0, {
+        addr: IP_ADDR,
+        port: IP_PORT,
+        weight: IP_WEIGHT,
+      });
+      await pp.clearProtocols(page);
+      await pp.selectProtocols(page, ['openai']);
+    });
+
+    await test.step('添加一条协议路径映射行并选择 openai 协议', async () => {
+      await pp.addProtocolPath(page);
+      await pp.expectProtocolPathRowCount(page, 1);
+      await pp.fillProtocolPathRow(page, 0, { protocol: 'openai' });
+    });
+
+    await test.step('路径不以 / 开头（v1）→提交被拦截', async () => {
+      await pp.fillProtocolPathRow(page, 0, { path: 'v1' });
+      await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathMustStartSlash);
+      await expectSubmitBlocked(page);
+    });
+
+    await test.step('路径以 / 结尾（/v1/）→提交被拦截', async () => {
+      await pp.fillProtocolPathRow(page, 0, { path: '/v1/' });
+      await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathNoTrailingSlash);
+      await expectSubmitBlocked(page);
+    });
+
+    await test.step('路径含非法字符（/v1?foo=bar）→提交被拦截', async () => {
+      await pp.fillProtocolPathRow(page, 0, { path: '/v1?foo=bar' });
+      await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathInvalidChars);
+      await expectSubmitBlocked(page);
+    });
+
+    await test.step('填写合法路径 /v1 并提交', async () => {
+      await pp.fillProtocolPathRow(page, 0, { path: '/v1' });
+    });
+
+    const response = await pp.submitUpsertAndWait(page);
+    const body = response.request().postDataJSON();
+    expect(body.protocol_paths).toEqual({ openai: '/v1' });
+
+    cleanup.trackName(name);
     await pp.filterListSearch(page, '名称', name);
     await pp.providerTable(page).expectRowVisible(name, 15000);
   });

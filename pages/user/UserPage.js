@@ -346,6 +346,13 @@ async function ensureLoggedIn(page) {
   }
 
   await page.waitForTimeout(1000);
+
+  // 后端每个用户只保留 1 个 Session Key，重新登录会让旧 Key 立即失效。
+  // 若此处不回写 auth.json，则本次全量运行中后续所有用例都会拿旧 Key 请求而 401
+  // （表现为「Session Key 错误」弹框拦截点击 / 接口 ErrNum=401），形成级联失败。
+  if (await hasStoredUser(page)) {
+    await persistAuthState(page);
+  }
   return true;
 }
 
@@ -354,9 +361,6 @@ async function handleUrlInvalidAlert(page) {
   const onLogin = await isLoginPage(page);
   if (dismissed || onLogin) {
     await ensureLoggedIn(page);
-    if (dismissed) {
-      await persistAuthState(page);
-    }
     return true;
   }
   return false;

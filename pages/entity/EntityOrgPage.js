@@ -33,6 +33,7 @@ const {
   ENTITY_SEARCH_PLACEHOLDER_TYPE,
   ENTITY_SEARCH_PLACEHOLDER_PARENT,
   ENTITY_SEARCH_PLACEHOLDER_QUOTA,
+  ENTITY_SEARCH_PLACEHOLDER_DESCRIPTION,
   ENTITY_DETAIL_DRAWER_PARTS,
   ivuDrawer,
   entityDetailDrawer,
@@ -262,6 +263,66 @@ async function expectEntityNameFieldValid(
   drawerTitle = DRAWER_TITLE.createEntity,
 ) {
   await entityOrgForm(page, drawerTitle).expectFieldValid('名称');
+}
+
+/** Entity 描述输入框（EM-DESC：可选字段，label 为「描述」） */
+function entityDescriptionInput(page, drawerTitle = DRAWER_TITLE.createEntity) {
+  return entityOrgForm(page, drawerTitle).input('描述');
+}
+
+async function fillEntityDescription(
+  page,
+  value,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  await entityDescriptionInput(page, drawerTitle).fill(value);
+}
+
+async function expectEntityDescriptionPlaceholder(
+  page,
+  placeholder = DOC_ENTITY_ORG.entityDescriptionPlaceholder,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  await expect(entityDescriptionInput(page, drawerTitle)).toHaveAttribute(
+    'placeholder',
+    placeholder,
+  );
+}
+
+/**
+ * EM-DESC-02：描述为非必填字段，标签不得出现必填星号
+ * （iView 仅当 rule.required=true 才渲染 .ivu-form-item-required），
+ * 且输入框下方不得出现提示小字（.form-tip）
+ */
+async function expectEntityDescriptionFieldNoStarNoTip(
+  page,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const item = entityOrgForm(page, drawerTitle).item('描述');
+  await expect(item).toBeVisible();
+  await expect(item.locator('.ivu-form-item-required')).toHaveCount(0);
+  await expect(item.locator('.form-tip')).toHaveCount(0);
+}
+
+async function expectEntityDescriptionFieldValid(
+  page,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  await entityOrgForm(page, drawerTitle).expectFieldValid('描述');
+}
+
+async function expectEntityDescriptionControlCharsError(
+  page,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  // 校验规则 trigger 为 blur，先失焦再断言错误提示
+  await entityDescriptionInput(page, drawerTitle).blur();
+  await expectEntityFormInlineError(
+    page,
+    '描述',
+    DOC_ENTITY_ORG.descriptionControlCharsErrorMsg,
+    drawerTitle,
+  );
 }
 
 async function selectEntityFormSelect(
@@ -1248,6 +1309,14 @@ async function searchEntityByParent(page, keyword) {
   await entityOrgTable(page).search(keyword, ENTITY_SEARCH_PLACEHOLDER_PARENT);
 }
 
+async function searchEntityByDescription(page, keyword) {
+  // 与名称/类型/父Entity 搜索一致：pageTable 纯前端过滤，不触发 GET /entities
+  await entityOrgTable(page).search(
+    keyword,
+    ENTITY_SEARCH_PLACEHOLDER_DESCRIPTION,
+  );
+}
+
 async function searchEntityByQuota(page, keyword) {
   const input = entityOrgTable(page).searchInput(
     ENTITY_SEARCH_PLACEHOLDER_QUOTA,
@@ -1487,6 +1556,127 @@ async function expectEntityRowContainsRateLimitStatus(
 ) {
   const row = entityOrgTable(page).rowByText(entityName);
   await expect(row).toContainText(status);
+}
+
+async function entityListHeaderLabels(page) {
+  const texts = await page
+    .locator('.show-iView-Table .ivu-table-header th')
+    .allInnerTexts();
+  return texts.map((t) => t.replace(/\s+/g, '')).filter(Boolean);
+}
+
+/** EM-DESC-01：描述列必须位于 beforeLabel 与 afterLabel 之间（默认 名称 → 描述 → 类型） */
+async function expectEntityDescriptionColumnOrder(
+  page,
+  beforeLabel = '名称',
+  afterLabel = '类型',
+) {
+  const labels = await entityListHeaderLabels(page);
+  const indexOf = (label) => labels.indexOf(label.replace(/\s+/g, ''));
+  const descIdx = indexOf('描述');
+  expect(descIdx).toBeGreaterThan(-1);
+  expect(indexOf(beforeLabel)).toBeGreaterThan(-1);
+  expect(indexOf(afterLabel)).toBeGreaterThan(-1);
+  expect(indexOf(beforeLabel)).toBeLessThan(descIdx);
+  expect(descIdx).toBeLessThan(indexOf(afterLabel));
+}
+
+/** 按表头文本定位列索引，返回指定 Entity 行内该列的单元格 */
+async function entityRowCellByColumn(page, entityName, columnLabel) {
+  const labels = await entityListHeaderLabels(page);
+  const idx = labels.indexOf(columnLabel.replace(/\s+/g, ''));
+  if (idx < 0) {
+    throw new Error(`未在 Entity 列表表头中找到列「${columnLabel}」`);
+  }
+  return entityOrgTable(page).rowByText(entityName).locator('td').nth(idx);
+}
+
+/** EM-DESC-01/02：列表「描述」列取值应为接口原文，空描述展示 `-` */
+async function expectEntityRowContainsDescription(page, entityName, expected) {
+  const cell = await entityRowCellByColumn(page, entityName, '描述');
+  await expect(cell).toHaveText(expected, { timeout: 15000 });
+}
+
+/** EM-DESC-04：编辑抽屉「描述」输入框回显值 */
+async function expectEntityEditDescriptionValue(
+  page,
+  expected,
+  drawerTitle = DRAWER_TITLE.editEntity,
+) {
+  await expect(entityDescriptionInput(page, drawerTitle)).toHaveValue(
+    expected,
+    { timeout: 15000 },
+  );
+}
+
+/**
+ * EM-DESC-04：提交编辑表单并返回 PATCH /entities/{id} 的请求体，
+ * 用于核对「省略 description 保留原值 / 显式传 "" 清空」的增量语义
+ */
+async function submitEntityEditAndCapturePatchBody(
+  page,
+  drawerTitle = DRAWER_TITLE.editEntity,
+) {
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) =>
+        req.method() === 'PATCH' && /\/entities\/[^/]+$/.test(req.url()),
+      { timeout: 15000 },
+    ),
+    submitEntityFormAndWaitForEditSuccess(page, drawerTitle),
+  ]);
+  return request.postDataJSON();
+}
+
+/** EM-DESC-05：详情抽屉基本信息区「描述」行展示值 */
+async function expectEntityDetailDescriptionRow(page, expected) {
+  const row = entityDetailDrawer(page)
+    .locator('.info-row')
+    .filter({ hasText: '描述' })
+    .first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  await expect(row.locator('.info-value')).toHaveText(expected);
+}
+
+/** EM-DESC-05：详情基本信息区描述行位于 名称 与 类型 之间 */
+async function expectEntityDetailDescriptionRowOrder(page) {
+  const labels = await entityDetailDrawer(page)
+    .locator('.info-row .info-label')
+    .allInnerTexts();
+  const normalized = labels.map((t) => t.trim());
+  const descIdx = normalized.indexOf('描述');
+  expect(descIdx).toBeGreaterThan(-1);
+  expect(normalized.indexOf('名称')).toBeLessThan(descIdx);
+  expect(normalized.indexOf('类型')).toBeGreaterThan(descIdx);
+}
+
+/** EM-DESC-01：读取当前页「描述」列文本（默认前 10 行） */
+async function readEntityDescriptionColumnTexts(page, limit = 10) {
+  const labels = await entityListHeaderLabels(page);
+  const idx = labels.indexOf('描述');
+  if (idx < 0) {
+    throw new Error('未在 Entity 列表表头中找到列「描述」');
+  }
+  const rows = entityOrgTable(page).dataRows();
+  const count = Math.min(await rows.count(), limit);
+  const texts = [];
+  for (let i = 0; i < count; i++) {
+    texts.push((await rows.nth(i).locator('td').nth(idx).innerText()).trim());
+  }
+  return texts;
+}
+
+/** EM-DESC-01：点击「描述」列表头触发排序，返回排序后的列文本 */
+async function sortEntityByDescriptionColumn(page, limit = 10) {
+  const header = page
+    .locator('.show-iView-Table .ivu-table-header th')
+    .filter({ hasText: '描述' })
+    .first();
+  // iView 的排序点击区域是表头内的 span.ivu-table-cell-sort；
+  // 直接点击 th 中心会落在空白处，不触发表头排序
+  await header.locator('span.ivu-table-cell-sort').first().click();
+  await page.waitForTimeout(500);
+  return readEntityDescriptionColumnTexts(page, limit);
 }
 
 async function expectEntityNameFieldDisabled(page) {
@@ -1800,6 +1990,12 @@ module.exports = {
   expectEntityNamePlaceholder,
   expectEntityNameFormTip,
   expectEntityNameFieldValid,
+  entityDescriptionInput,
+  fillEntityDescription,
+  expectEntityDescriptionPlaceholder,
+  expectEntityDescriptionFieldNoStarNoTip,
+  expectEntityDescriptionFieldValid,
+  expectEntityDescriptionControlCharsError,
   selectEntityFormSelect,
   expectParentEntityOptionVisible,
   selectEntityQuotaUnlimited,
@@ -1854,6 +2050,7 @@ module.exports = {
   searchEntityByName,
   searchEntityByType,
   searchEntityByParent,
+  searchEntityByDescription,
   searchEntityByQuota,
   searchEntityById,
   filterEntityByRateLimitStatus,
@@ -1876,6 +2073,16 @@ module.exports = {
   expectEntityRowContainsType,
   expectEntityRowContainsParent,
   expectEntityRowContainsRateLimitStatus,
+  entityListHeaderLabels,
+  expectEntityDescriptionColumnOrder,
+  entityRowCellByColumn,
+  expectEntityRowContainsDescription,
+  expectEntityEditDescriptionValue,
+  submitEntityEditAndCapturePatchBody,
+  expectEntityDetailDescriptionRow,
+  expectEntityDetailDescriptionRowOrder,
+  readEntityDescriptionColumnTexts,
+  sortEntityByDescriptionColumn,
   expectEntityNameFieldDisabled,
   expectEntityTypeFieldDisabled,
   expectEntityDetailVisible,

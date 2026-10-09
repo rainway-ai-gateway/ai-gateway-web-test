@@ -29,12 +29,18 @@ const outputDir = path.join(
   __dirname,
   '../../ai-gateway-web/docs/zh-cn/images',
 );
-const baseUrl = 'http://localhost:8085';
+const baseUrl = process.env.TEST_BASE_URL || 'http://localhost:8085';
 const DEMO_PROVIDER = 'demo-provider';
 const DEMO_CLUSTER = 'demo-cluster';
 const DEMO_MODEL = 'doubao-pro-32k';
 const DEMO_BACKEND_ADDR = '172.19.1.187';
 const DEMO_BACKEND_PORT = 13801;
+// Entity 组织演示数据（对齐手册 08-entity）
+const DEMO_ENTITY_TYPE_NAME = 'team';
+const DEMO_ENTITY_TYPE_DESC = '团队';
+const DEMO_ENTITY_TYPE_LEVEL = 3;
+const DEMO_ENTITY_NAME = 'dev-team';
+const DEMO_ENTITY_DESC = '研发团队';
 
 async function screenshot(page, name) {
   const filePath = path.join(outputDir, name);
@@ -428,30 +434,128 @@ async function captureModelPriceScreenshots(page) {
   }
 }
 
-async function captureEntityQuotaScreenshots(page) {
-  common.log('=== Entity 配额截图 ===');
+/** 清除成功提示（ivu-message / ivu-notice），避免截图带出「创建成功」气泡 */
+async function dismissMessages(page) {
+  for (let i = 0; i < 5; i += 1) {
+    const count = await page
+      .locator('.ivu-message, .ivu-notice')
+      .count()
+      .catch(() => 0);
+    if (!count) {
+      return;
+    }
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.ivu-message, .ivu-notice')
+        .forEach((el) => el.remove());
+    });
+    await page.waitForTimeout(300);
+  }
+}
+
+/**
+ * 列表按 id 升序，新建的演示组织排在最后，1280x720 首屏装不下；
+ * 且新增「描述」列后表格宽度超出 1280，操作列会被裁掉。
+ * 这里按表格内容宽度 + 分页控件底部动态放大视口，
+ * 保证「无过滤、展示全部行与操作列」的原貌。
+ */
+async function fitViewportForEntityList(page, minWidth = 1280) {
+  const contentWidth = await page.evaluate(() => {
+    const headers = document.querySelectorAll(
+      '.page-table .ivu-table-header th, .page-table .show-iView-Table th',
+    );
+    if (!headers.length) {
+      return 0;
+    }
+    const last = headers[headers.length - 1].getBoundingClientRect();
+    return last.right + 24;
+  });
+  const pagination = entityPage.entityOrgTable(page).pagination();
+  const box = await pagination.boundingBox().catch(() => null);
+  const current = page.viewportSize();
+  let height = current.height;
+  if (box && box.y + box.height + 24 > height) {
+    height = Math.ceil(box.y + box.height + 24);
+  }
+  const width = Math.max(minWidth, Math.ceil(contentWidth));
+  common.log(`列表截图视口: ${width} x ${height}`);
+  await setViewport(page, width, height);
+}
+
+/** 清理演示数据，保证脚本可重复执行且不污染环境 */
+async function cleanupDemoEntityOrg(page) {
+  if (await entityPage.findEntityByNameViaApi(page, DEMO_ENTITY_NAME)) {
+    await entityPage.deleteEntityByNameViaApi(page, DEMO_ENTITY_NAME);
+  }
+  if (
+    await entityPage.fetchEntityTypeByNameViaApi(page, DEMO_ENTITY_TYPE_NAME)
+  ) {
+    await entityPage.deleteEntityTypeViaApi(page, DEMO_ENTITY_TYPE_NAME);
+  }
+}
+
+async function captureEntityScreenshots(page) {
+  common.log('=== Entity 组织管理截图（列表 / 创建 / 详情 / 配额）===');
   await preparePage(page);
+
+  // 演示数据对齐手册 08-entity：team 类型（级别 3）+ dev-team（描述=研发团队）
+  await entityPage.gotoEntityTypeManagementPage(page);
+  await page.waitForTimeout(500);
+  await cleanupDemoEntityOrg(page);
+  const typeCreated = await entityPage.createEntityTypeViaApi(
+    page,
+    DEMO_ENTITY_TYPE_NAME,
+    DEMO_ENTITY_TYPE_DESC,
+    DEMO_ENTITY_TYPE_LEVEL,
+  );
+  if (!typeCreated) {
+    common.log('演示 Entity 类型创建失败，创建截图的类型下拉可能为空');
+  }
+
   await entityPage.gotoEntityOrgManagementPage(page);
   await page.waitForTimeout(800);
 
-  const createBtn = page.getByRole('button', { name: '创建Entity' });
-  if (await createBtn.isVisible().catch(() => false)) {
-    await createBtn.click();
-    await page.waitForTimeout(1000);
+  // 1) 创建抽屉：填「名称 / 描述 / 类型」后截图，与手册 9.2 示例一致
+  await entityPage.openCreateEntityDrawer(page);
+  await entityPage.fillEntityFormBasic(page, {
+    name: DEMO_ENTITY_NAME,
+    typeName: DEMO_ENTITY_TYPE_NAME,
+  });
+  await entityPage.fillEntityDescription(page, DEMO_ENTITY_DESC);
+  await page.waitForTimeout(500);
+  await dismissMessages(page);
+  await setViewport(page, 1280, 720);
+  await screenshot(page, '05-org-create.png');
 
-    // Select "否" for unlimited quota
-    await selectDropdownOption(page, '无限配额', '否');
+  // 2) 配额信息：切到「无限配额 = 否」并放大视口，完整展示表单
+  await entityPage.selectEntityQuotaUnlimited(page, '否');
+  await page.waitForTimeout(500);
+  await setViewport(page, 1920, 1080);
+  await screenshot(page, '05-org-quota.png');
 
-    await page.waitForTimeout(500);
-    await screenshot(page, '05-org-quota.png');
+  // 3) 还原为无限配额后提交，截列表（含「描述」列）
+  await entityPage.selectEntityQuotaUnlimited(page, '是');
+  await setViewport(page, 1280, 720);
+  await page.waitForTimeout(500);
+  await entityPage.submitEntityFormAndWaitForSuccess(page);
+  await page.waitForTimeout(800);
+  await dismissMessages(page);
+  await fitViewportForEntityList(page);
+  await screenshot(page, '05-org-list.png');
 
-    // Cancel
-    const cancelBtn = page
-      .locator('.ivu-drawer-wrap:visible')
-      .getByRole('button', { name: '取消' })
-      .first();
-    await safeClick(page, cancelBtn, '取消创建');
-  }
+  // 4) 详情抽屉：基本信息中的「描述」行
+  await setViewport(page, 1280, 720);
+  await entityPage.openEntityDetail(page, DEMO_ENTITY_NAME);
+  await page.waitForTimeout(800);
+  await dismissMessages(page);
+  await screenshot(page, '05-org-detail.png');
+  await entityPage.closeEntityDetail(page);
+  await page.waitForTimeout(500);
+
+  // 5) 清理演示数据
+  await cleanupDemoEntityOrg(page);
+  await entityPage.gotoEntityOrgManagementPage(page);
+  await page.waitForTimeout(500);
 }
 
 async function captureApiKeyQuotaScreenshots(page) {
@@ -644,7 +748,7 @@ async function captureResetQuotaScreenshots(page) {
     { name: 'cluster', fn: captureClusterWizardScreenshots },
     { name: 'route', fn: captureRouteRuleScreenshot },
     { name: 'model-price', fn: captureModelPriceScreenshots },
-    { name: 'entity', fn: captureEntityQuotaScreenshots },
+    { name: 'entity', fn: captureEntityScreenshots },
     { name: 'api-key', fn: captureApiKeyQuotaScreenshots },
     { name: 'reset-quota', fn: captureResetQuotaScreenshots },
   ];
