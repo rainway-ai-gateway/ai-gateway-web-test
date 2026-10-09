@@ -390,10 +390,15 @@ async function createEntityViaApi(
   parentNameOrId,
   quotaPlan,
   rateLimitPolicy,
+  description,
 ) {
   try {
     const userData = await getUserData(page);
     const data = { name, type };
+    // 可选字段：仅当显式传入（含空字符串）时才写入请求体
+    if (description !== undefined) {
+      data.description = description;
+    }
     if (parentNameOrId) {
       // OpenAPI 字段为 parent_id（id 形如 entity-27）；名称则先查 id
       let parentId = parentNameOrId;
@@ -1150,14 +1155,15 @@ async function createEntityWithTypeViaApi(
 ) {
   await umUtils.handleUrlInvalidAlert(page);
 
-  // 支持对象参数 { name, type, parentName, quotaPlan, rateLimitPolicy } 或分开参数
-  let entityName, type, parent, quotaPlan, rateLimitPolicy;
+  // 支持对象参数 { name, type, parentName, quotaPlan, rateLimitPolicy, description } 或分开参数
+  let entityName, type, parent, quotaPlan, rateLimitPolicy, description;
   if (typeof entityNameOrObj === 'object' && entityNameOrObj !== null) {
     entityName = entityNameOrObj.name;
     type = entityNameOrObj.type;
     parent = entityNameOrObj.parentName;
     quotaPlan = entityNameOrObj.quotaPlan;
     rateLimitPolicy = entityNameOrObj.rateLimitPolicy;
+    description = entityNameOrObj.description;
   } else {
     entityName = entityNameOrObj;
     type = typeName;
@@ -1171,6 +1177,7 @@ async function createEntityWithTypeViaApi(
     parent,
     quotaPlan,
     rateLimitPolicy,
+    description,
   );
   if (!entityData) {
     // Session 过期时 API 常直接失败，强制走一遍弹框/重登后再试
@@ -1182,6 +1189,7 @@ async function createEntityWithTypeViaApi(
       parent,
       quotaPlan,
       rateLimitPolicy,
+      description,
     );
   }
   if (!entityData) {

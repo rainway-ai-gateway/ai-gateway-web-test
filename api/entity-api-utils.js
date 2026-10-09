@@ -221,10 +221,15 @@ async function createEntityViaApi(
   parentNameOrId,
   quotaPlan,
   rateLimitPolicy,
+  description,
 ) {
   try {
     const userData = await getUserData(page);
     const data = { name, type };
+    // 可选字段：仅当显式传入（含空字符串）时才写入请求体
+    if (description !== undefined) {
+      data.description = description;
+    }
     if (parentNameOrId) {
       // OpenAPI 字段为 parent_id（id 形如 entity-27）；名称则先查 id
       let parentId = parentNameOrId;

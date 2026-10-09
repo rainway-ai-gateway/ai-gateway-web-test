@@ -25,11 +25,12 @@ const defaultWorkers = Math.min(3, Math.max(2, os.cpus().length - 2));
 
 const config = {
   globalSetup: require.resolve('./global-setup'),
-  globalTeardown: require.resolve('./global-teardown'),
   reporter: [
     ['list'],
     ['html', { outputFolder: 'test-reports/' + testReportDir, open: 'never' }],
     ['json', { outputFile: 'test-results.json' }],
+    // Markdown 报告须在 json reporter 之后生成，才能读到本轮最新结果
+    ['./utils/markdown-report-reporter.js'],
   ],
   timeout: 2 * 60 * 1000, // 单个 test 超时 2 分钟
   globalTimeout: 60 * 60 * 1000,
@@ -40,7 +41,6 @@ const config = {
   use: {
     headless: true,
     browserName: 'chromium',
-    channel: 'chrome',
     locale: 'zh-CH',
     viewport: { width: 1280, height: 720 },
     ignoreHTTPSErrors: true,
@@ -49,19 +49,10 @@ const config = {
     devtools: false,
     actionTimeout: 10 * 1000,
     navigationTimeout: 20 * 1000,
-    launchOptions: {
-      args: [
-        '--no-sandbox',
-        '--disable-crash-reporter',
-        '--disable-component-update',
-        '--no-first-run',
-      ],
-    },
+    launchOptions: {},
   },
-  scope: 'worker',
-  workers: process.env.PW_WORKERS
-    ? Number(process.env.PW_WORKERS)
-    : defaultWorkers,
+  //scope: 'worker',
+  workers: 1,
   retries: process.env.CI ? 1 : 0,
 };
 

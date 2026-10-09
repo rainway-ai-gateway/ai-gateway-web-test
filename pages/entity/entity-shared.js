@@ -72,6 +72,7 @@ const ENTITY_SEARCH_PLACEHOLDER_TYPE = '请输入类型查询';
 const ENTITY_SEARCH_PLACEHOLDER_PARENT = '请输入父Entity查询';
 const ENTITY_SEARCH_PLACEHOLDER_QUOTA = '请输入配额查询';
 const ENTITY_SEARCH_PLACEHOLDER_ID = '请输入ID查询';
+const ENTITY_SEARCH_PLACEHOLDER_DESCRIPTION = '请输入描述查询';
 const API_KEY_SEARCH_PLACEHOLDER = '请输入描述查询';
 const API_KEY_SEARCH_PLACEHOLDER_KEY = '请输入Key 值查询';
 const API_KEY_SEARCH_PLACEHOLDER_KEY_ID = '请输入Key ID查询';
@@ -179,6 +180,11 @@ const DOC_ENTITY_ORG = {
   rpmCombinationDuplicateMsg:
     '存在相同的RPM规则组合（模型、时间窗口、最大请求数）',
   ruleNameLengthErrorMsg: '规则名称长度不能超过128字符',
+  // 2026-09-22: Entity 新增可选字段 description（EM-DESC）
+  descriptionSample: '运营部，负责线上业务',
+  descriptionMaxLength: 255,
+  entityDescriptionPlaceholder: '请输入Entity描述',
+  descriptionControlCharsErrorMsg: 'Entity描述不能包含控制字符',
 };
 
 const DOC_API_KEY = {
@@ -770,6 +776,7 @@ module.exports = {
   ENTITY_SEARCH_PLACEHOLDER_PARENT,
   ENTITY_SEARCH_PLACEHOLDER_QUOTA,
   ENTITY_SEARCH_PLACEHOLDER_ID,
+  ENTITY_SEARCH_PLACEHOLDER_DESCRIPTION,
   API_KEY_SEARCH_PLACEHOLDER,
   API_KEY_SEARCH_PLACEHOLDER_KEY,
   API_KEY_SEARCH_PLACEHOLDER_KEY_ID,

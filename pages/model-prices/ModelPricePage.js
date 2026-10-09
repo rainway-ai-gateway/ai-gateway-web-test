@@ -664,6 +664,10 @@ async function getModeDropdownOptions(page) {
 
 /**
  * 获取默认价格区第一个价格行的键名下拉选项（用于断言新增价格键名是否存在）
+ *
+ * el-select 下拉挂载在 body，同一抽屉内可能同时存在多个可见下拉（例如本用例
+ * 先前打开过的「模型模式」下拉），全局 dropdownItems() 会混入其它下拉的选项，
+ * 故按本 select 自身的 popper 限定读取
  */
 async function getPriceKeyDropdownOptions(page) {
   const card = pricesCard(page);
@@ -672,12 +676,7 @@ async function getPriceKeyDropdownOptions(page) {
     card.locator('.kv-table').first().locator('tbody tr').first().locator('.el-select').first(),
   );
   await keySel.open();
-  const items = keySel.dropdownItems();
-  const count = await items.count();
-  const result = [];
-  for (let i = 0; i < count; i += 1) {
-    result.push(((await items.nth(i).textContent()) || '').trim());
-  }
+  const result = await keySel.ownDropdownOptions();
   // 关闭下拉，避免遮挡后续操作
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);

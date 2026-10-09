@@ -18,14 +18,14 @@
  *
  * 覆盖用例：
  * - PR-L-01 列表加载与全量拉取：GET /providers 不携带 page/page_size 等分页/筛选 Query；
- *   列头 名称/描述/协议/模型/操作；协议列 join 展示；模型列 2 Tag + `+N`（空模型显示 `-`）。
+ *   列头 名称/描述/协议/模型/操作；协议列 join 展示；模型列 2 Tag + `+N`。
  * - PR-L-02 名称筛选：本地筛选、大小写不敏感、清空恢复、不触发列表请求。
  * - PR-L-03 描述筛选：本地筛选、空描述不参与匹配、清空恢复。
  * - PR-L-04 协议筛选：下拉选项 openai/anthropic/gemini；选中后本地筛选，多协议任一命中。
  * - PR-L-05 模型筛选：基于 models join 本地筛选、大小写不敏感。
  * - PR-L-06 组合筛选：名称+协议+模型为与关系，任一条件清空后对应过滤失效。
  * - PR-L-07 前端分页：API 造数 21 条，翻页/切 pageSize 不触发列表请求，行分页正确。
- * - PR-L-08 模型列 2 Tag + `+N`：悬停 +N Tooltip 展示全部模型；空 models 显示 `-`。
+ * - PR-L-08 模型列 2 Tag + `+N`：悬停 +N Tooltip 展示全部模型。
  * - PR-L-09 空列表展示空态（环境依赖：系统已有服务商则跳过，见偏差 1）。
  * - PR-L-10 操作列 5 个按钮（详情/查询模型价格/分段计价配置/编辑/删除），
  *   分段计价配置为 warning 风格。
@@ -47,6 +47,9 @@
  *    未限定作用域的 locator，表格存在多个 `+N` 行时会触发 strict mode 冲突。spec 在
  *    beforeEach 先按唯一名称前缀本地筛选，确保表格仅剩本用例行（其他 `+N` 行的 Tooltip
  *    随行卸载），再悬停断言。
+ * 6. models 必填化偏差（2026-09-17 起后端要求 models 至少 1 个元素）：原依赖「空 models」
+ *    的「模型列占位 `-`」场景已不可构造，按产品结论下线该断言（PR-L-01 第 7 步、
+ *    PR-L-08 第 3 步），文档 01-服务商列表.md 同步更新。
  *
  * 运行：npx playwright test tests/providers/test_01_provider_list.spec.js
  */
@@ -81,7 +84,7 @@ test.describe('模型服务商 - PR-L-01 列表加载与全量拉取', () => {
     cleanup = api.createProviderTestCleanup();
     await pp.gotoProvidersPage(page);
 
-    // API 造数 3 个服务商：覆盖多模型(3个)/双协议/空模型
+    // API 造数 3 个服务商：覆盖多模型(3个)/双协议/单模型
     const base = 'provider_' + Date.now().toString(36);
     created = [];
     const payloads = [
@@ -95,13 +98,13 @@ test.describe('模型服务商 - PR-L-01 列表加载与全量拉取', () => {
         name: base + 'b',
         description: '自动化测试-双协议',
         model_protocols: ['openai', 'anthropic'],
-        models: [],
+        models: ['qa-m-d'],
       },
       {
         name: base + 'c',
-        description: '自动化测试-空模型',
+        description: '自动化测试-单模型',
         model_protocols: ['anthropic'],
-        models: [],
+        models: ['qa-m-e'],
       },
     ];
     for (const payload of payloads) {
@@ -163,9 +166,7 @@ test.describe('模型服务商 - PR-L-01 列表加载与全量拉取', () => {
     await expect(rowA.locator('.provider-model-tag')).toHaveCount(2);
     await expect(rowA.locator('.provider-model-more-tag')).toHaveText('+1');
 
-    // 7. models 为空 → 模型列展示占位符 `-`
-    const rowC = table.rowByText(pc.name);
-    await expect(rowC.locator('td').nth(3)).toHaveText('-');
+    // 注：原第 7 步「models 为空 → 模型列展示占位符 `-`」已随 models 必填化下线（偏差 6）
   });
 });
 
@@ -207,7 +208,7 @@ test.describe('模型服务商 - PR-L-02 名称筛选（本地，不触发请求
           await createProviderViaApiAndTrack(page, cleanup, {
             ...payload,
             model_protocols: ['openai'],
-            models: [],
+            models: ['qa-l02-model'],
           })
         ).name,
       );
@@ -257,7 +258,7 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
         name: base + 'a',
         description: '自动化测试-描述筛选-甲',
         model_protocols: ['openai'],
-        models: [],
+        models: ['qa-l03-model-a'],
       })
     ).name;
     p2 = (
@@ -265,7 +266,7 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
         name: base + 'b',
         description: '',
         model_protocols: ['openai'],
-        models: [],
+        models: ['qa-l03-model'],
       })
     ).name;
     p3 = (
@@ -273,7 +274,7 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
         name: base + 'c',
         description: '其他描述-丙',
         model_protocols: ['openai'],
-        models: [],
+        models: ['qa-l03-model-c'],
       })
     ).name;
     await pp.gotoProvidersPage(page);
@@ -320,7 +321,7 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anth
         name: base + 'oa',
         description: '自动化测试-协议筛选',
         model_protocols: ['openai'],
-        models: [],
+        models: ['qa-l04-model-oa'],
       })
     ).name;
     pAnthropic = (
@@ -328,7 +329,7 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anth
         name: base + 'an',
         description: '自动化测试-协议筛选',
         model_protocols: ['anthropic'],
-        models: [],
+        models: ['qa-l04-model'],
       })
     ).name;
     pGemini = (
@@ -336,7 +337,7 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anth
         name: base + 'gm',
         description: '自动化测试-协议筛选',
         model_protocols: ['gemini'],
-        models: [],
+        models: ['qa-l04-model-gm'],
       })
     ).name;
     pBoth = (
@@ -344,7 +345,7 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anth
         name: base + 'both',
         description: '自动化测试-协议筛选',
         model_protocols: ['openai', 'anthropic'],
-        models: [],
+        models: ['qa-l04-model-both'],
       })
     ).name;
     await pp.gotoProvidersPage(page);
@@ -435,7 +436,7 @@ test.describe('模型服务商 - PR-L-05 模型筛选（models join 本地筛选
         name: base + 'c',
         description: '自动化测试-模型筛选',
         model_protocols: ['openai'],
-        models: [],
+        models: ['qa-l05-other'],
       })
     ).name;
     await pp.gotoProvidersPage(page);
@@ -566,7 +567,7 @@ test.describe('模型服务商 - PR-L-07 前端分页（翻页/切 pageSize 不�
         name: base + String(i).padStart(2, '0'),
         description: '自动化测试-前端分页',
         model_protocols: ['openai'],
-        models: [],
+        models: ['qa-l07-model'],
       });
     }
     await pp.gotoProvidersPage(page);
@@ -614,7 +615,6 @@ test.describe('模型服务商 - PR-L-08 模型列 2 Tag + `+N` 悬停 Tooltip',
   let cleanup;
   let base;
   let pMulti;
-  let pEmpty;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
@@ -627,16 +627,8 @@ test.describe('模型服务商 - PR-L-08 模型列 2 Tag + `+N` 悬停 Tooltip',
         models: ['qa-m-1', 'qa-m-2', 'qa-m-3', 'qa-m-4'],
       })
     ).name;
-    pEmpty = (
-      await createProviderViaApiAndTrack(page, cleanup, {
-        name: base + 'empty',
-        description: '自动化测试-模型列',
-        model_protocols: ['openai'],
-        models: [],
-      })
-    ).name;
     await pp.gotoProvidersPage(page);
-    // 偏差 5：先按唯一名称前缀本地筛选，表格仅剩本用例 2 行（其他 `+N` 行 Tooltip 随行卸载，
+    // 偏差 5：先按唯一名称前缀本地筛选，表格仅剩本用例行（其他 `+N` 行 Tooltip 随行卸载，
     // 规避 expectModelsTooltip 未限定作用域导致的 strict mode 冲突；同时保证行必然可见）
     await filterListSearchBlur(page, '名称', base);
     await pp.providerTable(page).expectRowVisible(pMulti);
@@ -646,7 +638,7 @@ test.describe('模型服务商 - PR-L-08 模型列 2 Tag + `+N` 悬停 Tooltip',
     await cleanup.cleanup(page);
   });
 
-  test('models>2 展示 2 Tag + +N；悬停 +N Tooltip 展示全部模型；空 models 显示 -', async ({
+  test('models>2 展示 2 Tag + +N；悬停 +N Tooltip 展示全部模型', async ({
     page,
   }) => {
     // 1. models=4 → 最多 2 个 Tag + `+2` 折叠
@@ -663,10 +655,7 @@ test.describe('模型服务商 - PR-L-08 模型列 2 Tag + `+N` 悬停 Tooltip',
       'qa-m-4',
     ]);
 
-    // 3. models 为空 → 模型列占位 `-`（空行不报错）
-    await expect(
-      pp.providerTable(page).rowByText(pEmpty).locator('td').nth(3),
-    ).toHaveText('-');
+    // 注：原第 3 步「models 为空 → 模型列占位 `-`」已随 models 必填化下线（偏差 6）
   });
 });
 
@@ -710,7 +699,7 @@ test.describe('模型服务商 - PR-L-10 操作列 5 个按钮', () => {
       name: providerName,
       description: '自动化测试-操作列',
       model_protocols: ['openai'],
-      models: [],
+      models: ['qa-l10-model'],
     });
     await pp.gotoProvidersPage(page);
     // 按唯一名称前缀本地筛选：表格仅剩本用例行，行必然可见且点击精确（与 fullyParallel 下
@@ -763,7 +752,7 @@ test.describe('模型服务商 - PR-L-11 查询模型价格跳转并按服务商
       name: providerName,
       description: '自动化测试-查询模型价格',
       model_protocols: ['openai'],
-      models: [],
+      models: [MODEL],
     });
     await pp.gotoProvidersPage(page);
     // 按唯一名称前缀本地筛选：表格仅剩本用例行，行必然可见且点击精确（与 fullyParallel 下

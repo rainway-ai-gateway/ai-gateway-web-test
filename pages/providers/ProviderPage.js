@@ -68,6 +68,9 @@ const LABEL = {
   domain: '服务商域名',
   keyName: 'Key 名称',
   keyValue: 'Key 值',
+  // Card 标题（用于在共用类名的表格间精确定位所属 Card）
+  serviceAuthKeys: '服务鉴权 Keys',
+  protocolPathMapping: '协议路径映射',
   timeZone: '时区',
   tierType: '计价时段',
   timeRanges: '时间段',
@@ -107,6 +110,15 @@ const DOC = {
   batchAdd: '批量添加',
   batchConfirm: '确认',
   batchCancel: '取消',
+  // PR-C-17/18/19、PR-V-16/17（protocol_paths 语义「上游 API 基路径」）
+  protocolPathMapping: '协议路径映射',
+  protocolPathProto: '协议',
+  protocolPathHeader: '上游 API 基路径',
+  protocolPathValuePlaceholder: '例如 /v1',
+  protocolPathEmpty: '未配置协议路径映射（保存后请求路径原样转发）',
+  protocolPathMustStartSlash: '上游 API 基路径必须以 / 开头',
+  protocolPathNoTrailingSlash: '上游 API 基路径不能以 / 结尾',
+  protocolPathInvalidChars: '上游 API 基路径包含非法字符（? $ # ..）',
 };
 
 function readSessionFromAuthFile() {
@@ -245,6 +257,16 @@ async function waitForDrawerContent(page, selector, title) {
 
 function upsertScope(page) {
   return page.locator('.provider-upsert');
+}
+
+/**
+ * 按 Card 标题精确定位 ProviderUpsert 内的 .ivu-card
+ * （非子串匹配正文，避免描述文本包含标题时误命中）
+ */
+function upsertCard(page, title) {
+  return upsertScope(page)
+    .locator('.ivu-card')
+    .filter({ has: page.locator('.ivu-card-head', { hasText: title }) });
 }
 
 async function expectUpsertScopeVisible(page) {
@@ -396,10 +418,6 @@ async function expectInstanceListError(page, message) {
  */
 async function selectProtocols(page, protocols) {
   const item = upsertFormItem(upsertScope(page), '模型协议');
-  const select = new IvuSelectComponent(
-    page,
-    item.locator('.ivu-select').first(),
-  );
   const tagTexts = await item
     .locator(
       '.ivu-select-selection .ivu-tag-content, .ivu-select-selection .ivu-tag',
@@ -407,20 +425,31 @@ async function selectProtocols(page, protocols) {
     .allTextContents()
     .catch(() => []);
   const selected = new Set(tagTexts.map((t) => t.trim()).filter(Boolean));
-  let clicked = false;
-  for (const protocol of protocols) {
-    if (selected.has(protocol)) {
-      continue;
-    }
-    await select.selectOptionExact(protocol);
-    selected.add(protocol);
-    clicked = true;
-    await page.waitForTimeout(200);
-  }
-  if (clicked) {
+  const toSelect = protocols.filter((p) => !selected.has(p));
+  if (toSelect.length === 0) return;
+
+  for (const protocol of toSelect) {
+    // 每次循环重新获取 trigger，防止 Vue re-render 导致旧引用失效
+    const trigger = item.locator('.ivu-select').first();
+    await expect(trigger).toBeVisible({ timeout: 15000 });
+    await trigger.click();
+    await page.waitForTimeout(500); // 等待 dropdown 动画展开
+
+    // 使用 force:true 跳过稳定性检查（iView dropdown CSS 动画导致 element not stable）
+    const option = page
+      .locator('.ivu-select-dropdown:visible .ivu-select-item')
+      .filter({ hasText: new RegExp('^' + protocol + '$') })
+      .first();
+    await option.click({ force: true, timeout: 5000 });
+    await page.waitForTimeout(300);
+
+    // 关闭 dropdown（force:true 不会触发 Select 正常关闭行为）
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
   }
+
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
 }
 
 function discoverButton(page) {
@@ -454,8 +483,11 @@ async function discoverModelsAndWait(page) {
 
 // ---------- Keys ----------
 
+// 「服务鉴权 Keys」Card 与「协议路径映射」Card 共用 class="keys-table"，
+// 直接 locator('.keys-table') 会命中 2 张表（th 数量 6 而非 3）；
+// 此处按所在 Card 标题（.ivu-card-head）精确定位到服务鉴权 Keys 表
 function keysTable(page) {
-  return upsertScope(page).locator('.keys-table');
+  return upsertCard(page, LABEL.serviceAuthKeys).locator('table.keys-table');
 }
 
 function keyRows(page) {
@@ -546,9 +578,7 @@ async function viewInfoValue(page, cardTitle, label) {
   const scope = viewScope(page);
   await expect(scope).toBeVisible({ timeout: 10000 });
 
-  const card = scope
-    .locator('.ivu-card.info-card')
-    .filter({ hasText: cardTitle });
+  const card = viewCard(page, cardTitle);
   await expect(card).toBeVisible({ timeout: 10000 });
 
   const row = card.locator('.info-row').filter({ hasText: label }).first();
@@ -1135,9 +1165,11 @@ async function pasteIntoModelsSelect(page, text) {
 // ---------- 详情页（ProviderView，PR-D-01/02） ----------
 
 function viewCard(page, title) {
+  // 按 Card 标题（.ivu-card-head）限定，避免 filter({ hasText }) 子串匹配
+  // 误命中描述文本包含该标题的「基本信息」Card（strict mode violation）
   return viewScope(page)
     .locator('.ivu-card.info-card')
-    .filter({ hasText: title });
+    .filter({ has: page.locator('.ivu-card-head', { hasText: title }) });
 }
 
 async function viewCardVisible(page, title) {
@@ -1146,6 +1178,16 @@ async function viewCardVisible(page, title) {
 
 function viewTableRows(page, cardTitle) {
   return viewCard(page, cardTitle).locator('table.kv-table tbody tr');
+}
+
+/**
+ * 断言详情卡片只读表格的表头文案（PR-D-03「协议」/「上游 API 基路径」）
+ */
+async function expectViewTableHeaders(page, cardTitle, headers) {
+  const actual = await viewCard(page, cardTitle)
+    .locator('table.kv-table thead th')
+    .allInnerTexts();
+  expect(actual.map((text) => text.trim())).toEqual(headers);
 }
 
 async function expectViewNoInputs(page) {
@@ -1210,6 +1252,105 @@ async function clickDeleteTimeRange(page, rowIndex) {
 async function expectDeleteTimeRangeDisabled(page, rowIndex) {
   const row = timeRangeRows(page).nth(rowIndex);
   await expect(row.getByRole('button', { name: '删除' })).toBeDisabled();
+}
+
+// ---------- 协议路径映射（protocol_paths） ----------
+
+function protocolPathTable(page) {
+  return upsertCard(page, LABEL.protocolPathMapping).locator('table.keys-table');
+}
+
+function protocolPathRows(page) {
+  // 排除空态行（proto-paths-empty-row），只统计真实映射行
+  return protocolPathTable(page).locator('tbody tr:not(.proto-paths-empty-row)');
+}
+
+async function expectProtocolPathHeader(page) {
+  const headers = await protocolPathTable(page).locator('thead th').allInnerTexts();
+  expect(headers.map((text) => text.trim())).toContain(DOC.protocolPathHeader);
+}
+
+function protocolPathValueInput(page, rowIndex) {
+  return protocolPathRows(page)
+    .nth(rowIndex)
+    .locator('td')
+    .nth(1)
+    .locator('input')
+    .first();
+}
+
+async function expectProtocolPathValuePlaceholder(page, rowIndex) {
+  await expect(protocolPathValueInput(page, rowIndex)).toHaveAttribute(
+    'placeholder',
+    DOC.protocolPathValuePlaceholder
+  );
+}
+
+async function expectProtocolPathValueError(page, rowIndex, message) {
+  // 路径校验规则 trigger 为 change，失焦确保错误提示已渲染
+  await protocolPathValueInput(page, rowIndex).blur();
+  await expect(
+    protocolPathRows(page).nth(rowIndex).locator('.ivu-form-item-error-tip')
+  ).toHaveText(message);
+}
+
+async function expectProtocolPathEmptyState(page, message = DOC.protocolPathEmpty) {
+  const emptyRow = protocolPathTable(page).locator('tr.proto-paths-empty-row');
+  await expect(emptyRow).toBeVisible();
+  await expect(emptyRow).toContainText(message);
+}
+
+async function expectProtocolPathEmptyStateHidden(page) {
+  await expect(
+    protocolPathTable(page).locator('tr.proto-paths-empty-row')
+  ).toHaveCount(0);
+}
+
+async function expectProtocolPathRowCount(page, count) {
+  await expect(protocolPathRows(page)).toHaveCount(count);
+}
+
+async function addProtocolPath(page) {
+  await upsertScope(page)
+    .getByRole('button', { name: /添加映射/ })
+    .click();
+  await page.waitForTimeout(200);
+}
+
+async function expectProtocolPathAddDisabled(page) {
+  await expect(
+    upsertScope(page).getByRole('button', { name: /添加映射/ })
+  ).toBeDisabled();
+}
+
+async function expectProtocolPathAddEnabled(page) {
+  await expect(
+    upsertScope(page).getByRole('button', { name: /添加映射/ })
+  ).toBeEnabled();
+}
+
+async function fillProtocolPathRow(page, rowIndex, { protocol, path }) {
+  const row = protocolPathRows(page).nth(rowIndex);
+  await expect(row).toBeVisible({ timeout: 10000 });
+
+  if (protocol !== undefined) {
+    const select = row.locator('.ivu-select').first();
+    const ivuSelect = new IvuSelectComponent(page, select);
+    await ivuSelect.selectOptionExact(protocol);
+    await page.waitForTimeout(200);
+  }
+
+  if (path !== undefined) {
+    const input = row.locator('td').nth(1).locator('input').first();
+    await fillInput(input, path);
+  }
+}
+
+async function removeProtocolPath(page, rowIndex) {
+  const row = protocolPathRows(page).nth(rowIndex);
+  await expect(row).toBeVisible({ timeout: 10000 });
+  await row.getByRole('button', { name: '删除' }).click();
+  await page.waitForTimeout(200);
 }
 
 // ---------- 消息（部分匹配，用于后端 ErrMsg 文案容差） ----------
@@ -1333,6 +1474,7 @@ module.exports = {
   viewCard,
   viewCardVisible,
   viewTableRows,
+  expectViewTableHeaders,
   expectViewNoInputs,
   weekdayCheckbox,
   clickWeekdayCheckbox,
@@ -1342,5 +1484,18 @@ module.exports = {
   expectWeekdayOptionsCount,
   clickDeleteTimeRange,
   expectDeleteTimeRangeDisabled,
+  protocolPathTable,
+  protocolPathRows,
+  expectProtocolPathHeader,
+  expectProtocolPathRowCount,
+  expectProtocolPathValuePlaceholder,
+  expectProtocolPathValueError,
+  expectProtocolPathEmptyState,
+  expectProtocolPathEmptyStateHidden,
+  addProtocolPath,
+  expectProtocolPathAddDisabled,
+  expectProtocolPathAddEnabled,
+  fillProtocolPathRow,
+  removeProtocolPath,
   expectMessageContaining,
 };

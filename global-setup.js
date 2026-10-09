@@ -20,8 +20,7 @@ const path = require('path');
 async function globalSetup() {
   const browser = await chromium.launch({
     headless: true,
-    channel: 'chrome',
-    args: ['--no-sandbox'],
+    args: ['--no-sandbox', '--disable-crash-reporter', '--disable-component-update', '--no-first-run'],
   });
   const context = await browser.newContext();
   const page = await context.newPage();

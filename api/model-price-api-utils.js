@@ -109,6 +109,10 @@ function authHeaders(userData) {
 
 /**
  * 拉取模型定价列表（自动翻页，最多 10 页）
+ *
+ * 接口契约（ai-gateway-api endpoints/openapi_v1/model_price/list.go L46-68）：
+ * - provider + model + mode 三者齐传 → Data 为**单条记录对象**（非分页结构）
+ * - 其余组合 → Data.list + Data.pagination.total（分页列表）
  * @returns {Promise<{list: Array, total: number}>}
  */
 async function fetchModelPricesViaApi(page, params = {}) {
@@ -126,18 +130,25 @@ async function fetchModelPricesViaApi(page, params = {}) {
     );
     const body = await response.json();
     if (body.ErrNum !== 200) {
+      // 三元组精确查询未命中时后端返回 RecordNotExist，同属此处
       common.log('接口查询模型定价失败: ' + JSON.stringify(body).slice(0, 300));
       break;
     }
     const data = body.Data || {};
-    const list = Array.isArray(data.list) ? data.list : [];
-    all.push(...list);
-    total = (data.pagination && data.pagination.total) || list.length;
-    if (list.length === 0 || pageNum * pageSize >= total) {
+    if (!Array.isArray(data.list)) {
+      // 单条记录形态：无 list/pagination，Data 即记录本身
+      if (data.id !== undefined) {
+        all.push(data);
+      }
+      break;
+    }
+    all.push(...data.list);
+    total = (data.pagination && data.pagination.total) || data.list.length;
+    if (data.list.length === 0 || pageNum * pageSize >= total) {
       break;
     }
   }
-  return { list: all, total };
+  return { list: all, total: total || all.length };
 }
 
 /**
