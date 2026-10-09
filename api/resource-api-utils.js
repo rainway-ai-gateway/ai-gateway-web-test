@@ -151,42 +151,6 @@ async function deleteDomain(page, domainName, productName = getProductName()) {
   }
 }
 
-async function getBfePoolList(page) {
-  const userData = await getUserData(page);
-  const response = await page.request.get(getOpenApiBaseUrl() + '/alb-pool', {
-    headers: authHeaders(userData.sessionKey),
-  });
-  return parseApiResponse(response, 'GET alb-pool');
-}
-
-async function getBfePool(page) {
-  const userData = await getUserData(page);
-  const response = await page.request.get(getOpenApiBaseUrl() + '/alb-pool', {
-    headers: authHeaders(userData.sessionKey),
-  });
-  return parseApiResponse(response, 'GET alb-pool');
-}
-
-async function updateBfePool(page, poolData) {
-  try {
-    const userData = await getUserData(page);
-    const response = await page.request.patch(
-      getOpenApiBaseUrl() + '/alb-pool',
-      {
-        data: poolData,
-        headers: authHeaders(userData.sessionKey),
-        timeout: 20000,
-      },
-    );
-    const body = await response.json();
-    common.log('PATCH alb-pool 响应: ' + JSON.stringify(body));
-    return body.ErrNum === 200;
-  } catch (error) {
-    common.log('PATCH alb-pool 异常: ' + error.message);
-    return false;
-  }
-}
-
 async function getBfeClusterList(page) {
   const userData = await getUserData(page);
   const response = await page.request.get(
@@ -640,9 +604,6 @@ module.exports = {
   getDomains,
   createDomain,
   deleteDomain,
-  getBfePoolList,
-  getBfePool,
-  updateBfePool,
   getBfeClusterList,
   getBfeCluster,
   createBfeCluster,

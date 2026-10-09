@@ -21,7 +21,6 @@
  *   GET /providers/actions/get-provider-names 返回的服务商名；未选时下一步被拦截。
  * - RM-BC-72 切换服务商后转发模型 / Keys 联动：模型剔除、Keys 表重建（原 key 名不存在则清空）。
  * - RM-BC-73 转发模型-多选必填与「全选」：全选快捷操作 + 未选模型被拦截。
- * - RM-BC-74 服务商模型为空：转发模型下拉为空；提交被拦截（复用必填校验）。
  * - RM-BC-75 Keys 非必填与空行过滤：空行不参与校验，提交体 keys 过滤空 name 行。
  * - RM-BC-76 Keys 服务商 Key 下拉与权重：下拉选项为 key 名称、新行权重默认 0、可多行；已选 Key 从其他行下拉中过滤。
  * - RM-BC-77 Keys 权重和 = 100（非空时）：80 被拦截、100 通过。
@@ -35,8 +34,9 @@
  * （命名前缀 provider_<ts>，afterEach 清理）。
  *
  * 文档偏差记录（验收语义保留，实现差异按实际 UI 断言）：
- * - RM-BC-74 预期「该服务商暂无可用模型」：实现无该文案，转发模型为空时复用必填校验
- *   「请选择模型」（gatewayConfig.modelsRequired）。
+ * - RM-BC-74（服务商模型为空时转发模型下拉为空且提交被拦截）：随 models 必填化
+ *   （2026-09-17 起后端要求 models 至少 1 个元素）该场景已不可构造，用例下线，
+ *   文档 02d-大模型与校验.md 同步更新。
  * - RM-BC-78 预期「Keys 表格隐藏」：原型与实现均始终渲染 keys-table（未做隐藏），
  *   无 keys 时「服务商 Key」下拉无可用选项——按实际行为断言下拉选项数。
  * - RM-BC-71 预期「展开下拉时调用 get-provider-names」：实现为 GatewayConfig mounted
@@ -73,7 +73,7 @@ async function createProvider({ page, cleanup, overrides = {} }) {
     description: '自动化测试-集群大模型配置联动',
     model_protocols: ['openai'],
     model_endpoint: { schema: 'https', uri: '/v1/models' },
-    models: [],
+    models: [MODEL_A1],
     keys: [],
     instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
     ...overrides,
@@ -213,29 +213,6 @@ test.describe('AI业务集群 - RM-BC-71~78、81、84 大模型配置 Provider �
     // 提供「全选」：点击后选中该服务商全部模型
     await utils.selectAllForwardModels(page);
     await utils.expectSelectedForwardModels(page, [MODEL_A1, MODEL_A2]);
-  });
-
-  test('RM-BC-74 服务商模型为空时转发模型下拉为空且提交被拦截', async ({ page }) => {
-    const clusterName = utils.generateTestBusinessClusterName();
-    const providerC = await createProvider({
-      page,
-      cleanup: providerCleanup,
-      overrides: { models: [] },
-    });
-
-    await navigateToModelStep(page, clusterName);
-    await utils.selectProvider(page, providerC);
-
-    // 1. 转发模型下拉为空（无可选项）
-    await utils.expectForwardModelsDropdownEmpty(page, true);
-    // 2. 提交被拦截（文档文案「该服务商暂无可用模型」，实际 UI 复用「请选择模型」）
-    await utils.clickWizardNext(page);
-    await utils.expectWizardStep(page, '大模型配置');
-    await utils.expectWizardFormFieldError(
-      page,
-      utils.DOC_BUSINESS_CLUSTER.forwardModelsLabel,
-      utils.DOC_BUSINESS_CLUSTER.modelsRequiredMsg,
-    );
   });
 
   test('RM-BC-75 Keys 非必填：空行不参与校验，提交时过滤空 name 行', async ({

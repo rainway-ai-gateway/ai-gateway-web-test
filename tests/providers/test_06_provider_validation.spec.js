@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 /**
- * 模型服务商 - 字段校验矩阵（PR-V-01~PR-V-15）
+ * 模型服务商 - 字段校验矩阵（PR-V-01~PR-V-17）
  *
  * 覆盖用例（docs/providers/02-功能测试用例/06-字段校验矩阵.md）：
  * - PR-V-01 name 必填校验（留空 / 仅空白提交被拦截；创建成功后名称不可修改）
@@ -29,11 +29,15 @@
  * - PR-V-10 model_endpoint.uri 校验（不以 / 开头拦截；空值默认 /v1/models）
  * - PR-V-11 keys.name 必填与唯一校验（留空 / 重复 / 129 字符拦截）
  * - PR-V-12 keys.key 必填与长度校验（留空 / 513 拦截；512 通过）
- * - PR-V-13 models 回填非空不重复（mock 探测回填，输入框只读）
+ * - PR-V-13 models 必填校验（空列表/重复名被拦截，合法不重复通过）
  * - PR-V-14 time_zone IANA 校验（Asia/Shanghai/UTC/America/Los_Angeles 通过；
  *   GMT+8/ABC/空 拦截）
  * - PR-V-15 tiers / time_ranges 校验（weekdays 固定 7 项、格式 / end<=start / 重叠拦截；
  *   weekdays=[] 每天配置提交成功）
+ * - PR-V-16 protocol_paths 协议键校验（下拉选项为未使用协议；全部已用→添加按钮禁用；
+ *   提交体为 {protocol: path}）
+ * - PR-V-17 protocol_paths 路径格式校验（不以 / 开头 / 以 / 结尾 / 含 ? $ # .. 拦截并提示
+ *   「上游 API 基路径…」；合法路径通过）
  *
  * 文档偏差记录（02 验收优先，UI 实现差异如下，断言以 UI 可复现行为为准并在文件头记录）：
  * 1. PR-V-01 预期「提示名称必填」：UI 留空提示「请输入名称」（com.tipEnterX）、仅空白
@@ -57,9 +61,11 @@
  * 7. PR-V-07 预期「全部为 0 拦截（至少一个 weight > 0）」：UI 权重和=100 校验先于正权重
  *    校验，全 0 提示「实例权重之和必须等于100」→ 本 spec 断言 UI 实际文案（拦截语义一致，
  *    文案差异记录于此；见 ProviderPage.js 文件头偏差 2/7）。
- * 8. PR-V-13 预期「回填不重复」：UI discoverModels 仅 filter(Boolean) 不去重（buildPayload
- *    才用 Set 去重），mock 传唯一列表；el-select tag 可点击删除（既有偏差 PR-C-10）。
- *    空列表重新探测后 tag 经 el-tag 离场过渡异步移除，断言需自动等待（expectModelTags）。
+ * 8. PR-V-13 预期「models 必填（至少 1 个，非空不重复）」：UI discoverModels 仅 filter(Boolean)
+ *    不去重（buildPayload 才用 Set 去重），mock 传唯一列表；空列表/重复名提交触发
+ *    validateModels 拦截（modelsListRequired / modelNameDuplicate）。后端自 09-17 起
+ *    Provider.models 必填（空数组 422），故除 PR-V-13 空列表用例外，其余创建流程
+ *    统一经「批量添加」补非空 models。
  * 9. PR-V-15 预期「time_ranges 为空拦截 / weekdays 越界拦截」：UI 至少保留 1 个时间段
  *    （timeRanges.length<=1 删除按钮 disabled）；weekdays 为固定 7 项 Checkbox 不会越界，
  *    两分支不可经 UI 复现。
@@ -78,6 +84,9 @@ const IP_ADDR_2 = '127.0.0.2';
 const IP_PORT = 80;
 const IP_WEIGHT = 100;
 const DOMAIN = 'api.deepseek.com';
+// Provider.models 必填（09-17 起后端 422 / 前端 validateModels 拦截），
+// 创建流程统一补一个非空模型；PR-V-13 空列表场景显式传 models: []
+const DEFAULT_MODEL = 'qa-validate-model';
 
 let nameSeq = 0;
 
@@ -86,12 +95,31 @@ function uniqueName(prefix) {
   return prefix + '_' + Date.now().toString(36) + '_' + nameSeq;
 }
 
-async function openCreateAndFillBasic(page, name, description) {
+/**
+ * 通过「批量添加」补模型列表（models 必填，非空时才操作）
+ */
+async function fillModels(page, models = [DEFAULT_MODEL]) {
+  if (!models || !models.length) {
+    return;
+  }
+  await pp.openBatchAddModels(page);
+  await pp.fillBatchModelsText(page, models.join('\n'));
+  await pp.confirmBatchAddModels(page);
+  await pp.expectModelTags(page, models);
+}
+
+async function openCreateAndFillBasic(
+  page,
+  name,
+  description,
+  models = [DEFAULT_MODEL],
+) {
   await pp.openCreateDrawer(page);
   await pp.fillName(page, name);
   if (description) {
     await pp.fillDescription(page, description);
   }
+  await fillModels(page, models);
 }
 
 /**
@@ -127,7 +155,7 @@ async function createProviderAndOpenList({ page, cleanup, overrides = {} }) {
     description: '自动化测试-校验',
     model_protocols: ['openai'],
     model_endpoint: { schema: 'https', uri: '/v1/models' },
-    models: [],
+    models: ['qa-validate-base'],
     keys: [{ name: 'key-old', key: 'sk-old' }],
     instance_pool: [{ addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT }],
     ...overrides,
@@ -150,7 +178,7 @@ async function setupProvider({ page }) {
     description: '自动化测试-字段校验',
     model_protocols: ['openai'],
     model_endpoint: { schema: 'https', uri: '/v1/models' },
-    models: [],
+    models: ['qa-validate-model'],
     keys: [{ name: 'key-primary', key: 'sk-test' }],
     instance_pool: [{ addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT }],
   });
@@ -287,6 +315,7 @@ test.describe('模型服务商 - PR-V-03 description 长度与控制字符校验
     ).toBe(256);
 
     // 2. 256 字符 → 提交成功，提交体 description 256 字符
+    await fillModels(page);
     await pp.fillInstanceRow(page, 0, {
       addr: IP_ADDR,
       port: IP_PORT,
@@ -310,6 +339,7 @@ test.describe('模型服务商 - PR-V-03 description 长度与控制字符校验
 
     // 2. 清空为留空 → 合法（可选字段），提交成功
     await pp.fillDescription(page, '');
+    await fillModels(page);
     await pp.fillInstanceRow(page, 0, {
       addr: IP_ADDR,
       port: IP_PORT,
@@ -865,9 +895,9 @@ test.describe('模型服务商 - PR-V-12 keys.key 必填与长度校验', () => 
   });
 });
 
-// ---------- PR-V-13：models 回填非空不重复 ----------
+// ---------- PR-V-13：models 必填校验（至少 1 个，非空不重复） ----------
 
-test.describe('模型服务商 - PR-V-13 models 回填非空不重复', () => {
+test.describe('模型服务商 - PR-V-13 models 必填校验（至少 1 个，非空不重复）', () => {
   let cleanup;
 
   test.beforeEach(async ({ page }) => {
@@ -879,37 +909,59 @@ test.describe('模型服务商 - PR-V-13 models 回填非空不重复', () => {
     await cleanup.cleanup(page);
   });
 
-  test('获取回填模型非空不重复，输入只读；空列表提交 models=[] 合法', async ({
+  test('空列表提交被拦截，重复模型名被拦截，合法不重复模型提交通过', async ({
     page,
   }) => {
     const name = uniqueName('provider');
-    await openCreateAndFillBasic(page, name);
+    await openCreateAndFillBasic(page, name, undefined, []);
     await pp.fillInstanceRow(page, 0, {
       addr: IP_ADDR,
       port: IP_PORT,
       weight: IP_WEIGHT,
     });
 
-    // 1. mock 唯一模型列表 → 获取回填 tag 非空且不重复（偏差 8：UI 不去重，mock 传唯一列表）
-    await pp.mockDiscoverModels(page, ['deepseek-chat', 'deepseek-coder']);
-    await pp.discoverModelsAndWait(page);
-    const tags = await pp.modelTagsText(page);
-    expect(tags.length).toBeGreaterThan(0);
-    expect(new Set(tags).size).toBe(tags.length);
-    expect(tags).toEqual(['deepseek-chat', 'deepseek-coder']);
-    await expect(pp.modelsSelectInput(page)).toHaveAttribute(
-      'readonly',
-      /readonly/,
-    );
+    await test.step('1. 空列表提交 → 被拦截、提示 models 必填', async () => {
+      await expectSubmitBlocked(page);
+      await pp.expectFormItemError(page, '模型列表');
+    });
 
-    // 2. 空列表 → tag 经离场过渡异步移除（偏差 8 补充）→ 提交体 models=[]（空数组合法）
-    await pp.mockDiscoverModels(page, []);
-    await pp.discoverModelsAndWait(page);
-    await pp.expectModelTags(page, []);
-    const response = await pp.submitUpsertAndWait(page);
-    expect(response.request().postDataJSON().models).toEqual([]);
-    cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await test.step('2. mock 回填含重复模型名 → 提交被拦截', async () => {
+      await pp.mockDiscoverModels(page, [
+        'deepseek-chat',
+        'deepseek-chat',
+        'deepseek-coder',
+      ]);
+      await pp.discoverModelsAndWait(page);
+      // 偏差 8：UI 不去重 → tags 显示 3 个含重复，提交时校验拦截
+      await expectSubmitBlocked(page);
+      await pp.expectFormItemError(page, '模型列表');
+    });
+
+    await test.step('3. mock 回填不重复模型 → 提交通过，提交体 models 正确', async () => {
+      // 清除步骤 2 残留的 tag（含重复项）
+      const modelCloseIcons = pp
+        .upsertScope(page)
+        .locator('.models-row .el-select .el-tag .el-icon-close');
+      const tagCount = await modelCloseIcons.count();
+      for (let i = 0; i < tagCount; i++) {
+        await modelCloseIcons.first().click();
+        await page.waitForTimeout(100);
+      }
+
+      await pp.mockDiscoverModels(page, ['deepseek-chat', 'deepseek-coder']);
+      await pp.discoverModelsAndWait(page);
+      const tags = await pp.modelTagsText(page);
+      expect(tags.length).toBe(2);
+      expect(new Set(tags).size).toBe(tags.length);
+
+      const response = await pp.submitUpsertAndWait(page);
+      expect(response.request().postDataJSON().models).toEqual([
+        'deepseek-chat',
+        'deepseek-coder',
+      ]);
+      cleanup.trackName(name);
+      await pp.providerTable(page).expectRowVisible(name, 15000);
+    });
   });
 });
 
@@ -1028,5 +1080,150 @@ test.describe('模型服务商 - PR-V-15 tiers / time_ranges 校验', () => {
     expect(
       response.request().postDataJSON().tiers[0].time_ranges[0].weekdays,
     ).toEqual([]);
+  });
+});
+
+// ---------- PR-V-16：protocol_paths 协议键校验 ----------
+
+test.describe('模型服务商 - PR-V-16 protocol_paths 协议键校验', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('协议下拉选项为 model_protocols 中未使用的协议，protocol 为空保存被拦截', async ({ page }) => {
+    const name = uniqueName('provider');
+    await openCreateAndFillBasic(page, name, 'PR-V-16 协议键校验');
+    await pp.selectInstanceMode(page, 'IP');
+    await pp.fillInstanceRow(page, 0, { addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT });
+    await pp.clearProtocols(page);
+    await pp.selectProtocols(page, ['openai', 'anthropic']);
+
+    // 1. 添加一行映射，协议下拉应含 openai+anthropic，填写 openai
+    await pp.addProtocolPath(page);
+    // fillProtocolPathRow.selectOptionExact('openai') selects from available options
+    await pp.fillProtocolPathRow(page, 0, { protocol: 'openai', path: '/v1' });
+
+    // 2. 添加第 2 行，此时下拉应只含 anthropic（openai 已被使用）
+    await pp.addProtocolPath(page);
+    await pp.fillProtocolPathRow(page, 1, { protocol: 'anthropic', path: '/v2' });
+
+    // 3. 所有协议已使用，添加按钮禁用
+    await pp.expectProtocolPathAddDisabled(page);
+
+    // 4. 提交验证
+    const response = await pp.submitUpsertAndWait(page);
+    const body = response.request().postDataJSON();
+    expect(body.protocol_paths).toEqual({ openai: '/v1', anthropic: '/v2' });
+
+    cleanup.trackName(name);
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
+  });
+
+  test('addProtocolPath 自动选中协议，填写路径后提交成功', async ({ page }) => {
+    const name = uniqueName('provider');
+    await openCreateAndFillBasic(page, name, 'PR-V-16 协议空值');
+    await pp.selectInstanceMode(page, 'IP');
+    await pp.fillInstanceRow(page, 0, { addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT });
+    await pp.clearProtocols(page);
+    await pp.selectProtocols(page, ['openai']);
+
+    // addProtocolPath 会自动选中第一个可用协议（openai），无需手动选协议
+    await pp.addProtocolPath(page);
+    await pp.fillProtocolPathRow(page, 0, { protocol: 'openai', path: '/v1' });
+    const response = await pp.submitUpsertAndWait(page);
+    const body = response.request().postDataJSON();
+    expect(body.protocol_paths).toEqual({ openai: '/v1' });
+
+    cleanup.trackName(name);
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
+  });
+});
+
+// ---------- PR-V-17：protocol_paths 路径格式校验 ----------
+
+test.describe('模型服务商 - PR-V-17 protocol_paths 路径格式校验', () => {
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('非法路径格式（不以 / 开头/以 / 结尾/含 ?$#..）拦截，合法路径通过', async ({ page }) => {
+    const name = uniqueName('provider');
+    await openCreateAndFillBasic(page, name, 'PR-V-17 路径格式校验');
+    await pp.selectInstanceMode(page, 'IP');
+    await pp.fillInstanceRow(page, 0, { addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT });
+    await pp.clearProtocols(page);
+    await pp.selectProtocols(page, ['openai']);
+    await pp.addProtocolPath(page);
+
+    // 1. 不以 / 开头
+    await pp.fillProtocolPathRow(page, 0, { protocol: 'openai', path: 'v1' });
+    await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathMustStartSlash);
+    await expectSubmitBlocked(page);
+
+    // 2. 以 / 结尾（长度 >1）
+    await pp.fillProtocolPathRow(page, 0, { path: '/v1/' });
+    await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathNoTrailingSlash);
+    await expectSubmitBlocked(page);
+
+    // 3. 含 ?（/v1?foo=bar）
+    await pp.fillProtocolPathRow(page, 0, { path: '/v1?foo=bar' });
+    await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathInvalidChars);
+    await expectSubmitBlocked(page);
+
+    // 4. 含 #（/v1#test）
+    await pp.fillProtocolPathRow(page, 0, { path: '/v1#test' });
+    await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathInvalidChars);
+    await expectSubmitBlocked(page);
+
+    // 5. 含 ..（/../v1）
+    await pp.fillProtocolPathRow(page, 0, { path: '/../v1' });
+    await pp.expectProtocolPathValueError(page, 0, pp.DOC.protocolPathInvalidChars);
+    await expectSubmitBlocked(page);
+
+    // 6. 合法值 /v1 → 提交成功
+    await pp.fillProtocolPathRow(page, 0, { path: '/v1' });
+    let response = await pp.submitUpsertAndWait(page);
+    let body = response.request().postDataJSON();
+    expect(body.protocol_paths).toEqual({ openai: '/v1' });
+
+    cleanup.trackName(name);
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
+  });
+
+  test('合法路径 /v1/chat 和 /（仅根路径）均通过校验', async ({ page }) => {
+    const name = uniqueName('provider');
+    await openCreateAndFillBasic(page, name, 'PR-V-17 合法路径');
+    await pp.selectInstanceMode(page, 'IP');
+    await pp.fillInstanceRow(page, 0, { addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT });
+    await pp.clearProtocols(page);
+    await pp.selectProtocols(page, ['openai']);
+    await pp.addProtocolPath(page);
+
+    // /v1/chat
+    await pp.fillProtocolPathRow(page, 0, { protocol: 'openai', path: '/v1/chat' });
+    let response = await pp.submitUpsertAndWait(page);
+    let body = response.request().postDataJSON();
+    expect(body.protocol_paths).toEqual({ openai: '/v1/chat' });
+
+    cleanup.trackName(name);
+    await pp.filterListSearch(page, '名称', name);
+    await pp.providerTable(page).expectRowVisible(name, 15000);
   });
 });

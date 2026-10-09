@@ -901,34 +901,6 @@ async function getModelKeyRowOptions(
   return texts.filter((t) => t !== '');
 }
 
-// 转发模型（el-select multiple）下拉选项为空断言（RM-BC-74）
-async function expectForwardModelsDropdownEmpty(
-  page,
-  empty,
-  drawerTitle = DRAWER_TITLE.createBusinessCluster,
-) {
-  const body = modelStepBody(page, drawerTitle);
-  const item = body
-    .locator('.ivu-form-item')
-    .filter({ hasText: DOC_BUSINESS_CLUSTER.forwardModelsLabel })
-    .first();
-  const select = item.locator('.el-select').first();
-  await expect(select).toBeVisible({ timeout: 10000 });
-  await select.click();
-  await page.waitForTimeout(300);
-  const items = page.locator(
-    '.el-select-dropdown:visible .el-select-dropdown__item',
-  );
-  const count = await items.count();
-  await page.keyboard.press('Escape');
-  await waitAfterResourceMutation(page, 200);
-  if (empty) {
-    expect(count).toBe(0);
-  } else {
-    expect(count).toBeGreaterThan(0);
-  }
-}
-
 // 所属服务商下拉选项断言（RM-BC-71：展开时选项为全部服务商名）
 async function expectProviderDropdownOptions(
   page,
@@ -2027,7 +1999,6 @@ module.exports = {
   expectSelectedForwardModels,
   expectProviderKeyOptionsEmpty,
   getModelKeyRowOptions,
-  expectForwardModelsDropdownEmpty,
   expectProviderDropdownOptions,
   waitForClusterCreateRequest,
   mountSubCluster,

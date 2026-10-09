@@ -21,7 +21,7 @@
  * - MP-V-12 prices 上限校验（价格 × 1e8 < 2^53）
  * - MP-C-05 编辑模型定价-prices 键级合并
  *
- * 验收来源：docs/model-prices/02-功能测试用例/07-变更回归-价格精度与键级合并.md
+ * 验收来源：docs/model-prices/02-功能测试用例/07-价格精度与键级合并.md
  *
  * 运行：PW_WORKERS=1 npx playwright test tests/model-prices/test_08_model_price_sci_and_merge.spec.js
  */

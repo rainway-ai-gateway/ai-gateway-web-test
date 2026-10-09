@@ -172,9 +172,28 @@
 - 根因：`pageTable` 对对象字段排序直接返回 0；嵌套 key（如 `quota_plan.unlimited`）无法读取
 - 修复：列表数据扁平化排序字段 + `pageTable` 支持点路径与布尔值排序
 
+#### 环境限制与自动化等价验证
+
+- 「配额」列显示的已用量来自数据面真实消耗：
+  `quota_plan.balance.used = quota - Redis(QUOTA_<key>)`（见 `model/api_key/api_key.go` 的 `fillQuotaBalance`）。
+- 本环境 `ai-gateway-runtime/conf/ai_gateway_api.toml` 中 `[RedisConf] Bns = "mock"`，
+  Redis 为进程内内存实现（`stateful/config_redis.go` → `NewMockRedisClient()`）；
+  新建 API-Key 不经过数据面消耗，`balance.used` 恒为 0，
+  **控制面无法构造出「已用量不同」的前置数据**。
+- 因此自动化改以数据可控的**「配额类型」列**做**等价验证**（该列同为嵌套字段
+  `quota_plan.unlimited` 扁平化而来，布尔值，可用 `unlimited: true/false` 混合造数控制），
+  与「挂载 Entity」列一并验证嵌套字段列排序：
+  - 「配额类型」造数按 `[无限, 有限, 无限]` 排列，升序结果为 `[有限, 无限, 无限]`、
+    降序为 `[无限, 无限, 有限]`，两者均不等于原始顺序；
+  - 「挂载 Entity」造 3 个不同 Entity，验证升序为名称 `localeCompare` 升序、降序为逆序。
+- 「配额」列（已用量）排序保留为**真实环境（非 mock Redis）手工验证项**，自动化不覆盖。
+
 #### 测试数据
 
-- 使用环境中已有的多条 API-Key 数据，或预先创建 3 条带不同配额用量、不同挂载 Entity 的 API-Key
+- 使用环境中已有的多条 API-Key 数据，或预先创建 3 条带不同挂载 Entity 的 API-Key；
+  自动化在用例前置中通过 OpenAPI 创建：1 个 Entity 类型 + 3 个不同名称的 Entity +
+  3 条 API-Key（挂载上述 3 个 Entity，配额类型分别为 无限/有限/无限），
+  用例结束后按 API-Key → Entity → Entity 类型 逆序清理
 
 ---
 
@@ -196,4 +215,4 @@ npx playwright test tests/entity-management/test_07_page_table_interaction.spec.
 | PT-02 | 编辑后搜索条件应被清空 | 验证编辑操作后搜索框被清空 |
 | PT-03 | 筛选条件下添加后搜索条件应被清空 | 验证添加操作后筛选下拉框被重置 |
 | PT-04 | 编辑第二页数据后页码应回到第一页 | 验证跨页编辑后页码重置为 1 |
-| PT-05 | 嵌套字段列排序应生效 | 验证配额、挂载 Entity 等列排序后行顺序变化 |
+| PT-05 | 嵌套字段列排序应生效 | 前置造数 3 条挂载不同 Entity、配额类型混合的 API-Key；验证配额类型、挂载 Entity 列升/降序排序生效（配额列受 mock Redis 限制，见「环境限制与自动化等价验证」） |

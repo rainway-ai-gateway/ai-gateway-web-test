@@ -42,6 +42,22 @@ class ElSelectComponent {
     dropdownItems() {
         return this.page.locator(constants_1.EL_SELECT_DROPDOWN_VISIBLE);
     }
+    /**
+     * 读取「本组件自身」下拉的选项文本
+     * 下拉层挂载在 body，同一页面可能同时存在多个可见下拉（如先前打开过的其它
+     * el-select），全局 dropdownItems() 会把它们的选项一并收集；此处按本组件的
+     * popper（$refs.popper.$el）限定读取范围
+     */
+    async ownDropdownOptions() {
+        return this.trigger.evaluate((el) => {
+            const popper = el.__vue__ && el.__vue__.$refs ? el.__vue__.$refs.popper : null;
+            const root = popper && popper.$el;
+            if (!root) {
+                return [];
+            }
+            return Array.from(root.querySelectorAll(".el-select-dropdown__item")).map((item) => (item.textContent || "").trim());
+        });
+    }
     async open() {
         await (0, test_1.expect)(this.trigger).toBeVisible({ timeout: 15000 });
         await this.trigger.click();

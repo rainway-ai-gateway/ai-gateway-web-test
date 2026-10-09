@@ -58,7 +58,7 @@ test.describe('模型服务商 - PR-DEL-01 删除服务商-成功（未被引用
       description: '自动化测试-删除',
       model_protocols: ['openai'],
       model_endpoint: { schema: 'https', uri: '/v1/models' },
-      models: [],
+      models: ['qa-delete-model'],
       keys: [{ name: 'key-primary', key: 'sk-test' }],
       instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
     });
@@ -82,8 +82,9 @@ test.describe('模型服务商 - PR-DEL-01 删除服务商-成功（未被引用
     const response = await pp.confirmDeleteAndWait(page, providerName);
     const deleteBody = await response.json();
     expect(deleteBody.ErrNum).toBe(200);
-    // 02 文档验收「Data 为 null」，后端实际返回 {"deleted":true}，语义均为删除成功
-    if (deleteBody.Data !== null) {
+    // 02 文档验收「Data 为 null」；后端 delete.go 实际返回 nil, nil，响应体无 Data 字段
+    // （deleteBody.Data === undefined）。兼容两种形态：无 Data，或 Data.deleted 为 true
+    if (deleteBody.Data !== undefined && deleteBody.Data !== null) {
       expect(deleteBody.Data).toMatchObject({ deleted: true });
     }
 
@@ -184,7 +185,7 @@ test.describe('模型服务商 - PR-DEL-03 删除服务商-取消', () => {
       description: '自动化测试-删除-取消',
       model_protocols: ['openai'],
       model_endpoint: { schema: 'https', uri: '/v1/models' },
-      models: [],
+      models: ['qa-delete-cancel'],
       keys: [{ name: 'key-primary', key: 'sk-test' }],
       instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
     });
@@ -251,7 +252,7 @@ test.describe('模型服务商 - PR-DEL-04 删除服务商-有 model-prices 记�
       description: '自动化测试-删除-有定价记录',
       model_protocols: ['openai'],
       model_endpoint: { schema: 'https', uri: '/v1/models' },
-      models: [],
+      models: ['qa-delete-with-price'],
       keys: [{ name: 'key-primary', key: 'sk-test' }],
       instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
     });

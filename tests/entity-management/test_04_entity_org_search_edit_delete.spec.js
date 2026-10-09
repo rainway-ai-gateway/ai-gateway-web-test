@@ -614,13 +614,13 @@ entityOrgDescribe(
       await test.step('3. 点击"确定"按钮', async () => {
         const result = await utils.confirmDeleteEntityExpectBlocked(page);
         await utils.waitAfterEntityAction(page, 500);
-        // 后端若返回 200（未按 OpenAPI 409 拦截），标记跳过，避免与其它修复红灯混杂
-        test
-          .info()
-          .skip(
-            !!(result && result.productGap),
-            `产品未拦截挂载 API-Key 的 Entity 删除(ErrNum=${result && result.errNum})，期望 409`,
+        // 后端若返回 200（未按 OpenAPI 409 拦截），说明产品行为与预期不符，记录跳过
+        if (result && result.productGap) {
+          test.skip(
+            true,
+            `产品未拦截挂载 API-Key 的 Entity 删除(ErrNum=${result.errNum})，期望 409`,
           );
+        }
       });
 
       await test.step('4. 验证删除失败，Entity 仍在列表中', async () => {
