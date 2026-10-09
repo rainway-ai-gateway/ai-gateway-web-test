@@ -78,6 +78,9 @@ const LABEL = {
   supportedParameters: '支持参数',
   limits: '限制对象',
   prices: '价格',
+  priceObject: '默认价格',
+  tierPriceObject: '分时段价格',
+  tierObject: '时段对象',
   metadata: '元数据',
   source: '价格来源',
   notes: '备注',
@@ -109,6 +112,7 @@ const MSG = {
   importSucc: '导入成功',
   importFailed: '导入失败',
   noPricingForProvider: '未找到提供商 {provider} 的模型定价',
+  modelSearchNeedsProviderMode: '按模型名查询需同时选择提供商与模型模式',
 };
 
 const DRAWER_TITLE = {
@@ -212,6 +216,7 @@ const LIMIT_KEY_OPTIONS = [
   'max_tokens',
 ];
 
+// 与 ModelPriceUpsert.vue 中 PRICE_KEY_OPTIONS 枚举常量保持一致（30 键）
 const PRICE_KEY_OPTIONS = [
   'input_cost_per_token',
   'output_cost_per_token',
@@ -227,7 +232,14 @@ const PRICE_KEY_OPTIONS = [
   'input_cost_per_token_above_512k_tokens',
   'output_cost_per_token_above_512k_tokens',
   'output_cost_per_image',
+  'input_cost_per_image_token',
   'output_cost_per_pixel',
+  'output_cost_per_image_low_quality',
+  'output_cost_per_image_high_quality',
+  'input_cost_per_audio_per_second',
+  'input_cost_per_audio_token',
+  'output_cost_per_audio_token',
+  'input_cost_per_video_per_second',
   'output_cost_per_second',
   'input_cost_per_query',
   'search_context_cost_per_query',
@@ -236,9 +248,6 @@ const PRICE_KEY_OPTIONS = [
   'output_cost_per_image_hd',
   'output_cost_per_video',
   'output_cost_per_video_per_second',
-  'input_cost_per_image_token',
-  'input_cost_per_audio_token',
-  'output_cost_per_audio_token',
 ];
 
 // 列表搜索行 placeholder
@@ -286,6 +295,24 @@ async function ensureLocalStorageSession(page) {
 async function gotoModelPricePage(page) {
   await rc.ensureAppSession(page);
   await page.goto(getAppBaseUrl() + '/model-prices');
+  await page.waitForLoadState('domcontentloaded');
+  await ensureLocalStorageSession(page);
+  await expect(page.getByRole('button', { name: '新增定价' })).toBeVisible({
+    timeout: 15000,
+  });
+  await page.waitForTimeout(500);
+}
+
+/**
+ * 直达模型定价列表并携带 provider 筛选参数（MP-LINK-02）：
+ * 模拟从服务商列表「查询模型价格」跳转后的落地页（index.vue 读取
+ * $route.query.provider → applyQueryFromRoute 应用筛选）
+ */
+async function gotoModelPricePageWithProvider(page, provider) {
+  await rc.ensureAppSession(page);
+  await page.goto(
+    getAppBaseUrl() + '/model-prices?provider=' + encodeURIComponent(provider),
+  );
   await page.waitForLoadState('domcontentloaded');
   await ensureLocalStorageSession(page);
   await expect(page.getByRole('button', { name: '新增定价' })).toBeVisible({
@@ -490,6 +517,62 @@ async function getBaseModelValue(page) {
   return getInputByLabelValue(page, LABEL.baseModel);
 }
 
+// ---------- provider 自动补全（iView AutoComplete） ----------
+
+/**
+ * provider 字段为 iView AutoComplete（可下拉选择 / 手写），候选来自
+ * GET /providers/actions/get-provider-names（ModelPriceUpsert.fetchProviderNames），
+ * 非 transfer 模式，下拉面板渲染在组件内部（.ivu-auto-complete .ivu-select-dropdown，
+ * 选项为 li.ivu-select-item）
+ */
+function providerAutoComplete(page) {
+  return upsertFormItem(upsertScope(page), LABEL.provider)
+    .locator('.ivu-auto-complete')
+    .first();
+}
+
+/** 聚焦 provider 自动补全框，展开全部候选（on-focus 清空过滤文本） */
+async function openProviderDropdown(page) {
+  const input = providerAutoComplete(page).locator('input').first();
+  await expect(input).toBeVisible({ timeout: 10000 });
+  await input.click();
+  await page.waitForTimeout(300);
+}
+
+/** 读取当前展开的 provider 自动补全候选文本列表 */
+async function getProviderDropdownOptions(page) {
+  const panel = providerAutoComplete(page).locator('.ivu-select-dropdown');
+  await expect(panel).toBeVisible({ timeout: 10000 });
+  const items = panel.locator('li.ivu-select-item');
+  const count = await items.count();
+  const result = [];
+  for (let i = 0; i < count; i += 1) {
+    result.push(((await items.nth(i).textContent()) || '').trim());
+  }
+  return result;
+}
+
+/** 断言候选包含指定服务商名（MP-LINK-01：候选含已创建服务商） */
+async function expectProviderCandidate(page, provider) {
+  const options = await getProviderDropdownOptions(page);
+  expect(options, '提供商自动补全候选应包含服务商 ' + provider).toContain(
+    provider,
+  );
+}
+
+/** 从自动补全下拉中点选指定候选（与手写填入等价的下拉选中路径） */
+async function selectProviderCandidate(page, provider) {
+  const panel = providerAutoComplete(page).locator('.ivu-select-dropdown');
+  await expect(panel).toBeVisible({ timeout: 10000 });
+  const escaped = provider.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  await panel
+    .locator('li.ivu-select-item')
+    .filter({ hasText: new RegExp('^\\s*' + escaped + '\\s*$') })
+    .first()
+    .click();
+  await page.waitForTimeout(300);
+}
+
 // mode / capabilities / supported_parameters 为 el-select
 function modeSelect(page) {
   return ElSelectComponent.fromFormItem(page, upsertScope(page), LABEL.mode);
@@ -681,6 +764,154 @@ async function getPriceKeyDropdownOptions(page) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
   return result;
+}
+
+// ---------- 分时段价格（tier_prices）配置块 ----------
+
+/**
+ * 「价格」Card 内的双配置块容器（默认价格 + 分时段价格，两个同级 .price-config-block）
+ */
+function priceConfigGroup(page) {
+  return pricesCard(page).locator('.price-config-group');
+}
+
+function priceConfigBlocks(page) {
+  return priceConfigGroup(page).locator('.price-config-block');
+}
+
+/** ① 默认价格块（prices，必填） */
+function defaultPriceBlock(page) {
+  return priceConfigBlocks(page).nth(0);
+}
+
+/** ② 分时段价格块（tier_prices.peak，可选） */
+function tierPriceBlock(page) {
+  return priceConfigBlocks(page).nth(1);
+}
+
+/** 分时段价格块内的动态价格行（kv-table tbody tr，行结构同默认价格行） */
+function tierRows(page) {
+  return tierPriceBlock(page).locator('.kv-table tbody tr');
+}
+
+async function addTierPriceRow(page) {
+  await tierPriceBlock(page)
+    .getByRole('button', { name: /添加价格/ })
+    .click();
+  await page.waitForTimeout(200);
+}
+
+async function removeTierPriceRow(page, index) {
+  await tierRows(page)
+    .nth(index)
+    .getByRole('button', { name: '删除' })
+    .click();
+  await page.waitForTimeout(200);
+}
+
+async function expectTierPriceRowCount(page, count) {
+  await expect(tierRows(page)).toHaveCount(count);
+}
+
+async function fillTierPriceRow(page, index, payload) {
+  const row = tierRows(page).nth(index);
+  await expect(row).toBeVisible({ timeout: 10000 });
+  if (payload.key !== undefined) {
+    const keySel = new ElSelectComponent(
+      page,
+      row.locator('.el-select').first(),
+    );
+    await keySel.selectOptionFilterable(payload.key);
+  }
+  if (payload.value !== undefined) {
+    const valueInput = row.locator('td').nth(1).locator('input').first();
+    await expect(valueInput).toBeVisible({ timeout: 10000 });
+    await valueInput.click({ clickCount: 3 });
+    await valueInput.fill(String(payload.value));
+    await valueInput.blur();
+  }
+  await page.waitForTimeout(200);
+}
+
+async function getTierPriceRowValues(page, index) {
+  const row = tierRows(page).nth(index);
+  const keySel = row.locator('.el-select').first();
+  const keyInput = keySel.locator('input').first();
+  const keyFromInput = (await keyInput.inputValue().catch(() => '')) || '';
+  const keyText = await keySel
+    .locator('.el-input__inner, .el-select__selection')
+    .first()
+    .textContent();
+  const value = await row
+    .locator('td')
+    .nth(1)
+    .locator('input')
+    .first()
+    .inputValue();
+  return { key: (keyFromInput || keyText || '').trim(), value };
+}
+
+async function findTierPriceRowIndexByKey(page, key) {
+  const rows = tierRows(page);
+  const count = await rows.count();
+  for (let i = 0; i < count; i += 1) {
+    const vals = await getTierPriceRowValues(page, i);
+    if (vals.key === key) {
+      return i;
+    }
+  }
+  throw new Error('未找到分时段价格键: ' + key);
+}
+
+async function expectTierPriceRowInputValue(page, index, expected) {
+  const { value } = await getTierPriceRowValues(page, index);
+  expect(value).toBe(String(expected));
+}
+
+/** 分时段价格块校验错误（.error-text，如 tierValueInvalid / tierOverflow / tierDuplicateKey） */
+async function expectTierError(page, message) {
+  const err = tierPriceBlock(page).locator('.error-text');
+  if (message !== undefined) {
+    await expect(err.filter({ hasText: message }).first()).toBeVisible({
+      timeout: 10000,
+    });
+    return;
+  }
+  await expect(err.first()).toBeVisible({ timeout: 10000 });
+}
+
+async function expectTierErrorHidden(page) {
+  await expect(tierPriceBlock(page).locator('.error-text')).toBeHidden();
+}
+
+/**
+ * 获取分时段价格块第一个价格行的键名下拉选项（MP-T-10 内嵌下拉枚举校验）
+ * 同 getPriceKeyDropdownOptions，按本 select 自身 popper 限定读取
+ */
+async function getTierPriceKeyDropdownOptions(page) {
+  const keySel = new ElSelectComponent(
+    page,
+    tierRows(page).first().locator('.el-select').first(),
+  );
+  await keySel.open();
+  const result = await keySel.ownDropdownOptions();
+  // 关闭下拉，避免遮挡后续操作
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  return result;
+}
+
+/**
+ * 悬停分时段价格块的 ios-help-circle-outline 图标，断言 Tooltip 展示 fallback 语义文案
+ * （iView Tooltip transfer 挂载在 body，popper 以文案过滤定位）
+ */
+async function hoverTierPriceTooltip(page) {
+  await tierPriceBlock(page).locator('.price-config-help-icon').hover();
+  const popper = page
+    .locator('.ivu-tooltip-popper:visible')
+    .filter({ hasText: MSG.tierPriceTip });
+  await expect(popper.first()).toBeVisible({ timeout: 10000 });
+  return popper.first();
 }
 
 /**
@@ -1079,6 +1310,48 @@ async function viewKvEntries(page, cardTitle) {
   return entries;
 }
 
+/**
+ * 读取详情页分时段价格分组（MP-T-08）：
+ * 返回 [{ label: '时段对象：忙时（peak）', entries: [{ key, value }] }]
+ * 无 tier_prices 或 tier 值为空对象时返回 []
+ */
+async function viewTierPriceGroups(page) {
+  const scope = viewScope(page);
+  await expect(scope).toBeVisible({ timeout: 10000 });
+  const groups = scope.locator('.tier-price-group');
+  const count = await groups.count();
+  const result = [];
+  for (let i = 0; i < count; i += 1) {
+    const label = (
+      (await groups.nth(i).locator('.tier-price-label').textContent()) || ''
+    ).trim();
+    const rows = groups.nth(i).locator('.kv-table tbody tr');
+    const rowCount = await rows.count();
+    const entries = [];
+    for (let j = 0; j < rowCount; j += 1) {
+      const tds = rows.nth(j).locator('td');
+      entries.push({
+        key: ((await tds.nth(0).textContent()) || '').trim(),
+        value: ((await tds.nth(1).textContent()) || '').trim(),
+      });
+    }
+    result.push({ label, entries });
+  }
+  return result;
+}
+
+/** 详情页分时段价格区展示空占位「-」（MP-T-08：无 tier_prices 记录不展示空分组） */
+async function expectViewTierEmpty(page) {
+  const scope = viewScope(page);
+  await expect(scope).toBeVisible({ timeout: 10000 });
+  const row = scope
+    .locator('.info-row')
+    .filter({ hasText: LABEL.tierPriceObject })
+    .first();
+  await expect(row.locator('.empty-text')).toBeVisible({ timeout: 10000 });
+  await expect(scope.locator('.tier-price-group')).toHaveCount(0);
+}
+
 async function viewTags(page, label) {
   // capabilities / supported_parameters 标签位于「基本信息」卡片内的 info-row 中
   // （ModelPriceView 布局），按 label 精确定位行，避免把两行 tag 一起读出来
@@ -1288,6 +1561,7 @@ module.exports = {
   COLUMN_HEADERS,
   getAppBaseUrl,
   gotoModelPricePage,
+  gotoModelPricePageWithProvider,
   modelPriceTable,
   messages,
   expectMessage,
@@ -1312,6 +1586,10 @@ module.exports = {
   getProviderValue,
   getModelValue,
   getBaseModelValue,
+  openProviderDropdown,
+  getProviderDropdownOptions,
+  expectProviderCandidate,
+  selectProviderCandidate,
   selectMode,
   expectModeSelected,
   selectCapabilities,
@@ -1323,6 +1601,22 @@ module.exports = {
   getMultiDropdownOptions,
   getModeDropdownOptions,
   getPriceKeyDropdownOptions,
+  priceConfigGroup,
+  priceConfigBlocks,
+  defaultPriceBlock,
+  tierPriceBlock,
+  tierRows,
+  addTierPriceRow,
+  removeTierPriceRow,
+  expectTierPriceRowCount,
+  fillTierPriceRow,
+  getTierPriceRowValues,
+  findTierPriceRowIndexByKey,
+  expectTierPriceRowInputValue,
+  expectTierError,
+  expectTierErrorHidden,
+  getTierPriceKeyDropdownOptions,
+  hoverTierPriceTooltip,
   setModeViaModel,
   addLimitRow,
   addPriceRow,
@@ -1353,6 +1647,8 @@ module.exports = {
   expectViewScopeHidden,
   viewInfoValue,
   viewKvEntries,
+  viewTierPriceGroups,
+  expectViewTierEmpty,
   viewTags,
   importScope,
   expectImportScopeVisible,

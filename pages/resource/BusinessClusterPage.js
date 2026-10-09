@@ -417,6 +417,18 @@ async function waitForClusterCreateRequest(page, action) {
   return request;
 }
 
+// 等待编辑集群的 PATCH 请求（RM-BC-109 编辑场景）
+async function waitForClusterPatchRequest(page, action) {
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.method() === 'PATCH' && req.url().includes('/clusters/'),
+      { timeout: 30000 },
+    ),
+    action(),
+  ]);
+  return request;
+}
+
 async function navigateToHealthStep(
   page,
   clusterName,
@@ -703,8 +715,16 @@ async function selectAllForwardModels(
     body,
     DOC_BUSINESS_CLUSTER.forwardModelsLabel,
   );
-  await select.open();
-  await select.dropdownItems().filter({ hasText: '全选' }).first().click();
+  // 若下拉已处于打开状态（如刚完成子集选择，multiple 选中后下拉保持打开），
+  // 再触发 open() 的 toggle 会把下拉关掉，导致后续点击超时；仅在下拉未打开时才打开。
+  if ((await select.dropdownItems().count()) === 0) {
+    await select.open();
+  }
+  await select
+    .dropdownItems()
+    .filter({ hasText: '全选' })
+    .first()
+    .click({ force: true, timeout: 10000 });
   await page.waitForTimeout(300);
 }
 
@@ -1786,27 +1806,21 @@ async function setBalanceMode(page, mode, drawerTitle = DRAWER_TITLE.createBusin
   await waitAfterResourceMutation(page, 300);
 }
 
-// iView Select 显示中文标签，需映射回英文值
-const SCHEDULING_PROFILE_LABEL_MAP = {
-  '延迟优先': 'latency-first',
-  '平衡': 'balanced',
-  '吞吐优先': 'throughput-first',
-};
-const CACHE_AFFINITY_LABEL_MAP = {
-  '低': 'low',
-  '中': 'medium',
-  '高': 'high',
-};
-const SCHEDULING_PROFILE_VALUE_MAP = {
-  'latency-first': '延迟优先',
-  'balanced': '平衡',
-  'throughput-first': '吞吐优先',
-};
-const CACHE_AFFINITY_VALUE_MAP = {
-  'low': '低',
-  'medium': '中',
-  'high': '高',
-};
+// iView Select 选项文案为「英文值（中文注释）」，如下拉项 "balanced（均衡，默认）"。
+// 2026-10-09 v0.6 破坏性重构：load_profile 枚举 queue-first/balanced/kv-first；
+// affinity 枚举 off/low/medium/high（旧 latency-first 等枚举已移除）。
+// 剥离选项中文注释，取英文值："balanced（均衡，默认）" -> "balanced"
+function stripOptionComment(text) {
+  const raw = (text || '').trim();
+  const parenIndex = raw.indexOf('（');
+  return (parenIndex > 0 ? raw.substring(0, parenIndex) : raw).trim();
+}
+
+// 在均衡模式 Card 内按 label 定位表单控件（新字段按 label 精确定位，
+// 避免 flow_control 嵌套卡片内 InputNumber 干扰 nth 序号）
+function eppFormItem(card, label) {
+  return card.locator('.ivu-form-item').filter({ hasText: label }).first();
+}
 
 // 获取 epp_config 当前值
 async function getEppConfigValues(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
@@ -1831,32 +1845,81 @@ async function getEppConfigValues(page, drawerTitle = DRAWER_TITLE.createBusines
     .nth(1)
     .evaluate((el) => el.classList.contains('ivu-switch-checked'))
     .catch(() => false);
+  const fallbackOnEmpty = await eppFormItem(card, DOC_BUSINESS_CLUSTER.fallbackOnEmptyLabel)
+    .locator('.ivu-switch')
+    .first()
+    .evaluate((el) => el.classList.contains('ivu-switch-checked'))
+    .catch(() => false);
   const kvCacheUtilizationMax = await card
     .locator('.ivu-input-number-input')
     .first()
     .inputValue()
     .catch(() => '');
+  const waitingQueueMax = await eppFormItem(
+    card,
+    DOC_BUSINESS_CLUSTER.waitingQueueMaxLabel,
+  )
+    .locator('.ivu-input-number-input')
+    .inputValue()
+    .catch(() => '');
+  const runningRequestsMax = await eppFormItem(
+    card,
+    DOC_BUSINESS_CLUSTER.runningRequestsMaxLabel,
+  )
+    .locator('.ivu-input-number-input')
+    .inputValue()
+    .catch(() => '');
+  const metricsStalenessThresholdMs = await eppFormItem(
+    card,
+    DOC_BUSINESS_CLUSTER.metricsStalenessThresholdMsLabel,
+  )
+    .locator('.ivu-input-number-input')
+    .inputValue()
+    .catch(() => '');
   return {
-    schedulingProfile: SCHEDULING_PROFILE_LABEL_MAP[(schedulingProfile || '').trim()] || (schedulingProfile || '').trim(),
-    cacheAffinity: CACHE_AFFINITY_LABEL_MAP[(cacheAffinity || '').trim()] || (cacheAffinity || '').trim(),
+    schedulingProfile: stripOptionComment(schedulingProfile),
+    cacheAffinity: stripOptionComment(cacheAffinity),
     prefixCacheAffinity,
     sessionAffinityEnabled,
+    fallbackOnEmpty,
     kvCacheUtilizationMax,
+    waitingQueueMax,
+    runningRequestsMax,
+    metricsStalenessThresholdMs,
   };
+}
+
+// 按 label 定位 Card 内 InputNumber 输入框并填值（先清空，失焦触发 min/precision 约束）
+async function fillEppNumberInput(card, label, value) {
+  const input = eppFormItem(card, label).locator('.ivu-input-number-input').first();
+  await input.fill('');
+  await input.fill(String(value));
+  await input.blur();
+}
+
+// 按 label 定位 Card 内 switch 并切换到目标状态
+async function setEppSwitchByLabel(card, label, target) {
+  const switchEl = eppFormItem(card, label).locator('.ivu-switch').first();
+  const isChecked = await switchEl.evaluate((el) =>
+    el.classList.contains('ivu-switch-checked'),
+  );
+  if (target !== isChecked) {
+    await switchEl.click();
+  }
 }
 
 // 设置 epp_config 各字段值
 async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
   const card = balanceModeCard(page, drawerTitle);
-  
+
   if (values.schedulingProfile !== undefined) {
-    // 第2个 Select（第1个是 balance_mode）；使用中文标签匹配下拉选项
+    // 第2个 Select（第1个是 balance_mode）；选项文案以英文值开头，直接按英文值匹配
     const selects = card.locator('.ivu-select-selection');
     await selects.nth(1).click();
     await page.waitForTimeout(200);
     await page
       .locator('.ivu-select-dropdown:visible .ivu-select-item')
-      .filter({ hasText: SCHEDULING_PROFILE_VALUE_MAP[values.schedulingProfile] || values.schedulingProfile })
+      .filter({ hasText: values.schedulingProfile })
       .first()
       .click();
     await page.keyboard.press('Escape');
@@ -1869,7 +1932,7 @@ async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusi
     await page.waitForTimeout(200);
     await page
       .locator('.ivu-select-dropdown:visible .ivu-select-item')
-      .filter({ hasText: CACHE_AFFINITY_VALUE_MAP[values.cacheAffinity] || values.cacheAffinity })
+      .filter({ hasText: values.cacheAffinity })
       .first()
       .click();
     await page.keyboard.press('Escape');
@@ -1909,6 +1972,39 @@ async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusi
     await inputs.first().fill('');
     await inputs.first().fill(String(values.kvCacheUtilizationMax));
     await inputs.first().blur();
+    await waitAfterResourceMutation(page, 200);
+  }
+  // ===== RM-BC-104~107 新增 EPP 调度参数字段 =====
+  if (values.waitingQueueMax !== undefined) {
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.waitingQueueMaxLabel,
+      values.waitingQueueMax,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.runningRequestsMax !== undefined) {
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.runningRequestsMaxLabel,
+      values.runningRequestsMax,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.fallbackOnEmpty !== undefined) {
+    await setEppSwitchByLabel(
+      card,
+      DOC_BUSINESS_CLUSTER.fallbackOnEmptyLabel,
+      values.fallbackOnEmpty,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.metricsStalenessThresholdMs !== undefined) {
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.metricsStalenessThresholdMsLabel,
+      values.metricsStalenessThresholdMs,
+    );
     await waitAfterResourceMutation(page, 200);
   }
 }
@@ -2001,6 +2097,7 @@ module.exports = {
   getModelKeyRowOptions,
   expectProviderDropdownOptions,
   waitForClusterCreateRequest,
+  waitForClusterPatchRequest,
   mountSubCluster,
   unmountSubCluster,
   fillModelStep,

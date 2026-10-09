@@ -102,6 +102,8 @@ const DOC = {
   listHeaders: COLUMN_HEADERS,
   createButton: '添加服务商',
   pricingTiersTitle: '分段计价配置',
+  // PR-LINK-01/06：行操作「查询模型价格」跳转模型定价列表（联动 ModelPrice.list）
+  viewModelPrices: '查询模型价格',
   defaultTimeZone: 'Asia/Shanghai',
   defaultRange: { weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '12:00' },
   instanceModeIp: 'IP',
@@ -564,6 +566,39 @@ async function submitUpsertAndWait(page, { expectSuccess = true } = {}) {
   return response;
 }
 
+/**
+ * 提交编辑表单并等待 PATCH /providers/{name} 响应 + 成功提示 + 抽屉关闭（PR-LINK-05）
+ * 返回 PATCH 响应
+ */
+async function submitEditAndWait(page, { expectSuccess = true } = {}) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes('/open-api/v1/providers/') &&
+        r.request().method() === 'PATCH' &&
+        r.status() === 200,
+      { timeout: 15000 },
+    ),
+    clickSubmit(page),
+  ]);
+  await response.finished().catch(() => {});
+  // 提交成功后 index.vue 关闭抽屉并 fetchList（GET /providers）
+  await page
+    .waitForResponse(
+      (r) =>
+        /\/open-api\/v1\/providers$/.test(r.url()) &&
+        r.request().method() === 'GET' &&
+        r.status() === 200,
+      { timeout: 15000 },
+    )
+    .catch(() => {});
+  if (expectSuccess) {
+    await expectMessage(page, MSG.submitSuccess);
+    await expectUpsertScopeHidden(page);
+  }
+  return response;
+}
+
 // ---------- 详情页（ProviderView） ----------
 
 function viewScope(page) {
@@ -607,6 +642,15 @@ async function openPricingTiersDrawer(page, rowText) {
     '.provider-pricing-tiers',
     DRAWER_TITLE.pricingTiers,
   );
+}
+
+/**
+ * 点击行操作「查询模型价格」（PR-LINK-01/06）：
+ * 前端 router.push 跳转模型定价列表并携带 query.provider=该服务商名，
+ * 不携带 autoView，不会打开定价详情
+ */
+async function clickViewModelPrices(page, rowText) {
+  await clickRowAction(page, rowText, DOC.viewModelPrices);
 }
 
 async function fillTimeZone(page, value) {
@@ -1406,6 +1450,7 @@ module.exports = {
   clickSubmit,
   expectDrawerHidden,
   submitUpsertAndWait,
+  submitEditAndWait,
   viewScope,
   expectViewScopeVisible,
   viewInfoValue,
@@ -1413,6 +1458,7 @@ module.exports = {
   expectPricingTiersScopeVisible,
   expectPricingTiersScopeHidden,
   openPricingTiersDrawer,
+  clickViewModelPrices,
   fillTimeZone,
   getTimeZoneValue,
   expectPricingError,

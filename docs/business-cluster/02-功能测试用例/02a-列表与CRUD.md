@@ -96,7 +96,7 @@
 
 #### 预期结果
 
-- 详情只读展示：**基础配置**、**超时/重传**、**被动健康检查**、**大模型配置**（所属服务商、转发模型、重定向、Keys、key_policy、key_affinity、match_prefix/strip_prefix）
+- 详情只读展示：**基础配置**、**超时/重传**、**被动健康检查**、**大模型配置**（所属服务商、转发模型、重定向、Keys、key_policy、key_affinity、match_prefix/strip_prefix、balance_mode/epp_config）
 - **不再展示「实例配置」面板**（实例池由 Provider 维护）
 - 无编辑控件
 - 长文本不溢出容器

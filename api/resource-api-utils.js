@@ -306,6 +306,23 @@ async function getProductInstancePool(
   return parseApiResponse(response, 'GET instance-pool');
 }
 
+/**
+ * 拉取 InnerAPI cluster_table 导出（BFE 集群表）。
+ * OpenAPI v1 的 product instance-pool 读接口已整体下线（optimization plan v1.2），
+ * 引用集群派生实例池的同步效果经 cluster_table 中该集群的 RS 后端条目间接观测。
+ * Data 结构：{Config: {clusterName: {subClusterName: [{Name, Addr, Port, Weight}]}}}
+ * —— PR-LINK-05 后端同步断言。
+ */
+async function getClusterTableViaApi(page) {
+  const userData = await getUserData(page);
+  const innerBase = getOpenApiBaseUrl().replace('/open-api/v1', '/inner-api/v1');
+  const response = await page.request.get(
+    innerBase + '/configs/gslb_data/cluster_table',
+    { headers: authHeaders(userData.sessionKey) },
+  );
+  return parseApiResponse(response, 'GET cluster_table');
+}
+
 async function deleteProductInstancePool(
   page,
   shortPoolName,
@@ -426,6 +443,26 @@ async function createCluster(page, clusterData) {
     common.log('POST cluster 异常: ' + error.message);
     return false;
   }
+}
+
+// 创建集群并返回原始 HTTP 状态与响应体（RM-BC-108/109 校验 422 拒绝场景）
+async function createClusterWithResponse(page, clusterData) {
+  const userData = await getUserData(page);
+  const response = await page.request.post(
+    getOpenApiBaseUrl() + '/clusters',
+    {
+      data: clusterData,
+      headers: authHeaders(userData.sessionKey),
+    },
+  );
+  const body = await response.json().catch(() => ({}));
+  common.log(
+    'POST cluster(带状态) 响应: ' +
+      response.status() +
+      ' ' +
+      JSON.stringify(body).substring(0, 300),
+  );
+  return { status: response.status(), body };
 }
 
 async function updateGlobalRouteRules(page, ruleData) {
@@ -612,6 +649,7 @@ module.exports = {
   getSubCluster,
   createSubCluster,
   deleteSubCluster,
+  getClusterTableViaApi,
   getProductInstancePoolList,
   getProductInstancePool,
   deleteProductInstancePool,
@@ -621,6 +659,7 @@ module.exports = {
   getCluster,
   deleteCluster,
   createCluster,
+  createClusterWithResponse,
   createClusterWithProvider,
   updateGlobalRouteRules,
   ensureTestClusters,
