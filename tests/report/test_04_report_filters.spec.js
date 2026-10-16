@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 /**
- * 数据报表 - 过滤栏与页签切换（RP-F-01 ~ RP-F-08）
+ * 数据报表 - 过滤栏与页签切换（RP-F-01 ~ RP-F-09）
+ *
+ * RP-F-09（2026-10-14 图表维度下钻变更）：总览过滤栏 = 时间范围 + 6 个通用过滤项
+ * + 行尾「拆分维度」+ 查询 / 重置，不含「缓存状态 / 镜像命中 / 意图答案」死控件；
+ * 明细工具栏同名过滤保留。
  *
  * 运行：PW_WORKERS=1 npx playwright test tests/report/test_04_report_filters.spec.js
  */
@@ -305,6 +309,74 @@ test.describe('数据报表 - RP-F-08 快捷时间与 DatePicker 同步', () => 
     await test.step('点击 24h 快捷按钮', async () => {
       await rp.clickQuickTime(page, rp.DOC.timeRange24h);
       await page.waitForTimeout(300);
+    });
+  });
+});
+
+test.describe('数据报表 - RP-F-09 过滤栏构成与无死控件', () => {
+  test('验证总览过滤栏构成、无死控件且明细工具栏同名过滤保留', async ({ page }) => {
+    await test.step('进入数据报表页面（总览页签）', async () => {
+      await rp.gotoReportPage(page);
+    });
+
+    await test.step('过滤栏 = 时间范围 + 6 个通用过滤项 + 行尾「拆分维度」+ 查询/重置', async () => {
+      const sequence = await rp.getFilterBarControlSequence(page);
+      expect(sequence).toEqual([
+        '模型',
+        'API Key',
+        '服务商',
+        'Host',
+        '流式',
+        '状态码',
+        rp.TS_SPLIT_LABEL,
+        rp.DOC.queryButton,
+        rp.DOC.resetButton,
+      ]);
+      // 时间范围区（快捷时间 + DatePicker 已填充起止时间）
+      for (const label of rp.QUICK_TIME_LABELS) {
+        await expect(rp.quickTimeButton(page, label)).toBeVisible();
+      }
+      const range = await rp.getReportTimeRange(page);
+      expect(range.start).toBeTruthy();
+      expect(range.end).toBeTruthy();
+      await expect(rp.filterBar(page).getByRole('button', { name: rp.DOC.queryButton })).toBeVisible();
+      await expect(rp.filterBar(page).getByRole('button', { name: rp.DOC.resetButton })).toBeVisible();
+    });
+
+    await test.step('6 个通用过滤项顺序与集合固定（不含缓存状态 / 镜像命中 / 意图答案过滤项）', async () => {
+      const labels = await rp.getFilterBarItemLabels(page);
+      expect(labels).toEqual(['模型', 'API Key', '服务商', 'Host', '流式', '状态码', rp.TS_SPLIT_LABEL]);
+      await rp.expectNoDeadFilterItems(page);
+      for (const dead of ['缓存状态', '镜像命中', '意图答案']) {
+        expect(labels).not.toContain(dead);
+      }
+      // 三个维度名仅作为「拆分维度」的取值出现，不是过滤项（见 RP-T-09）
+      const splitOptions = await rp.getTsSplitOptions(page);
+      expect(splitOptions).toEqual([
+        rp.TS_SPLIT_NONE_LABEL,
+        '缓存状态',
+        '镜像命中',
+        '意图答案',
+      ]);
+    });
+
+    await test.step('源码层 filters 状态无死控件读写', async () => {
+      expect(await rp.getFilterStateKeys(page)).toEqual([
+        'apikey_ids',
+        'hosts',
+        'models',
+        'providers',
+        'status_codes',
+        'stream',
+      ]);
+    });
+
+    await test.step('明细页签工具栏的同名过滤项不受影响', async () => {
+      await rp.waitForReportLogsResponse(page, () => rp.switchToTab(page, rp.DOC.logsTab));
+      for (const label of ['缓存状态', '镜像命中']) {
+        await expect(rp.logsToolbarSelect(page, label).trigger).toBeVisible({ timeout: 10000 });
+      }
+      await rp.switchToTab(page, rp.DOC.overviewTab);
     });
   });
 });

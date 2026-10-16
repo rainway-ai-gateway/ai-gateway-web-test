@@ -57,6 +57,10 @@
  * 3. PR-LINK-07 预期前端提示「该服务商已被集群引用，无法删除」：后端 409 返回英文
  *    ErrMsg（"Conflict: provider X is referenced by cluster Y"），前端 $Message.error
  *    直接展示英文原文（同 PR-DEL-02 记录），本 spec 断言英文提示原文。
+ * 4. 前端分页适配（2026-10-15）：列表前端分页默认 20 条/页且只渲染当前页，API 造数后
+ *    新行可能落在第 2/3 页，原「造数后直接断言行可见」必然超时；统一改用
+ *    pp.expectProviderRowVisibleByName（先按名称本地筛选再断言行可见），断言内容不变；
+ *    删除后的「行消失」断言用 expectProviderRowHiddenByName 避免「不在当前页」假通过。
  *
  * 造数/清理：服务商 / 集群 / 模型定价均以 API 造数（唯一命名），afterEach 按
  * 「集群 → 定价 → 服务商」顺序自清理（先解除 llm_config.provider 引用再删服务商）；
@@ -217,7 +221,7 @@ test.describe('模型服务商 - PR-LINK-01~08 跨模块联动 @journey', () => 
 
     await test.step('2. 服务商列表点击「查询模型价格」跳转定价列表并按该服务商筛选', async () => {
       await pp.gotoProvidersPage(page);
-      await pp.providerTable(page).expectRowVisible(providerName);
+      await pp.expectProviderRowVisibleByName(page, providerName);
       await pp.clickViewModelPrices(page, providerName);
 
       // 跳转 ModelPrice.list 并携带 query.provider，不携带 autoView
@@ -419,7 +423,7 @@ test.describe('模型服务商 - PR-LINK-01~08 跨模块联动 @journey', () => 
 
     await test.step('1. UI 编辑服务商：新增一个实例并修改权重，提交成功', async () => {
       await pp.gotoProvidersPage(page);
-      await pp.providerTable(page).expectRowVisible(providerName);
+      await pp.expectProviderRowVisibleByName(page, providerName);
       await pp.openEditDrawer(page, providerName);
 
       // 编辑抽屉回填当前 1 行实例
@@ -510,7 +514,7 @@ test.describe('模型服务商 - PR-LINK-01~08 跨模块联动 @journey', () => 
 
     await test.step('1. 服务商列表点击「查询模型价格」', async () => {
       await pp.gotoProvidersPage(page);
-      await pp.providerTable(page).expectRowVisible(providerName);
+      await pp.expectProviderRowVisibleByName(page, providerName);
       // 偏差记录：模型定价页 provider 下拉选项来自已有定价记录的 provider 集合
       //（fetchProviderOptions 读取 model-prices），无记录的 provider 不在选项中，
       // 下拉无法回显该值；provider 筛选实际已生效——经列表请求查询参数断言。
@@ -567,7 +571,7 @@ test.describe('模型服务商 - PR-LINK-01~08 跨模块联动 @journey', () => 
 
     await test.step('1. UI 删除该服务商并确认：DELETE 返回 409', async () => {
       await pp.gotoProvidersPage(page);
-      await pp.providerTable(page).expectRowVisible(providerName);
+      await pp.expectProviderRowVisibleByName(page, providerName);
       await pp.clickDelete(page, providerName);
       await pp.expectDeleteConfirm(page, providerName);
 
@@ -583,7 +587,7 @@ test.describe('模型服务商 - PR-LINK-01~08 跨模块联动 @journey', () => 
 
     await test.step('2. 联动保护：服务商保留，集群配置不受影响', async () => {
       // 服务商仍存在（列表行可见 + API 可查）
-      await pp.providerTable(page).expectRowVisible(providerName);
+      await pp.expectProviderRowVisibleByName(page, providerName);
       const provider = await api.getProviderViaApi(page, providerName);
       expect(provider).not.toBeNull();
 
@@ -626,12 +630,12 @@ test.describe('模型服务商 - PR-LINK-01~08 跨模块联动 @journey', () => 
 
     await test.step('2. UI 删除服务商成功（同名定价记录不阻塞）', async () => {
       await pp.gotoProvidersPage(page);
-      await pp.providerTable(page).expectRowVisible(providerName);
+      await pp.expectProviderRowVisibleByName(page, providerName);
       await pp.clickDelete(page, providerName);
       await pp.expectDeleteConfirm(page, providerName);
       const response = await pp.confirmDeleteAndWait(page, providerName);
       expect((await response.json()).ErrNum).toBe(200);
-      await pp.providerTable(page).expectRowHidden(providerName, 15000);
+      await pp.expectProviderRowHiddenByName(page, providerName, 15000);
     });
 
     await test.step('3. 模型定价记录保留：列表可查且 API 记录仍在', async () => {

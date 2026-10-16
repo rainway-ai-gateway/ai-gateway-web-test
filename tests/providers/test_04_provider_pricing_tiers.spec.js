@@ -42,6 +42,9 @@
  * 4. PR-T-03 全部取消的 UI 语义：逐个取消到 0 时 weekdays=[]（表示每天），
  *    getWeekdaySelection([]) 在 Drawer 内渲染为 7 天全选，因此全部取消后提交 weekdays=[]，
  *    与「全选 7 天提交 weekdays=[]」的 PUT 语义一致（spec 以 PUT body 为准断言）。
+ * 5. 前端分页适配（2026-10-15）：列表前端分页默认 20 条/页且只渲染当前页，API 造数后
+ *    新行可能落在第 2/3 页，原「造数后直接断言行可见」必然超时；统一改用
+ *    pp.expectProviderRowVisibleByName（先按名称本地筛选再断言行可见），断言内容不变。
  *
  * 运行：npx playwright test tests/providers/test_04_provider_pricing_tiers.spec.js
  */
@@ -76,7 +79,7 @@ async function setupProvider({ page }) {
   expect(data).not.toBeNull();
   cleanup.trackName(providerName);
   await pp.gotoProvidersPage(page);
-  await pp.providerTable(page).expectRowVisible(providerName);
+  await pp.expectProviderRowVisibleByName(page, providerName);
   return { cleanup, providerName };
 }
 
@@ -441,7 +444,7 @@ test.describe('模型服务商 - PR-T-08 提交 PUT pricing-tiers', () => {
     cleanup.trackName(providerName);
 
     await pp.gotoProvidersPage(page);
-    await pp.providerTable(page).expectRowVisible(providerName);
+    await pp.expectProviderRowVisibleByName(page, providerName);
   });
 
   test.afterEach(async ({ page }) => {

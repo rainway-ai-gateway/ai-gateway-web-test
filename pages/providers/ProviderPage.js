@@ -18,6 +18,7 @@ const { expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const rc = require('../resource/ResourcePageCommon');
+const sessionUtils = require('../../utils/session');
 const { PageTableComponent } = require('../../components/layout');
 const {
   IvuMessageComponent,
@@ -58,6 +59,11 @@ const AUTH_PATH = path.join(__dirname, '../../auth.json');
  * 10. PR-V-15 预期「time_ranges 为空拦截 / weekdays 越界拦截」：UI 至少保留 1 个时间段
  *    （timeRanges.length<=1 删除按钮 disabled）；weekdays 为固定 7 项 Checkbox 不会越界，
  *    两分支不可经 UI 复现。
+ * 11. 前端分页定位（2026-10-15）：列表 `pageTable` 只渲染当前页（默认 20 条/页），
+ *    提交 / 删除后刷新会清空列搜索条件，目标行可能回到第 2/3 页。封装由此提供
+ *    `expectProviderRowVisibleByName`（按名称筛选后断言行可见）与行操作自动定位
+ *    （`clickRowAction` 内部 `locateRowByName`：行不在当前页时先按名称筛选），
+ *    行操作与「行存在 / 消失」断言不再依赖行恰好落在第 1 页。
  */
 
 const LABEL = {
@@ -177,6 +183,8 @@ async function ensureLocalStorageSession(page) {
 // ---------- 导航 ----------
 
 async function gotoProvidersPage(page) {
+  const targetUrl = rc.getAppBaseUrl() + '/providers';
+
   await rc.ensureAppSession(page);
 
   // 在导航前注入 initScript，确保页面加载时 localStorage 已就绪
@@ -195,9 +203,12 @@ async function gotoProvidersPage(page) {
     }, session);
   }
 
-  await page.goto(rc.getAppBaseUrl() + '/providers');
+  await page.goto(targetUrl);
   await page.waitForLoadState('domcontentloaded');
   await ensureLocalStorageSession(page);
+  // 导航后会话守卫：Key 在导航过程中失效（列表接口 401 弹「Session Key 错误」遮罩）
+  // 时先自愈并重新加载目标页，避免后续所有点击被遮罩拦截。
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
   await expect(
     page.getByRole('button', { name: DOC.createButton }),
   ).toBeVisible({ timeout: 15000 });
@@ -236,7 +247,26 @@ function rowAction(page, rowText, action) {
   return providerTable(page).rowAction(rowText, action);
 }
 
+/**
+ * 行操作前的「定位」（列表为前端分页，默认 20 条/页）
+ *
+ * 目标行可能因列表刷新（提交 / 删除后自动清空搜索条件）或重新进入列表页而
+ * 回到第 2/3 页，「当前页可见」的假设会让行操作点击超时。此处先短暂等待行出现，
+ * 未出现则按名称本地筛选把该行带回第 1 页。
+ */
+async function locateRowByName(page, rowText) {
+  const table = providerTable(page);
+  const appeared = await table
+    .rowByText(rowText)
+    .waitFor({ state: 'visible', timeout: 3000 })
+    .then(() => true)
+    .catch(() => false);
+  if (appeared) return;
+  await table.expectRowVisibleByName(rowText);
+}
+
 async function clickRowAction(page, rowText, action) {
+  await locateRowByName(page, rowText);
   await rowAction(page, rowText, action).click();
   await page.waitForTimeout(500);
 }
@@ -863,6 +893,46 @@ async function clearListSearch(page, title) {
   await filterListSearch(page, title, '');
 }
 
+/**
+ * 按「名称」列做本地筛选（前端筛选，不触发列表请求）
+ *
+ * 与 filterListSearch 的差别：补齐失焦（iView Input on-change 依赖 blur），
+ * 调用后筛选结果已生效，可直接断言行状态。
+ */
+async function filterListByName(page, keyword) {
+  await providerTable(page).filterByColumn('名称', keyword);
+}
+
+/**
+ * 断言某列本地筛选已清空：搜索框为空且分页恢复多页
+ *
+ * 前端分页 20 条/页，清空筛选后全量数据（数十条）必然多页；
+ * 若筛选仍生效（结果仅 1 条）则页码只有 1 个，据此区分「条件已移除」与「未移除」。
+ */
+async function expectListFilterCleared(page, title) {
+  await expect(searchInput(page, title)).toHaveValue('');
+  const pageNumbers = await providerTable(page).pageNumberCount();
+  expect(
+    pageNumbers,
+    '清空「' + title + '」筛选后应恢复全量分页（页码 > 1）',
+  ).toBeGreaterThan(1);
+}
+
+/**
+ * 断言服务商行可见（分页无关）：先按名称本地筛选再断言行可见
+ *
+ * 列表为前端分页（默认 20 条/页），造数后新行可能落在第 2/3 页，
+ * 直接断言「当前页可见」会假失败 —— 断言内容不变，仅改为先筛选定位。
+ */
+async function expectProviderRowVisibleByName(page, name, timeout = 15000) {
+  await providerTable(page).expectRowVisibleByName(name, timeout);
+}
+
+/** 断言服务商行不可见（先按名称筛选，避免「不在当前页」造成假通过） */
+async function expectProviderRowHiddenByName(page, name, timeout = 15000) {
+  await providerTable(page).expectRowHiddenByName(name, timeout);
+}
+
 async function filterListByProtocol(page, protocol) {
   const select = new IvuSelectComponent(
     page,
@@ -1479,6 +1549,10 @@ module.exports = {
   expectDeleteConfirmHidden,
   filterListSearch,
   clearListSearch,
+  filterListByName,
+  expectListFilterCleared,
+  expectProviderRowVisibleByName,
+  expectProviderRowHiddenByName,
   filterListByProtocol,
   expectNoListRequestDuring,
   paginationScope,

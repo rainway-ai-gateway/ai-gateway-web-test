@@ -121,6 +121,8 @@ const DRAWER_TITLE = {
   view: '定价详情',
 };
 
+// 与 `ModelPriceUpsert.vue` / `index.vue` 的 MODE_OPTIONS 及
+// design-docs/api-define/OpenAPI接口定义/model-prices.md §1 `mode` 枚举一致（14 种，含 batch）
 const MODE_OPTIONS = [
   'chat',
   'completion',
@@ -135,6 +137,7 @@ const MODE_OPTIONS = [
   'ocr',
   'search',
   'realtime',
+  'batch',
 ];
 
 const PRICE_KEY_INPUT_COST = 'input_cost_per_token';
@@ -766,10 +769,11 @@ async function getPriceKeyDropdownOptions(page) {
   return result;
 }
 
-// ---------- 分时段价格（tier_prices）配置块 ----------
+// ---------- 价格配置块（默认价格 / 分时段价格 / 批量折扣系数） ----------
 
 /**
- * 「价格」Card 内的双配置块容器（默认价格 + 分时段价格，两个同级 .price-config-block）
+ * 「价格」Card 内的配置块容器（同级 .price-config-block：默认价格 + 分时段价格 +
+ * 批量折扣系数，共 3 个；批量折扣系数块仅 mode != batch 时渲染）
  */
 function priceConfigGroup(page) {
   return pricesCard(page).locator('.price-config-group');
@@ -787,6 +791,14 @@ function defaultPriceBlock(page) {
 /** ② 分时段价格块（tier_prices.peak，可选） */
 function tierPriceBlock(page) {
   return priceConfigBlocks(page).nth(1);
+}
+
+/**
+ * ③ 批量折扣系数块（batch_discount，可选；默认 0.5，取值 (0,1]）
+ * 2026-10-10 新增（`batch_discount`），仅 mode != batch 时渲染（mode=batch 无此块，见 MP-V-14）
+ */
+function batchDiscountBlock(page) {
+  return priceConfigBlocks(page).nth(2);
 }
 
 /** 分时段价格块内的动态价格行（kv-table tbody tr，行结构同默认价格行） */
@@ -1605,6 +1617,7 @@ module.exports = {
   priceConfigBlocks,
   defaultPriceBlock,
   tierPriceBlock,
+  batchDiscountBlock,
   tierRows,
   addTierPriceRow,
   removeTierPriceRow,

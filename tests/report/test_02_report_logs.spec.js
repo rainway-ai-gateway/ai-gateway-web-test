@@ -17,10 +17,58 @@
  * 数据报表 - 明细列表（RP-L-01 ~ RP-L-07）
  *
  * 运行：PW_WORKERS=1 npx playwright test tests/report/test_02_report_logs.spec.js
+ *
+ * 数据依赖：RP-L-01 ~ RP-L-08 等用例断言「默认查询窗口内存在带缓存 / 镜像 /
+ * 意图维度的明细数据」。数据由测试侧自造：scripts/seed-report-data.js 以
+ * product='rptseed' 标记向 bfe_ai_metrics_1m / bfe_ai_request_log 造最近
+ * 窗口数据（存储口径 = 本地时间 - offset-hours，默认 8，见脚本头注释），
+ * 每次执行先按标记清理旧种子行再刷新，幂等且不触碰真实/演示数据；
+ * spec afterAll 再以 --cleanup 清理种子行，避免影响 test_01 等依赖
+ * 「默认窗口为空」的其它 spec。
+ *
+ * 行/表头定位口径：2026-10-15 产品侧 Logs.vue 给「操作」列加 fixed:'right'
+ * 后，iView 会额外渲染 fixed-right 克隆表（行与「操作」表头各多一份）。
+ * 本 spec 的行数 / 单元格 / 列头断言统一限定主表（.ivu-table-body 行、
+ * 可见 th），排除克隆表重复项；断言强度不变。
  */
 const { test, expect } = require('@playwright/test');
+const { execSync } = require('child_process');
+const path = require('path');
 const rp = require('../../pages/report/ReportPage');
 const reportApi = require('../../api/report-api-utils');
+
+test.beforeAll(() => {
+  const seedScript = path.join(__dirname, '../../scripts/seed-report-data.js');
+  execSync(`node "${seedScript}"`, {
+    stdio: 'inherit',
+    timeout: 120000,
+    env: { ...process.env },
+  });
+});
+
+test.afterAll(() => {
+  // 清理种子行，恢复「默认窗口为空」，避免影响 test_01 RP-O-03 / RP-O-13 等
+  // 依赖空窗口断言的其它 spec（test_02 自身每次 beforeAll 都会重新造数）
+  const seedScript = path.join(__dirname, '../../scripts/seed-report-data.js');
+  execSync(`node "${seedScript}" --cleanup`, {
+    stdio: 'inherit',
+    timeout: 60000,
+    env: { ...process.env },
+  });
+});
+
+/**
+ * 主表数据行：仅 .ivu-table-body 内的行，排除 iView fixed-right 克隆表
+ * （PageTable.dataRows() 口径会把克隆行一并计入，导致行数翻倍）
+ */
+function mainDataRows(page) {
+  return rp
+    .reportLogsTable(page)
+    .rootLocator()
+    .locator(
+      '.ivu-table-body tbody tr:not(:has-text("暂无筛选结果")):not(:has-text("暂无数据"))',
+    );
+}
 
 function parseQuery(url) {
   const u = new URL(url);
@@ -50,7 +98,18 @@ test.describe('数据报表 - RP-L-01 明细页签加载', () => {
     await test.step('验证表格列头', async () => {
       const table = rp.reportLogsTable(page);
       await table.waitForLoaded();
-      await table.expectHeaders(...rp.DOC.logTableColumns);
+      // 与 PageTable.expectHeaders 同口径，但跳过克隆表/隐藏 th，
+      // 断言每个期望列头均存在「可见」实例（fixed:'right' 后主表的
+      // 「操作」th 被 iView 标为隐藏、由 fixed-right 克隆表承接展示）
+      for (const label of rp.DOC.logTableColumns) {
+        await expect(
+          table
+            .rootLocator()
+            .locator('th', { hasText: label })
+            .filter({ visible: true })
+            .first(),
+        ).toBeVisible();
+      }
     });
 
     await test.step('验证成本列 = ai_cost_value + 空格 + ai_cost_currency，空值显示 -', async () => {
@@ -69,7 +128,7 @@ test.describe('数据报表 - RP-L-01 明细页签加载', () => {
       );
 
       const table = rp.reportLogsTable(page);
-      const rows = table.dataRows();
+      const rows = mainDataRows(page);
       const rowCount = await rows.count();
       expect(rowCount).toBeGreaterThan(0);
 
@@ -110,7 +169,7 @@ test.describe('数据报表 - RP-L-02 服务端分页', () => {
 
     await test.step('第 1 页展示数据', async () => {
       await table.waitForLoaded();
-      const rowCount = await table.dataRows().count();
+      const rowCount = await mainDataRows(page).count();
       expect(rowCount).toBeLessThanOrEqual(20);
     });
 
@@ -305,7 +364,7 @@ async function expectColumnCells(page, columnTitle, expectedTexts) {
   expect(idx, `列「${columnTitle}」应存在于 15 列定义`).toBeGreaterThanOrEqual(0);
   const table = rp.reportLogsTable(page);
   await table.waitForLoaded();
-  const rows = table.dataRows();
+  const rows = mainDataRows(page);
   const rowCount = await rows.count();
   expect(rowCount).toBe(expectedTexts.length);
   for (let i = 0; i < rowCount; i++) {

@@ -166,7 +166,11 @@ async function globalSetup() {
         const injected = {
           name: loginBody.Data.user_name,
           sessionKey: loginBody.Data.session_key,
-          is_admin: loginBody.Data.is_admin,
+          role:
+            loginBody.Data.role ||
+            (loginBody.Data.is_admin
+              ? 'system_admin'
+              : 'system_admin_readonly'),
         };
         await page.evaluate((user) => {
           localStorage.setItem('user', JSON.stringify(user));
@@ -208,6 +212,23 @@ async function globalSetup() {
   }
 
   await context.storageState({ path: authPath });
+
+  // 后端每个用户只保留 1 个 Session Key：全局登录刚生成的 Key 必须落到 auth.json，
+  // 否则后续用例会拿着上一轮/上一次登录的失效 Key 请求而 401（「Session Key 错误」遮罩）。
+  const savedSessionKey = await page
+    .evaluate(() => {
+      try {
+        const raw = localStorage.getItem('user');
+        return raw ? JSON.parse(raw).sessionKey || '' : '';
+      } catch (e) {
+        return '';
+      }
+    })
+    .catch(() => '');
+  console.log(
+    'auth.json 已写入，Session Key: ' +
+      (savedSessionKey ? savedSessionKey.substring(0, 10) + '...' : '空'),
+  );
   console.log('=== 全局登录完成，状态已保存到 auth.json ===');
 
   await browser.close();

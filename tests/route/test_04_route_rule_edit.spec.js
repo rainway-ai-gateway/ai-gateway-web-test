@@ -27,6 +27,11 @@ const resourceApi = require('../../api/resource-api-utils');
  */
 
 test.describe('路由管理 - RT-D-05 进入编辑模式', () => {
+  test.afterEach(async ({ page }) => {
+    // 还原 initRouteTestData 的播种结果（保留环境原有 Global 规则）
+    await resourceApi.restoreRouteTestData(page);
+  });
+
   test('验证 Global 路由表详情可进入编辑模式', async ({ page }) => {
     // 前置：进入页面并初始化测试数据
     await test.step('前置：初始化测试数据', async () => {
@@ -300,13 +305,22 @@ test.describe('路由管理 - RT-D-10 编辑规则', () => {
  */
 
 test.describe('路由管理 - RT-D-11 删除规则', () => {
+  let keptRuleName = null;
+
+  test.afterEach(async ({ page }) => {
+    if (keptRuleName) {
+      await utils.deleteRuleByNameAndSubmit(page, keptRuleName);
+      keptRuleName = null;
+    }
+  });
+
   test('在编辑模式下删除 Global 规则，提交后 API 同步删除', async ({
     page,
   }) => {
     let createdRuleName;
     let clusters;
 
-    await test.step('前置：进入 Global 路由表编辑模式并添加规则', async () => {
+    await test.step('前置：进入 Global 路由表编辑模式并添加两条规则', async () => {
       await utils.ensureRouteTableModuleAvailable(page);
       await utils.ensureGlobalRouteTableDisabledViaUI(page);
       await utils.openGlobalRouteTableDetail(page);
@@ -314,26 +328,34 @@ test.describe('路由管理 - RT-D-11 删除规则', () => {
       clusters = await utils.getAvailableClustersForRule(page);
       expect(clusters.length, '无可用集群').toBeGreaterThan(0);
 
+      // 提交按钮带脏检查（无本地净变更时置灰）：删除一条「刚加进来的规则」会让
+      // 本地表格回到原状、按钮置灰，因此同时保留另一条新规则作为提交的净变更
       createdRuleName = 'rt_delete_' + Date.now();
-      await utils.openAddRuleDrawer(page);
-      await utils.fillRuleName(page, createdRuleName);
-      await utils.fillRuleExpression(page, 'default_t()');
-      await utils.selectRuleTargetCluster(page, 0, clusters[0].name);
-      await utils.fillRuleTargetWeight(page, 0, 100);
-      await utils.submitRuleFormAndWait(page);
-      await utils.expectRuleRowVisible(page, createdRuleName);
+      keptRuleName = 'rt_delete_keep_' + Date.now();
+      for (const ruleName of [createdRuleName, keptRuleName]) {
+        await utils.openAddRuleDrawer(page);
+        await utils.fillRuleName(page, ruleName);
+        await utils.fillRuleExpression(page, 'default_t()');
+        await utils.selectRuleTargetCluster(page, 0, clusters[0].name);
+        await utils.fillRuleTargetWeight(page, 0, 100);
+        await utils.submitRuleFormAndWait(page);
+        await utils.expectRuleRowVisible(page, ruleName);
+      }
     });
 
     await test.step('1. 点击删除，本地表格移除', async () => {
       await utils.deleteRuleByName(page, createdRuleName);
       await utils.expectRuleRowHidden(page, createdRuleName);
+      await utils.expectRuleRowVisible(page, keptRuleName);
     });
 
     await test.step('2. 提交并生效，API 中规则被删除', async () => {
       await utils.submitGlobalRouteRulesAndWait(page);
       const rules = await utils.getGlobalRouteRulesViaApi(page);
       const hit = rules?.rules?.find((r) => r.name === createdRuleName);
-      expect(hit).toBeFalsy();
+      expect(hit, '被删除的规则不应出现在已提交的结果里').toBeFalsy();
+      const kept = rules?.rules?.find((r) => r.name === keptRuleName);
+      expect(kept, '保留的本地新增规则应已提交').toBeTruthy();
     });
   });
 });
@@ -511,7 +533,11 @@ test.describe('路由管理 - RT-D-15 提交后端校验失败', () => {
 
     await test.step('4. 清理所有同名规则', async () => {
       await utils.deleteAllRulesByName(page, duplicateName);
-      await utils.submitGlobalRouteRulesAndWait(page);
+      // 同名规则被前端拦截、从未进后端：清理后本地表格回到原状、提交按钮置灰，
+      // 此时无内容可提交（见 RT-D-29 脏检查），跳过即可
+      await utils.submitGlobalRouteRulesAndWait(page, {
+        skipWhenNoLocalChange: true,
+      });
     });
   });
 });

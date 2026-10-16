@@ -596,6 +596,41 @@ async function navigateToApiKeyManagement(page) {
   await entityApiUtils.ensureEntityTestData(page);
 }
 
+// ── Readonly (system_admin_readonly) helpers ────────────────────────
+
+/**
+ * 只读管理员视角下的 API-Key 页面外壳判定：仅要求面包屑可见。
+ * 只读态工具栏「创建」写按钮被 v-has 隐藏，不能用 isApiKeyManagementPageReady 判定。
+ */
+async function isApiKeyManagementShellVisibleReadonly(page) {
+  const breadcrumb = page
+    .locator('.bfe-breadcrumb')
+    .getByText('API Key 管理', { exact: true });
+  return isVisibleSafe(breadcrumb);
+}
+
+async function waitForApiKeyManagementShellReadonly(page, timeout = 15000) {
+  await expect(
+    page.locator('.bfe-breadcrumb').getByText('API Key 管理', { exact: true }),
+  ).toBeVisible({ timeout });
+}
+
+/**
+ * 只读视角进入 API-Key 管理页：直连 URL + 面包屑判定。
+ * 不调用 ensureLoggedIn（会以 admin 凭证重登并覆盖 auth.json 会话），
+ * 也不要求「创建」按钮可见（只读态该按钮被 v-has 隐藏）。
+ */
+async function gotoApiKeyManagementPageReadonly(page) {
+  if (await isApiKeyManagementShellVisibleReadonly(page)) {
+    common.log('已在 API-Key 管理页面（只读视角），跳过导航');
+    return;
+  }
+  const url = buildProductPageUrl(page, 'api-key');
+  common.log('只读视角直连 URL 进入 API-Key 管理页面: ' + url);
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await waitForApiKeyManagementShellReadonly(page);
+}
+
 // ── Layout expectations ─────────────────────────────────────────────
 
 async function expectEntityManagementLayout(page) {
@@ -801,11 +836,13 @@ module.exports = {
   isEntityTypeTabReady,
   isEntityOrgTabReady,
   isApiKeyManagementPageReady,
+  isApiKeyManagementShellVisibleReadonly,
 
   // Page wait helpers
   waitForPageSettled,
   waitForEntityManagementShell,
   waitForApiKeyManagementShell,
+  waitForApiKeyManagementShellReadonly,
 
   // Session / Auth
   ensureAppSession,
@@ -816,6 +853,7 @@ module.exports = {
   gotoEntityManagementPage,
   navigateToApiKeyManagementByUrl,
   navigateToApiKeyManagement,
+  gotoApiKeyManagementPageReadonly,
   gotoEntityTypeManagementPage,
 
   // Layout expectations

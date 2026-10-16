@@ -17,7 +17,7 @@
  * 模型定价 - 分时段价格（tier_prices）（MP-T-01 ~ MP-T-10）
  *
  * 覆盖用例（docs/model-prices/02-功能测试用例/05-分时段价格.md）：
- * - MP-T-01 价格 Card 双配置块（默认价格必填 / 分时段价格可选）
+ * - MP-T-01 价格 Card 三配置块（默认价格必填 / 分时段价格可选 / 批量折扣系数可选）
  * - MP-T-02 分时段价格 ? Tooltip（fallback 语义）与说明文案位置
  * - MP-T-03 时段对象只读「忙时」Tag（橙色，非下拉）
  * - MP-T-04 分时段价格动态添加 / 删除条目
@@ -94,18 +94,19 @@ test.describe('模型定价 - MP-T-01~04 分时段价格 UI 结构', () => {
     await cleanup.cleanup(page);
   });
 
-  test('MP-T-01 价格 Card 双配置块（默认价格必填/分时段价格可选）', async ({
+  test('MP-T-01 价格 Card 三配置块（默认价格必填/分时段价格可选/批量折扣系数可选）', async ({
     page,
   }) => {
     await mp.openCreateDrawer(page);
 
     const group = mp.priceConfigGroup(page);
     await expect(group).toBeVisible();
-    // 两个同级并列的 .price-config-block
-    await expect(mp.priceConfigBlocks(page)).toHaveCount(2);
+    // 三个同级并列的 .price-config-block（批量折扣系数块仅在 mode != batch 时渲染）
+    await expect(mp.priceConfigBlocks(page)).toHaveCount(3);
 
     const defaultBlock = mp.defaultPriceBlock(page);
     const tierBlock = mp.tierPriceBlock(page);
+    const batchDiscountBlock = mp.batchDiscountBlock(page);
     // ① 默认价格（prices）：必填（is-required 星标）
     await expect(defaultBlock.locator('.price-config-title')).toContainText(
       '默认价格',
@@ -120,6 +121,15 @@ test.describe('模型定价 - MP-T-01~04 分时段价格 UI 结构', () => {
     await expect(tierBlock.locator('.price-config-title')).not.toHaveClass(
       /is-required/,
     );
+    // ③ 批量折扣系数（batch_discount）：可选（无 is-required），InputNumber 输入框
+    //    （默认 mode=chat 故渲染；默认值 0.5，取值 (0,1]，见 MP-V-13 / MP-V-14）
+    await expect(batchDiscountBlock.locator('.price-config-title')).toContainText(
+      '批量折扣系数',
+    );
+    await expect(batchDiscountBlock.locator('.price-config-title')).not.toHaveClass(
+      /is-required/,
+    );
+    await expect(batchDiscountBlock.locator('.ivu-input-number')).toHaveCount(1);
     // 文案为「默认价格」「分时段价格」（非「价格对象」「分时段价格对象」）
     await expect(
       defaultBlock.locator('.price-config-title'),

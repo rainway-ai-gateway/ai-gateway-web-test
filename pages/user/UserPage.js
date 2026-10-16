@@ -15,6 +15,7 @@
  */
 const { expect, test } = require('@playwright/test');
 const common = require('../../utils/common');
+const sessionUtils = require('../../utils/session');
 const publicFunc = require('../../utils/public');
 const {
   AppSidebarComponent,
@@ -25,8 +26,6 @@ const {
   IvuDrawerComponent,
   IvuModalComponent,
   IvuTabsComponent,
-  IvuSelectComponent,
-  IvuRadioGroupComponent,
 } = require('../../components/iview');
 const fs = require('fs');
 const path = require('path');
@@ -36,8 +35,14 @@ const DOC_PASSWORD = 'Itm@2026';
 const DOC_USER = {
   tipNameRule:
     '用户名长度1-64字符，仅允许数字、大小写字母、点、下划线、中划线，且不能以点、下划线、中划线开头或结尾；保留用户名不可用',
+  tipReservedUserName:
+    '「admin」「root」「system」为保留用户名，创建用户时不可使用',
   tipPasswordRule:
-    '密码长度8-128字符，不能包含空格，且不能与用户名相同或为其逆序',
+    '密码长度8-72字节（bcrypt 上限），不能包含空白字符，且不能与用户名相同或为其逆序',
+  // 产品把密码规则拆成三条互斥提示（长度 / 空白字符 / 与用户名同形），断言按样本取对应提示
+  tipPasswordLength: '密码长度须为 8-72 字节（bcrypt 上限，按 UTF-8 字节计）',
+  tipPasswordWhitespace: '密码不能包含空白字符',
+  tipPasswordUserName: '密码不能等于用户名或其逆序',
   tipTokenNameRule:
     'Token名称长度1-64字符，仅允许数字、大小写字母、点、下划线、中划线，且不能以点、下划线、中划线开头或结尾；保留名称不可用',
 };
@@ -109,7 +114,7 @@ async function getSessionKey() {
   throw new Error('session_key未初始化，请先调用getSessionKeyFromPage(page)');
 }
 
-async function addUserViaApi(page, username, password) {
+async function addUserViaApi(page, username, password, role = 'system_admin') {
   try {
     const userData = await page.evaluate(() => {
       const userStr = localStorage.getItem('user');
@@ -124,16 +129,14 @@ async function addUserViaApi(page, username, password) {
     });
 
     if (!userData || !userData.sessionKey) {
-      common.log('无法获取session_key');
-      return false;
+      throw new Error('无法从 localStorage.user 获取 session_key');
     }
 
     const response = await page.request.post(baseUrl + '/auth/users', {
       data: {
         user_name: username,
         password: password,
-        confirmPass: password,
-        is_admin: true,
+        role: role,
       },
       headers: {
         'Content-Type': 'application/json',
@@ -142,15 +145,23 @@ async function addUserViaApi(page, username, password) {
     });
     const responseBody = await response.json();
     common.log('接口添加用户响应: ' + JSON.stringify(responseBody));
-    if (responseBody.ErrNum === 200) {
-      common.log('接口添加用户成功: ' + username);
-      return true;
+    if (responseBody.ErrNum !== 200) {
+      // 早期版本静默返回 false，会让用例在后续「行操作点击」处超时，
+      // 掩盖真实原因（如 payload 字段已废弃）；此处直接抛出接口错误。
+      throw new Error(
+        '接口添加用户失败: ' +
+          username +
+          ' ErrNum=' +
+          responseBody.ErrNum +
+          ' ErrMsg=' +
+          responseBody.ErrMsg,
+      );
     }
-    common.log('接口添加用户失败: ' + responseBody.ErrMsg);
-    return false;
+    common.log('接口添加用户成功: ' + username);
+    return true;
   } catch (error) {
     common.log('接口添加用户异常: ' + error.message);
-    return false;
+    throw error;
   }
 }
 
@@ -248,13 +259,7 @@ async function hasStoredUser(page) {
 }
 
 async function persistAuthState(page) {
-  try {
-    const authPath = path.join(__dirname, '../../auth.json');
-    await page.context().storageState({ path: authPath });
-    common.log('已刷新 auth.json 会话状态');
-  } catch (e) {
-    common.log('刷新 auth.json 失败: ' + e.message);
-  }
+  return sessionUtils.persistAuthState(page);
 }
 
 async function clearClientSession(page) {
@@ -269,64 +274,33 @@ async function clearClientSession(page) {
   });
 }
 
-async function dismissAuthAlertModal(page) {
-  const candidates = [
-    {
-      text: 'Session Key 错误',
-      log: '检测到 Session Key 错误弹框，点击确定后重新登录',
-    },
-    {
-      text: '当前未登录或者登录已过期请前往登录',
-      log: '检测到登录过期弹框，点击确定返回登录页',
-    },
-    {
-      text: '当前url非法',
-      log: '检测到URL非法弹框，点击确定返回登录页',
-    },
-  ];
+/**
+ * 纯 UI 登录（不做事前探测），登录后回写 auth.json。
+ * 供 utils/session.js 在「接口登录不可用」时兜底调用：
+ * 后端每个用户只保留 1 个 Session Key，登录会让旧 Key 立即失效，
+ * 不回写 auth.json 会导致后续用例拿着失效 Key 请求而 401（级联假失败）。
+ */
+async function loginThroughUi(page, username, password) {
+  const user = username || confInfo['username'];
+  const pass = password || confInfo['password'];
 
-  let matched = null;
-  for (const item of candidates) {
-    const tip = page.getByText(item.text, { exact: false }).first();
-    if (await tip.isVisible().catch(() => false)) {
-      matched = item;
-      break;
-    }
-  }
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh');
+  });
+  await page.goto(confInfo['ctlHost'], { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1000);
 
-  if (!matched) {
-    return false;
-  }
-
-  common.log(matched.log);
-  const modal = page
-    .locator('.ivu-modal-wrap')
-    .filter({ visible: true })
-    .last();
-  const okBtn = modal.getByRole('button', { name: '确定' });
-  if ((await okBtn.count()) > 0) {
-    await okBtn.click();
-  } else {
-    await page.getByRole('button', { name: '确定' }).last().click();
-  }
-  await page.waitForTimeout(800);
-
-  // Session Key / 登录失效：清本地会话并落到登录页，再由 ensureLoggedIn 重新登录
-  await clearClientSession(page);
   if (!(await isLoginPage(page))) {
-    await page.goto(confInfo['ctlHost'], { waitUntil: 'domcontentloaded' });
+    // 仍带着旧会话：清掉本地会话并重载，让前端回到登录页
+    await clearClientSession(page);
+    await page
+      .reload({ waitUntil: 'domcontentloaded' })
+      .catch(() => {});
+    await page.waitForTimeout(1000);
   }
+
   await waitForLoginPage(page);
-  return true;
-}
-
-async function ensureLoggedIn(page) {
-  if (!(await isLoginPage(page))) {
-    return true;
-  }
-
-  common.log('当前在登录页，执行重新登录');
-  await fillLoginForm(page, confInfo['username'], confInfo['password']);
+  await fillLoginForm(page, user, pass);
   await submitLoginForm(page);
   await page.waitForTimeout(2000);
 
@@ -340,30 +314,34 @@ async function ensureLoggedIn(page) {
   } catch (e) {
     if (!(await hasStoredUser(page)) && (await isLoginPage(page))) {
       throw new Error(
-        `登录失败（账号 ${confInfo['username']}），请检查 conf.json 凭证或服务端用户是否存在`,
+        `登录失败（账号 ${user}），请检查 conf.json 凭证或服务端用户是否存在`,
       );
     }
   }
 
   await page.waitForTimeout(1000);
-
-  // 后端每个用户只保留 1 个 Session Key，重新登录会让旧 Key 立即失效。
-  // 若此处不回写 auth.json，则本次全量运行中后续所有用例都会拿旧 Key 请求而 401
-  // （表现为「Session Key 错误」弹框拦截点击 / 接口 ErrNum=401），形成级联失败。
   if (await hasStoredUser(page)) {
     await persistAuthState(page);
   }
-  return true;
+}
+
+// 注册给 utils/session.js，供会话自愈时兜底（接口登录失败才走 UI 登录）
+sessionUtils.registerUiLoginHandler(loginThroughUi);
+
+async function dismissAuthAlertModal(page) {
+  return sessionUtils.dismissAuthAlertModal(page);
+}
+
+/**
+ * 会话自愈 + 断言已登录（见 utils/session.js）：
+ * 会话失效（模态框 / 停在登录页 / Key 探测 401）时自动重新登录并回写 auth.json。
+ */
+async function ensureLoggedIn(page) {
+  return sessionUtils.ensureSessionHealthy(page);
 }
 
 async function handleUrlInvalidAlert(page) {
-  const dismissed = await dismissAuthAlertModal(page);
-  const onLogin = await isLoginPage(page);
-  if (dismissed || onLogin) {
-    await ensureLoggedIn(page);
-    return true;
-  }
-  return false;
+  return sessionUtils.handleAuthAlert(page);
 }
 
 function isConnectionError(error) {
@@ -411,20 +389,19 @@ async function isTokenTabReady(page) {
 }
 
 async function refreshAuthSession(page) {
-  await handleUrlInvalidAlert(page);
-  await page.goto(getAppBaseUrl() + '/user', { waitUntil: 'domcontentloaded' });
+  const targetUrl = getAppBaseUrl() + '/user';
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(800);
   if (await dismissAuthAlertModal(page)) {
-    await ensureLoggedIn(page);
-    await persistAuthState(page);
+    await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
     return;
   }
   if (
     (await isLoginPage(page)) ||
     !(await isUserManagementShellVisible(page))
   ) {
-    await ensureLoggedIn(page);
-    await persistAuthState(page);
+    await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
   }
 }
 
@@ -434,8 +411,10 @@ async function ensureAppSession(page) {
   }
 
   try {
+    await sessionUtils.ensureSessionHealthy(page, {
+      retryUrl: getAppBaseUrl() + '/user',
+    });
     await handleUrlInvalidAlert(page);
-    await ensureLoggedIn(page);
     await ensureAuthenticatedShell(page);
   } catch (e) {
     if (isConnectionError(e)) {
@@ -534,14 +513,38 @@ function paginationLocator(page) {
 async function gotoUserManagementPage(page) {
   const addBtn = page.getByRole('button', { name: '添加用户' });
   const baseUrl = getAppBaseUrl();
-  await page.goto(baseUrl + '/user', {
+  const targetUrl = baseUrl + '/user';
+
+  // 导航入口统一会话守卫：Session Key 已失效时先自愈（重新登录 + 回写 auth.json），
+  // 否则页面带着失效 Key 加载，列表 401 弹出「Session Key 错误」遮罩拦截后续点击。
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
+
+  await page.goto(targetUrl, {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
   });
+  await recoverFromAuthAlert(page, targetUrl);
   await addBtn.waitFor({ state: 'visible', timeout: 20000 });
 }
 
+/**
+ * 会话已失效时列表接口 401 会弹出「Session Key 错误」类遮罩弹框，
+ * 此时页面元素「可见」但被 .ivu-modal-wrap 拦截点击（表现为 locator.click 超时）。
+ * 检测到即重新登录、回写 auth.json，然后重新加载目标页。
+ */
+async function recoverFromAuthAlert(page, retryUrl) {
+  await page.waitForTimeout(800);
+  if (!(await sessionUtils.ensureSessionHealthy(page, { retryUrl }))) {
+    return false;
+  }
+  await page.waitForTimeout(800);
+  return true;
+}
+
 async function gotoTokenManagementPage(page) {
+  const targetUrl = getAppBaseUrl() + '/user';
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
+
   if (await isTokenTabReady(page)) {
     common.log('已在用户管理-Token Tab，跳过导航');
     await handleUrlInvalidAlert(page);
@@ -553,6 +556,7 @@ async function gotoTokenManagementPage(page) {
   }
   await ensureAppSession(page);
   await navigateToUserManagement(page);
+  await recoverFromAuthAlert(page, targetUrl);
   await switchToTokenTab(page);
 }
 
@@ -572,12 +576,64 @@ async function clearSearch(page) {
   await pageTable(page).clearSearch();
 }
 
+/**
+ * 行定位与行断言（分页无关）
+ *
+ * pageTable 前端分页默认 20 条/页，只渲染当前页；造数产生的新行若落在第 2/3 页，
+ * 直接断言「当前页可见」或直接点行操作按钮必然超时。统一先按「用户」列做本地筛选
+ * 把目标行收敛到第 1 页，再断言 / 点击，与数据总量和排列顺序解耦。
+ */
+async function locateUserRowByName(page, username) {
+  const table = pageTable(page);
+  await table.filterByColumn('用户', username);
+  return table.rowByText(username);
+}
+
+async function expectUserRowVisibleByName(page, username, timeout = 15000) {
+  const table = pageTable(page);
+  await table.filterByColumn('用户', username);
+  await table.expectRowVisible(username, timeout);
+}
+
+async function expectUserRowHiddenByName(page, username, timeout = 15000) {
+  const table = pageTable(page);
+  await table.filterByColumn('用户', username);
+  await table.expectRowHidden(username, timeout);
+}
+
+async function clickUserRowAction(page, username, action) {
+  const row = await locateUserRowByName(page, username);
+  await expect(row).toBeVisible({ timeout: 10000 });
+  await row.getByRole('button', { name: action }).click();
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 按单选项文案「精确」点击：iView 单选项用 hasText 子串匹配，
+ * 「系统管理」会同时命中「系统管理（只读）」（Token scope 三档、角色两档均如此），
+ * 触发 strict mode violation，故锚定整串匹配。
+ */
+async function selectRadioOptionExact(form, groupLabel, optionText) {
+  const group = form.item(groupLabel).locator('.ivu-radio-group');
+  await group
+    .locator('.ivu-radio-wrapper')
+    .filter({ hasText: new RegExp('^\\s*' + escapeRegExp(optionText) + '\\s*$') })
+    .click();
+}
+
+/**
+ * 新增用户抽屉的「角色」已由旧版固定勾选系统管理员改为单选（系统管理员 / 系统管理员（只读）），
+ * 故按单选项文案精确点击（旧实现走 .ivu-select 下拉，控件形态已不存在）。
+ */
 async function selectUserRole(page, role) {
-  const trigger = page
-    .locator('.ivu-form-item')
-    .filter({ hasText: '角色' })
-    .locator('.ivu-select');
-  await new IvuSelectComponent(page, trigger).selectOptionExact(role);
+  await selectRadioOptionExact(
+    ivuDrawer(page).form(DRAWER_TITLE.addUser),
+    '角色',
+    role,
+  );
 }
 
 async function fillEditPasswordForm(
@@ -651,11 +707,11 @@ async function navigateToTokenManagement(page) {
 }
 
 async function expectUserVisible(page, username) {
-  await pageTable(page).expectRowVisible(username);
+  await expectUserRowVisibleByName(page, username);
 }
 
 async function expectUserNotVisible(page, username) {
-  await pageTable(page).expectRowHidden(username);
+  await expectUserRowHiddenByName(page, username);
 }
 
 async function openAddUserDrawer(page) {
@@ -809,7 +865,7 @@ async function resetAddUserForm(page) {
 }
 
 async function openEditPasswordDrawer(page, username) {
-  await pageTable(page).rowAction(username, '修改密码').click();
+  await clickUserRowAction(page, username, '修改密码');
   await page.waitForTimeout(1000);
   await ivuDrawer(page).expectOpen(DRAWER_TITLE.editPassword);
 }
@@ -823,7 +879,7 @@ async function closeEditPasswordDrawer(page) {
 }
 
 async function clickDeleteUserBtn(page, username) {
-  await pageTable(page).rowAction(username, '删除').click();
+  await clickUserRowAction(page, username, '删除');
   await page.waitForTimeout(500);
 }
 
@@ -857,10 +913,7 @@ async function fillCreateTokenForm(page, tokenName, role) {
   const form = ivuDrawer(page).formInActive();
   await form.fillInput('名称', tokenName);
   if (role) {
-    await new IvuRadioGroupComponent(ivuDrawer(page).active()).select(
-      '角色',
-      role,
-    );
+    await selectRadioOptionExact(form, '角色', role);
   }
 }
 
@@ -885,33 +938,56 @@ async function resetCreateTokenForm(page) {
   await ivuDrawer(page).clickActiveFooterButton('重置');
 }
 
-async function openTokenDetail(page, tokenName) {
+/**
+ * Token 表未开放列搜索（列定义无 searchable），行定位只能逐页查找。
+ * 新建 Token 追加在列表末页（列表按创建时间升序），故先算最大页码再逐页定位，
+ * 避免「行不在当前页」被当成「行不存在」。
+ */
+async function tokenListMaxPage(page) {
+  const labels = await pageTable(page)
+    .pagination()
+    .locator('.el-pager li.number')
+    .allInnerTexts();
+  const nums = labels
+    .map((text) => parseInt(String(text).trim(), 10))
+    .filter((n) => !Number.isNaN(n));
+  return nums.length ? Math.max(...nums) : 1;
+}
+
+async function waitForTokenTableReady(page) {
   const table = pageTable(page);
-  try {
-    await table.rowAction(tokenName, '详情').click();
-    await page.waitForTimeout(500);
-    await ivuDrawer(page).expectOpen(DRAWER_TITLE.tokenDetail);
-    return;
-  } catch (e) {
-    common.log('第一页未找到Token，尝试翻页查找...');
-  }
+  await expect(table.rootLocator()).toBeVisible({ timeout: 10000 });
+  await table.waitForLoaded(10000);
+  await page.waitForTimeout(500);
+}
 
-  const pagination = table.pagination();
-  const pageCount = await pagination.getByRole('listitem').count();
-
-  for (let i = 2; i <= pageCount; i++) {
-    await table.clickPageNumber(i);
-    try {
-      await table.rowAction(tokenName, '详情').click();
-      await page.waitForTimeout(500);
-      await ivuDrawer(page).expectOpen(DRAWER_TITLE.tokenDetail);
-      return;
-    } catch (e) {
-      common.log('第' + i + '页未找到');
+/** 逐页定位 Token 行；找到后当前页即该行所在页，返回是否找到 */
+async function locateTokenRowInAllPages(page, tokenName, perPageTimeout = 3000) {
+  const table = pageTable(page);
+  const maxPage = await tokenListMaxPage(page);
+  for (let i = 1; i <= maxPage; i++) {
+    if (i > 1) {
+      await table.clickPageNumber(i);
+    }
+    const found = await table
+      .rowByText(tokenName)
+      .waitFor({ state: 'visible', timeout: perPageTimeout })
+      .then(() => true)
+      .catch(() => false);
+    if (found) {
+      return true;
     }
   }
+  return false;
+}
 
-  throw new Error('在所有页面中未找到Token: ' + tokenName);
+async function openTokenDetail(page, tokenName) {
+  if (!(await locateTokenRowInAllPages(page, tokenName))) {
+    throw new Error('在所有页面中未找到Token: ' + tokenName);
+  }
+  await pageTable(page).rowAction(tokenName, '详情').click();
+  await page.waitForTimeout(500);
+  await ivuDrawer(page).expectOpen(DRAWER_TITLE.tokenDetail);
 }
 
 async function closeTokenDetail(page) {
@@ -919,30 +995,11 @@ async function closeTokenDetail(page) {
 }
 
 async function clickDeleteTokenBtn(page, tokenName) {
-  const table = pageTable(page);
-  try {
-    await table.rowAction(tokenName, '删除').click();
-    await page.waitForTimeout(500);
-    return;
-  } catch (e) {
-    common.log('第一页未找到Token，尝试翻页查找...');
+  if (!(await locateTokenRowInAllPages(page, tokenName))) {
+    throw new Error('在所有页面中未找到Token: ' + tokenName);
   }
-
-  const pagination = table.pagination();
-  const pageCount = await pagination.getByRole('listitem').count();
-
-  for (let i = 2; i <= pageCount; i++) {
-    await table.clickPageNumber(i);
-    try {
-      await table.rowAction(tokenName, '删除').click();
-      await page.waitForTimeout(500);
-      return;
-    } catch (e) {
-      common.log('第' + i + '页未找到');
-    }
-  }
-
-  throw new Error('在所有页面中未找到Token: ' + tokenName);
+  await pageTable(page).rowAction(tokenName, '删除').click();
+  await page.waitForTimeout(500);
 }
 
 async function confirmDeleteToken(page) {
@@ -960,17 +1017,23 @@ async function deleteToken(page, tokenName) {
 
 /**
  * 幂等删除 Token：存在则删，不存在/已删除则跳过（供 afterEach 兜底清理使用）
+ *
+ * 早期实现只等 2s 且在「当前页」找行：Token 落在末页或列表尚未渲染完时会误判为
+ * 「不存在」而跳过删除，导致每轮回归都残留 Token（残留又会把新 Token 挤到末页）。
  */
 async function deleteTokenIfExists(page, tokenName) {
   try {
     await gotoTokenManagementPage(page);
-    await pageTable(page).expectRowVisible(tokenName, 2000);
+    await waitForTokenTableReady(page);
+    if (!(await locateTokenRowInAllPages(page, tokenName))) {
+      common.log('Token 不存在，跳过删除: ' + tokenName);
+      return false;
+    }
     await deleteToken(page, tokenName);
+    await page.waitForTimeout(500);
     return true;
   } catch (error) {
-    common.log(
-      'Token 不存在或删除失败，跳过: ' + tokenName + ' ' + error.message,
-    );
+    common.log('Token 删除失败，跳过: ' + tokenName + ' ' + error.message);
     return false;
   }
 }
@@ -1025,28 +1088,10 @@ async function expectTokenNotVisible(page, tokenName, timeout) {
 }
 
 async function expectTokenVisibleInAllPages(page, tokenName, timeout) {
-  const table = pageTable(page);
-  try {
-    await table.expectRowVisible(tokenName, timeout);
-    return;
-  } catch (e) {
-    common.log('第一页未找到，尝试翻页查找...');
+  if (!(await locateTokenRowInAllPages(page, tokenName))) {
+    // 未找到时仍走标准断言，失败信息里给出实际列表内容，便于定位
+    await pageTable(page).expectRowVisible(tokenName, timeout);
   }
-
-  const pagination = table.pagination();
-  const pageCount = await pagination.getByRole('listitem').count();
-
-  for (let i = 2; i <= pageCount; i++) {
-    await table.clickPageNumber(i);
-    try {
-      await table.expectRowVisible(tokenName, timeout);
-      return;
-    } catch (e) {
-      common.log('第' + i + '页未找到');
-    }
-  }
-
-  throw new Error('在所有页面中未找到Token: ' + tokenName);
 }
 
 async function gotoLoginPage(page) {
@@ -1059,6 +1104,30 @@ async function gotoLoginPage(page) {
 
 async function submitLoginForm(page) {
   await page.getByRole('button', { name: '登录' }).click();
+}
+
+/**
+ * 以指定账号登录（用于只读视角等非默认账号），登录后等待 localStorage.user.role 变为期望值。
+ * 不调用 persistAuthState，避免覆盖 auth.json 中默认 admin 会话。
+ */
+async function loginAsUser(page, username, password, expectedRole, timeout = 20000) {
+  await gotoLoginPage(page);
+  await fillLoginForm(page, username, password);
+  await submitLoginForm(page);
+  await page.waitForFunction(
+    (role) => {
+      const raw = localStorage.getItem('user');
+      if (!raw) return false;
+      try {
+        return JSON.parse(raw).role === role;
+      } catch (e) {
+        return false;
+      }
+    },
+    expectedRole,
+    { timeout },
+  );
+  await page.waitForTimeout(500);
 }
 
 async function openLogoutMenu(page) {
@@ -1128,6 +1197,11 @@ module.exports = {
   getSessionKeyFromPage,
   searchUser,
   clearSearch,
+  locateUserRowByName,
+  clickUserRowAction,
+  expectUserRowVisibleByName,
+  expectUserRowHiddenByName,
+  selectRadioOptionExact,
   expectUserVisible,
   expectUserNotVisible,
   openAddUserDrawer,
@@ -1183,6 +1257,8 @@ module.exports = {
   expectTokenVisible,
   expectTokenNotVisible,
   expectTokenVisibleInAllPages,
+  locateTokenRowInAllPages,
+  waitForTokenTableReady,
   openTokenDetail,
   closeTokenDetail,
   click查看TokenBtn,
@@ -1199,6 +1275,7 @@ module.exports = {
   expectLoginPageNoCaptcha,
   fillLoginForm,
   submitLoginForm,
+  loginAsUser,
   openUserDropdown,
   openLogoutMenu,
   clickLogoutMenu,

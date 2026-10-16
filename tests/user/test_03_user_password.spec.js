@@ -227,7 +227,7 @@ test.describe('用户管理 - UM-15 修改密码-密码格式校验', () => {
       await utils.expectEditPasswordFormFieldError(
         page,
         '新密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordLength,
       );
     });
 
@@ -238,7 +238,7 @@ test.describe('用户管理 - UM-15 修改密码-密码格式校验', () => {
       await utils.expectEditPasswordFormFieldError(
         page,
         '新密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordWhitespace,
       );
     });
 
@@ -249,7 +249,7 @@ test.describe('用户管理 - UM-15 修改密码-密码格式校验', () => {
       await utils.expectEditPasswordFormFieldError(
         page,
         '新密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordUserName,
       );
     });
 
@@ -261,7 +261,7 @@ test.describe('用户管理 - UM-15 修改密码-密码格式校验', () => {
       await utils.expectEditPasswordFormFieldError(
         page,
         '新密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordUserName,
       );
     });
 

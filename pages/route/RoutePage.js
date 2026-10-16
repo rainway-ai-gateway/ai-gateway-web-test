@@ -17,6 +17,7 @@ const { expect, test } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const common = require('../../utils/common');
+const sessionUtils = require('../../utils/session');
 const umUtils = require('../user/UserPage');
 const apiUtils = require('../../api/route-api-utils');
 const entityUtils = require('../entity/EntityPage');
@@ -75,8 +76,11 @@ const DOC_ROUTE_TABLE = {
   apiKeyTypeLabel: 'API-Key',
   globalOwner: 'global',
   globalDetailBreadcrumb: /路由规则 - Global \/ Global/,
-  apiKeyDetailBreadcrumb: /路由规则 - API-Key|apikey /,
+  // 后端 route-tables 的 type 是 api_key，列表页与详情页文案直接渲染该值，
+  // 而 TYPE_MAP 只登记了 apikey → API-Key（前端缺口），故断言同时接受两种写法
+  apiKeyDetailBreadcrumb: /路由规则 - (API-Key|api_key|apikey)/,
   entityDetailBreadcrumb: /路由规则 - Entity|entity /,
+  apiKeyTypeLabels: /API-Key|api_key|apikey/,
   enableSuccessToast: '路由表已启用',
   disableSuccessToast: '路由表已停用',
   enterEditMode: '进入编辑模式',
@@ -88,6 +92,8 @@ const DOC_ROUTE_TABLE = {
   routeTableEnabledLabel: '路由表已启用',
   editRuleButton: '编辑',
   deleteRuleButton: '删除',
+  copyRuleButton: '复制',
+  dragToChangeOrderTip: '拖动表格可修改生效次序',
 };
 
 const DOC_ROUTE_RULE = {
@@ -157,8 +163,12 @@ async function ensureAppSession(page) {
 
   try {
     await ensureChineseLang(page);
+    // 导航入口统一会话守卫：Session Key 失效时先自愈（重新登录 + 回写 auth.json），
+    // 避免带失效 Key 加载页面后 401 弹「Session Key 错误」遮罩拦截所有点击。
+    await sessionUtils.ensureSessionHealthy(page, {
+      retryUrl: getAppBaseUrl() + ROUTE_TABLE_LIST_PATH,
+    });
     await umUtils.handleUrlInvalidAlert(page);
-    await umUtils.ensureLoggedIn(page);
     await ensureAuthenticatedShell(page);
   } catch (e) {
     if (isConnectionError(e)) {
@@ -260,6 +270,11 @@ async function ensureRouteTableModuleAvailable(page) {
 }
 
 async function gotoRouteTableListPage(page) {
+  const targetUrl = getAppBaseUrl() + ROUTE_TABLE_LIST_PATH;
+  // 导航入口统一会话守卫（含「已在目标页」等提前返回分支）：
+  // Session Key 失效时先自愈（重新登录 + 回写 auth.json），避免 401 遮罩拦截点击。
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
+
   if (await isRouteTableListPageReady(page)) {
     common.log('已在路由表列表页，跳过导航');
     await umUtils.handleUrlInvalidAlert(page);
@@ -274,6 +289,7 @@ async function gotoRouteTableListPage(page) {
 
   await ensureAppSession(page);
   await navigateToRouteTableList(page);
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
 }
 
 async function backToRouteTableListViaBreadcrumb(page) {
@@ -444,7 +460,9 @@ async function waitForOwnerRouteRulesUpdateResponse(
 
 async function expectRouteTableRowVisible(page, typeLabel, owner) {
   const table = routeTableList(page);
-  await expect(routeTableRow(table, typeLabel, owner)).toBeVisible({
+  const row = routeTableRow(table, typeLabel, owner);
+  await ensureRouteTableRowReachable(page, row);
+  await expect(row).toBeVisible({
     timeout: 15000,
   });
 }
@@ -452,6 +470,7 @@ async function expectRouteTableRowVisible(page, typeLabel, owner) {
 async function expectRouteTableStatus(page, typeLabel, owner, enabled) {
   const table = routeTableList(page);
   const row = routeTableRow(table, typeLabel, owner);
+  await ensureRouteTableRowReachable(page, row);
   const statusLabel = enabled
     ? DOC_ROUTE_TABLE.enabledLabel
     : DOC_ROUTE_TABLE.disabledLabel;
@@ -463,6 +482,7 @@ async function expectRouteTableStatus(page, typeLabel, owner, enabled) {
 async function expectRouteTableToggleButtons(page, typeLabel, owner, enabled) {
   const table = routeTableList(page);
   const row = routeTableRow(table, typeLabel, owner);
+  await ensureRouteTableRowReachable(page, row);
   const enableBtn = row.getByRole('button', {
     name: DOC_ROUTE_TABLE.enabledLabel,
   });
@@ -488,6 +508,7 @@ async function openRouteTableDetail(page, typeLabel, owner, apiOwner) {
   await navigateToRouteTableByOwner(page, typeLabel, owner);
   const table = routeTableList(page);
   const row = routeTableRow(table, typeLabel, owner);
+  await ensureRouteTableRowReachable(page, row);
   await waitForOwnerRouteRulesGetResponse(page, ownerKind, apiId, async () => {
     await row
       .getByRole('button', { name: DOC_ROUTE_RULE.viewRuleButton })
@@ -516,7 +537,9 @@ async function expectRouteTableDetailOpen(page, typeLabel, owner) {
     ).toBeVisible();
   }
   await expect(page.locator('.route-owner-label')).toContainText(
-    typeLabel === DOC_ROUTE_TABLE.apiKeyTypeLabel ? 'API-Key' : typeLabel,
+    typeLabel === DOC_ROUTE_TABLE.apiKeyTypeLabel
+      ? DOC_ROUTE_TABLE.apiKeyTypeLabels
+      : typeLabel,
   );
 }
 
@@ -577,6 +600,7 @@ async function ensureRouteTableDisabledViaUI(page, typeLabel, owner, apiOwner) {
   await navigateToRouteTableByOwner(page, typeLabel, owner);
   const table = routeTableList(page);
   const row = routeTableRow(table, typeLabel, owner);
+  await ensureRouteTableRowReachable(page, row);
   const disableBtn = row.getByRole('button', {
     name: DOC_ROUTE_TABLE.disabledLabel,
   });
@@ -590,6 +614,7 @@ async function ensureRouteTableEnabledViaUI(page, typeLabel, owner, apiOwner) {
   await navigateToRouteTableByOwner(page, typeLabel, owner);
   const table = routeTableList(page);
   const row = routeTableRow(table, typeLabel, owner);
+  await ensureRouteTableRowReachable(page, row);
   const enableBtn = row.getByRole('button', {
     name: DOC_ROUTE_TABLE.enabledLabel,
   });
@@ -617,7 +642,22 @@ async function enterRouteRulesEditMode(page) {
   await page.waitForTimeout(500);
 }
 
-async function submitGlobalRouteRulesAndWait(page) {
+/**
+ * 点击「提交并生效」并等待 PUT 成功提示
+ *
+ * 2026-10-15 起该按钮带脏检查（`:disabled="!isDirty"`，见 RT-D-29）：
+ * 无本地净变更时按钮置灰、点击必然超时。清理类调用（删除用例自己刚加、
+ * 且从未提交过的规则）本地表格已回到原状，此时本就没有可提交的内容，
+ * 传 `skipWhenNoLocalChange: true` 直接跳过；真实提交步骤保持默认（严格失败）。
+ */
+async function submitGlobalRouteRulesAndWait(
+  page,
+  { skipWhenNoLocalChange = false } = {},
+) {
+  if (skipWhenNoLocalChange && (await isSubmitAndEffectDisabled(page))) {
+    common.log('无本地净变更（提交并生效置灰），跳过提交');
+    return null;
+  }
   await waitForGlobalRouteRulesPutResponse(page, async () => {
     await page
       .getByRole('button', { name: DOC_ROUTE_TABLE.submitAndEffect })
@@ -627,6 +667,23 @@ async function submitGlobalRouteRulesAndWait(page) {
     DOC_ROUTE_RULE_FORM.submitSuccessToast,
   );
   await page.waitForTimeout(1000);
+}
+
+/**
+ * 捕获下一次 `PUT /global-route-rules` 的请求体
+ *
+ * 先取 Promise 再触发提交（与 waitForGlobalRouteRulesPutResponse 同款并发监听），
+ * 用于断言真实提交 payload 的规则顺序与字段。
+ */
+function captureGlobalRouteRulesPutPayload(page, timeout = 15000) {
+  return page
+    .waitForRequest(
+      (res) =>
+        res.url().includes('/global-route-rules') &&
+        res.method() === 'PUT',
+      { timeout },
+    )
+    .then((request) => request.postDataJSON());
 }
 
 async function submitGlobalRouteRulesAndExpectError(page) {
@@ -1190,9 +1247,22 @@ async function expectRuleRowHidden(page, ruleName) {
   await table.expectRowHidden(ruleName);
 }
 
+/**
+ * 清理助手：删除指定 Global 规则并提交（多用作用例 afterEach 的兜底）
+ *
+ * 两个坑：
+ * 1) 不能用 `ensureRouteTableModuleAvailable` —— 它在列表页未就绪时会调用
+ *    `test.skip()`，在 afterEach 里抛 skip 信号会把已通过的用例记成失败
+ *    （RT-D-09/RT-D-10/RT-V-03-3/RT-V-12-1 的失败根因）。这里改为硬跳转列表页，
+ *    顺带丢弃详情页未提交的本地变更（SPA 的离开确认框不会拦硬跳转）。
+ * 2) 用例只做「本地保存」时该规则从未进后端：本地删掉后无净变更，提交按钮置灰，
+ *    此时跳过提交（skipWhenNoLocalChange）即可，无需写后端。
+ */
 async function deleteRuleByNameAndSubmit(page, ruleName) {
   try {
-    await ensureRouteTableModuleAvailable(page);
+    await ensureChineseLang(page);
+    await navigateToRouteTableListByUrl(page);
+    await clearRouteTableStatusFilter(page);
     await openGlobalRouteTableDetail(page);
     await enterRouteRulesEditMode(page);
     const table = routeRulesTable(page);
@@ -1200,7 +1270,9 @@ async function deleteRuleByNameAndSubmit(page, ruleName) {
     if (await deleteBtn.isVisible().catch(() => false)) {
       await deleteBtn.click();
       await page.waitForTimeout(500);
-      await submitGlobalRouteRulesAndWait(page);
+      await submitGlobalRouteRulesAndWait(page, {
+        skipWhenNoLocalChange: true,
+      });
       await expectRouteRulesViewMode(page);
     }
     await gotoRouteTableListPage(page);
@@ -1258,6 +1330,265 @@ async function expectRouteRulesEditMode(page) {
   await expect(
     page.locator('.route-rules .enable-row .ivu-select-disabled'),
   ).toHaveCount(0);
+}
+
+/**
+ * 规则表格「生效次序」相关助手（复制 / 拖拽排序 / 提交按钮态）
+ *
+ * 行定位统一收敛到主表格 body（`.show-iView-Table .ivu-table-body tbody tr`）：
+ * 固定列与搜索行会在页面上渲染出重复行，按 `.page-table tbody tr` 取行会串位。
+ */
+function routeRulesMainRows(page) {
+  return routeRulesTable(page)
+    .rootLocator()
+    .locator('.show-iView-Table .ivu-table-body tbody tr');
+}
+
+async function getRuleNamesInOrder(page) {
+  const rows = routeRulesMainRows(page);
+  const count = await rows.count();
+  const names = [];
+  for (let i = 0; i < count; i += 1) {
+    names.push((await rows.nth(i).locator('td').first().innerText()).trim());
+  }
+  return names;
+}
+
+/**
+ * 复刻 RouteRules.onRuleDragDrop 的移动语义：拖拽行被移动到目标行的原下标处。
+ */
+function moveRuleToIndex(names, fromIndex, toIndex) {
+  const next = names.slice();
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+/**
+ * 复刻 RouteRules.onCopyRule 的副本命名：`<name>-copy`，重名递增为 `-copy2`…，
+ * 名称总长截断到 64 字符。
+ */
+function buildCopyRuleName(sourceName, existingNames) {
+  const name = sourceName || '';
+  let seq = 1;
+  let newName;
+  do {
+    const suffix = seq === 1 ? '-copy' : `-copy${seq}`;
+    newName = `${name.substring(0, 64 - suffix.length)}${suffix}`;
+    seq += 1;
+  } while ((existingNames || []).includes(newName));
+  return newName;
+}
+
+async function expectRuleNamesInOrder(page, expectedNames) {
+  const actual = await getRuleNamesInOrder(page);
+  expect(actual, '规则表格生效次序不符').toEqual(expectedNames);
+}
+
+/** 真实拖拽：把 fromIndex 行拖到 toIndex 行上（Playwright 原生 dragTo，走 iView Sortable） */
+async function dragRuleRow(page, fromIndex, toIndex) {
+  const rows = routeRulesMainRows(page);
+  const from = rows.nth(fromIndex);
+  const to = rows.nth(toIndex);
+  await expect(from).toBeVisible();
+  await expect(to).toBeVisible();
+  await from.dragTo(to);
+  await page.waitForTimeout(800);
+}
+
+function routeRulesDragTip(page) {
+  return page.locator('.route-rules .drag-tip');
+}
+
+async function expectRouteRulesDragTipVisible(page, visible = true) {
+  if (visible) {
+    await expect(routeRulesDragTip(page)).toBeVisible();
+  } else {
+    await expect(routeRulesDragTip(page)).toHaveCount(0);
+  }
+}
+
+async function expectRuleRowsDraggable(page, draggable = true) {
+  const rows = routeRulesMainRows(page);
+  const count = await rows.count();
+  expect(count, '规则表格无数据行，无法校验拖拽属性').toBeGreaterThan(0);
+  for (let i = 0; i < count; i += 1) {
+    expect(await rows.nth(i).getAttribute('draggable')).toBe(
+      draggable ? 'true' : null,
+    );
+  }
+}
+
+function getSubmitAndEffectButton(page) {
+  return page.getByRole('button', { name: DOC_ROUTE_TABLE.submitAndEffect });
+}
+
+async function isSubmitAndEffectDisabled(page) {
+  return getSubmitAndEffectButton(page).isDisabled();
+}
+
+async function expectSubmitAndEffectDisabled(page, disabled = true) {
+  if (disabled) {
+    await expect(getSubmitAndEffectButton(page)).toBeDisabled();
+  } else {
+    await expect(getSubmitAndEffectButton(page)).toBeEnabled();
+  }
+}
+
+function copyRuleButtonInRow(row) {
+  return row.getByRole('button', { name: DOC_ROUTE_TABLE.copyRuleButton });
+}
+
+async function expectCopyRuleButtonIsLeftmost(page, ruleName) {
+  const row = await routeRuleRowByName(page, ruleName);
+  const buttons = row.locator('td').last().getByRole('button');
+  await expect(buttons.first()).toHaveText(DOC_ROUTE_TABLE.copyRuleButton);
+  await expect(buttons.first()).toHaveClass(/ivu-btn-success/);
+}
+
+async function clickCopyRuleButtonByIndex(page, index) {
+  const button = copyRuleButtonInRow(routeRulesMainRows(page).nth(index));
+  await expect(button).toBeVisible();
+  await button.click();
+  await page.waitForTimeout(500);
+}
+
+async function clickCopyRuleButton(page, ruleName) {
+  const button = copyRuleButtonInRow(await routeRuleRowByName(page, ruleName));
+  await expect(button).toBeVisible();
+  await button.click();
+  await page.waitForTimeout(500);
+}
+
+/**
+ * 用本地「复制」把规则行数补齐到 minimum（纯本地操作，不写后端）
+ *
+ * 拖拽排序需要多行才能验证，而环境里 Global 路由表可能只有 1~2 条规则
+ * （既有造数 `resourceApi.initRouteTestData` 会把 rules 覆盖成单条），
+ * 补齐后各用例不再依赖环境的规则条数。
+ */
+async function ensureRuleRowsAtLeast(page, minimum) {
+  let names = await getRuleNamesInOrder(page);
+  let rounds = 0;
+  while (names.length < minimum && rounds <= minimum) {
+    await clickCopyRuleButtonByIndex(page, 0);
+    const next = await getRuleNamesInOrder(page);
+    if (next.length <= names.length) {
+      common.log('复制未增加规则行，停止补齐（当前 ' + next.length + ' 条）');
+      break;
+    }
+    names = next;
+    rounds += 1;
+  }
+  common.log('补齐后规则顺序: ' + names.join(' > '));
+  return names;
+}
+
+/** 按规则名精确定位行下标（表格 `hasText` 是子串匹配，会把 test 与 test123 混在一起） */
+async function routeRuleRowIndexByName(page, ruleName) {
+  const names = await getRuleNamesInOrder(page);
+  const index = names.indexOf(ruleName);
+  expect(index, `规则表格未找到规则「${ruleName}」`).toBeGreaterThanOrEqual(0);
+  return index;
+}
+
+async function routeRuleRowByName(page, ruleName) {
+  const index = await routeRuleRowIndexByName(page, ruleName);
+  return routeRulesMainRows(page).nth(index);
+}
+
+/** 读取某行各列展示文本（name / cond / targets / fallbacks） */
+async function getRuleRowFieldTexts(page, index) {
+  const row = routeRulesMainRows(page).nth(index);
+  const cells = row.locator('td');
+  return {
+    name: (await cells.nth(0).innerText()).trim(),
+    cond: (await cells.nth(1).innerText()).trim(),
+    targets: (await cells.nth(2).innerText()).trim(),
+    fallbacks: (await cells.nth(3).innerText()).trim(),
+  };
+}
+
+async function openEditRuleDrawerByRowIndex(page, index) {
+  const row = routeRulesMainRows(page).nth(index);
+  await row
+    .getByRole('button', { name: DOC_ROUTE_TABLE.editRuleButton })
+    .click();
+  await page.waitForTimeout(500);
+  await expect(page.locator('.rule-form')).toBeVisible();
+  await expect(
+    page
+      .locator('.ivu-drawer-header-inner')
+      .getByText(DOC_ROUTE_RULE_FORM.drawTitleEdit, { exact: true }),
+  ).toBeVisible();
+}
+
+async function getRuleFormNameValue(page) {
+  return ruleDrawerScope(page).getByPlaceholder('请输入规则名称').inputValue();
+}
+
+/** 按列标题排序（点击表头排序图标）；order: asc / desc */
+async function sortRuleTableByColumn(page, columnTitle, order = 'desc') {
+  const th = routeRulesTable(page)
+    .rootLocator()
+    .locator('.show-iView-Table th')
+    .filter({ hasText: columnTitle })
+    .first();
+  const icon = th.locator(
+    order === 'asc' ? '.ivu-icon-md-arrow-dropup' : '.ivu-icon-md-arrow-dropdown',
+  );
+  await expect(icon).toBeVisible();
+  await icon.click();
+  await page.waitForTimeout(500);
+}
+
+/** 按列标题做表格内本地搜索（不触发接口请求） */
+async function searchRuleTableByColumn(page, columnTitle, keyword) {
+  await routeRulesTable(page).filterByColumn(columnTitle, keyword);
+}
+
+/**
+ * Global 路由规则快照守卫：记录原始状态、断言未被改动、异常时恢复
+ *
+ * 只做 UI 交互（拖拽/复制/置灰）的用例必须零写入，跑完用 verifyUnchanged 证明
+ * 后端 `enabled` 与规则顺序未变；afterEach 的 restoreIfChanged 兜底失败路径。
+ */
+function createGlobalRouteRulesGuard() {
+  let snapshot = null;
+
+  async function readSnapshot(page) {
+    const current = await apiUtils.getGlobalRouteRulesViaApi(page);
+    return current === null ? null : JSON.stringify(current);
+  }
+
+  return {
+    async capture(page) {
+      snapshot = await readSnapshot(page);
+      common.log('Global 路由规则基线快照: ' + snapshot);
+      return snapshot;
+    },
+    get snapshot() {
+      return snapshot;
+    },
+    async verifyUnchanged(page) {
+      expect(snapshot, '未记录 Global 路由规则基线').not.toBeNull();
+      expect(await readSnapshot(page), 'Global 路由规则被改动').toBe(snapshot);
+    },
+    async restoreIfChanged(page) {
+      if (snapshot === null) {
+        return;
+      }
+      if ((await readSnapshot(page)) === snapshot) {
+        return;
+      }
+      const original = JSON.parse(snapshot);
+      await apiUtils.setGlobalRouteRulesViaApi(page, {
+        enabled: original.enabled === true,
+        rules: original.rules || [],
+      });
+      common.log('检测到 Global 路由规则被改动，已恢复原始状态');
+    },
+  };
 }
 
 async function waitAfterRouteFixtureMutation(page, ms = 2000) {
@@ -1394,6 +1725,19 @@ async function gotoApiKeyPageForFixture(page) {
   await umUtils.handleUrlInvalidAlert(page);
 }
 
+/**
+ * 比较路由表类型：后端 route-tables 的 type 取值为 api_key，
+ * 而列表页筛选项与 DOC 文案用的是 apikey，助手内统一归一化后比较
+ * （否则 api_key 行会被判定为「不存在」，如 RT-L-14/15 的前置等待）
+ */
+function routeTableTypeMatches(actualType, expectedType) {
+  const normalize = (value) =>
+    String(value === undefined || value === null ? '' : value)
+      .toLowerCase()
+      .replace(/_/g, '');
+  return normalize(actualType) === normalize(expectedType);
+}
+
 async function waitForRouteTableOwner(
   page,
   routeType,
@@ -1411,7 +1755,9 @@ async function waitForRouteTableOwner(
     // 先用 API 快速检查（无需页面导航）
     const rows = await apiUtils.getRouteTablesViaApi(page);
     const hit = rows.find(
-      (row) => row.type === routeType && String(row.owner) === String(ownerId),
+      (row) =>
+        routeTableTypeMatches(row.type, routeType) &&
+        String(row.owner) === String(ownerId),
     );
     if (hit) {
       common.log(`路由表 API 已同步 ${routeType}/${ownerId}`);
@@ -1504,7 +1850,7 @@ async function resolveApiKeyRouteTableOwner(page, cleanup) {
   await ensureRouteTableModuleAvailable(page);
   await reloadRouteTableListPage(page);
   const rows = await apiUtils.getRouteTablesViaApi(page);
-  const hit = rows.find((row) => row.type === 'apikey');
+  const hit = rows.find((row) => routeTableTypeMatches(row.type, 'apikey'));
   if (hit?.owner) {
     common.log('复用已有 API-Key 路由表: ' + hit.owner);
     return { ownerId: hit.owner, created: false };
@@ -1517,7 +1863,7 @@ async function resolveEntityRouteTableOwner(page, cleanup) {
   await ensureRouteTableModuleAvailable(page);
   await reloadRouteTableListPage(page);
   const rows = await apiUtils.getRouteTablesViaApi(page);
-  const hit = rows.find((row) => row.type === 'entity');
+  const hit = rows.find((row) => routeTableTypeMatches(row.type, 'entity'));
   if (hit?.owner) {
     common.log('复用已有 Entity 路由表: ' + hit.owner);
     let ownerName = hit.owner;
@@ -1639,16 +1985,18 @@ async function selectRouteTableTypeFilter(page, typeLabel) {
   await page.waitForTimeout(500);
 }
 
+/**
+ * 选择列表「状态」列筛选值
+ *
+ * 状态列的搜索控件默认就有值（启用），此时 placeholder「请选择状态」不渲染，
+ * 按文案定位取不到元素；因此改为按列下标定位（与 RT-L-17 同一套定位）。
+ */
 async function selectRouteTableStatusFilter(page, statusLabel) {
-  const table = routeTableList(page);
-  const trigger = table
-    .searchArea()
-    .locator('.ivu-select')
-    .filter({ hasText: '请选择状态' })
-    .first();
-  const select = new IvuSelectComponent(page, trigger);
-  await select.selectOptionExact(statusLabel);
-  await page.waitForTimeout(500);
+  await selectRouteTableSearchFilter(
+    page,
+    ROUTE_TABLE_SEARCH_COLUMN.status,
+    statusLabel,
+  );
 }
 
 async function searchRouteTableOwner(page, owner) {
@@ -1662,8 +2010,14 @@ async function searchRouteTableOwner(page, owner) {
 async function navigateToRouteTableByOwner(page, typeLabel, owner) {
   common.log('进入路由表列表并筛选: type=' + typeLabel + ', owner=' + owner);
   await ensureChineseLang(page);
+  // 会话守卫：带失效 Key 加载列表页会 401 弹「Session Key 错误」遮罩，后续筛选/点击全部超时
+  await sessionUtils.ensureSessionHealthy(page, {
+    retryUrl: getAppBaseUrl() + ROUTE_TABLE_LIST_PATH,
+  });
   // Full page load to list page (clears any previous filters/detail view)
   await navigateToRouteTableListByUrl(page);
+  // 列表默认按「启用」过滤，停用行不会出现；按属主定位某一行前先清空该默认值
+  await clearRouteTableStatusFilter(page);
   // Apply type filter — triggers server-side API call with type param
   await waitForRouteTablesListResponse(page, async () => {
     await selectRouteTableTypeFilter(page, typeLabel);
@@ -1682,6 +2036,160 @@ async function clearRouteTableOwnerSearch(page) {
   await page.waitForTimeout(500);
 }
 
+/**
+ * 路由表列表搜索行定位（按列下标，不依赖 placeholder）
+ *
+ * 状态列的搜索控件默认就有值（启用），placeholder 不会渲染，
+ * 因此「请选择状态」这类按文案定位的写法在默认态下取不到元素。
+ */
+const ROUTE_TABLE_SEARCH_COLUMN = { type: 0, owner: 1, status: 2 };
+
+function routeTableSearchCell(page, columnIndex) {
+  return routeTableList(page)
+    .searchArea()
+    .locator('tbody tr')
+    .first()
+    .locator('td')
+    .nth(columnIndex);
+}
+
+function routeTableSearchSelect(page, columnIndex) {
+  return routeTableSearchCell(page, columnIndex).locator('.ivu-select').first();
+}
+
+async function selectRouteTableSearchFilter(page, columnIndex, optionLabel) {
+  const trigger = routeTableSearchSelect(page, columnIndex);
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await page
+    .locator('.ivu-select-dropdown:visible .ivu-select-item')
+    .getByText(optionLabel, { exact: true })
+    .click();
+  await page.waitForTimeout(500);
+}
+
+/** 清空搜索行内的下拉筛选（hover 后点击清空图标，iView 主动派发 on-clear） */
+async function clearRouteTableSearchFilter(page, columnIndex) {
+  const trigger = routeTableSearchSelect(page, columnIndex);
+  if ((await trigger.locator('.ivu-select-selected-value').count()) === 0) {
+    return;
+  }
+  await trigger.hover();
+  await page.waitForTimeout(300);
+  const clearIcon = trigger.locator(
+    '.ivu-select-selection .ivu-icon-ios-close-circle',
+  );
+  await expect(clearIcon).toBeVisible();
+  await clearIcon.click();
+  await page.waitForTimeout(500);
+}
+
+async function expectRouteTableSearchFilterValue(
+  page,
+  columnIndex,
+  optionLabel,
+) {
+  await expect(routeTableSearchSelect(page, columnIndex)).toContainText(
+    optionLabel,
+  );
+}
+
+/**
+ * 清空列表「状态」列筛选（已设置时才动作，返回是否执行了清空）
+ *
+ * 列表默认按「启用」过滤（列上预置 searchValue='true'），停用的路由表因此
+ * 不在列表中；而按行定位/打开详情/切换启停的前置流程都需要目标行可见。
+ * 该动作只发生在「需要操作某一行」的路径上，不发生在页面加载时，
+ * 以便 RT-L-17 仍能断言首屏默认值。
+ */
+async function clearRouteTableStatusFilter(page) {
+  const trigger = routeTableSearchSelect(
+    page,
+    ROUTE_TABLE_SEARCH_COLUMN.status,
+  );
+  const ready = await trigger
+    .waitFor({ state: 'visible', timeout: 8000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!ready) {
+    common.log('未找到列表「状态」筛选控件，跳过清空');
+    return false;
+  }
+  if ((await trigger.locator('.ivu-select-selected-value').count()) === 0) {
+    return false;
+  }
+  common.log('清空路由表列表「状态」筛选项（默认「启用」会隐藏停用行）');
+  await waitForRouteTablesListResponse(page, () =>
+    clearRouteTableSearchFilter(page, ROUTE_TABLE_SEARCH_COLUMN.status),
+  );
+  return true;
+}
+
+/**
+ * 目标行不可见时先清空「状态」筛选再返回（幂等；行已渲染则不做任何事）
+ *
+ * 行定位助手统一走这里，避免默认「启用」筛选把停用行挡在列表外
+ * 导致 10s 点击超时（RT-L-17 之外的用例都会被它救回）。
+ */
+async function ensureRouteTableRowReachable(page, rowLocator) {
+  if ((await rowLocator.count()) > 0) {
+    return false;
+  }
+  await routeTableList(page)
+    .waitForLoaded()
+    .catch(() => {});
+  if ((await rowLocator.count()) > 0) {
+    return false;
+  }
+  return clearRouteTableStatusFilter(page);
+}
+
+const ROUTE_TABLES_LIST_REQUEST_FILTER = (request) =>
+  request.method() === 'GET' && request.url().includes('/route-tables?');
+
+/** 记录页面生命周期内全部 route-tables 列表请求 URL（首屏默认筛选取数用） */
+function trackRouteTableListRequests(page) {
+  const urls = [];
+  const handler = (request) => {
+    if (ROUTE_TABLES_LIST_REQUEST_FILTER(request)) {
+      urls.push(request.url());
+    }
+  };
+  page.on('request', handler);
+  return {
+    urls,
+    stop() {
+      page.off('request', handler);
+    },
+  };
+}
+
+/** 执行动作并返回该动作触发的 route-tables 列表请求 URL */
+async function waitForRouteTableListRequestUrl(page, action) {
+  try {
+    const [request] = await Promise.all([
+      page.waitForRequest(ROUTE_TABLES_LIST_REQUEST_FILTER, {
+        timeout: 15000,
+      }),
+      action(),
+    ]);
+    return request.url();
+  } catch (e) {
+    common.log('等待 route-tables 列表请求超时: ' + e.message);
+    return null;
+  }
+}
+
+/** 解析列表请求的 query 参数为普通对象（未携带的参数为 undefined） */
+function getRouteTableListRequestParams(url) {
+  const parsed = new URL(url);
+  const params = {};
+  parsed.searchParams.forEach((value, key) => {
+    params[key] = value;
+  });
+  return params;
+}
+
 async function expectRouteTableListHeaders(page) {
   const table = routeTableList(page);
   await table.expectHeaders(...DOC_ROUTE_TABLE.listHeaders);
@@ -1689,12 +2197,15 @@ async function expectRouteTableListHeaders(page) {
 
 async function expectGlobalRouteTableRowVisible(page) {
   const table = routeTableList(page);
-  await expect(globalRouteTableRow(table)).toBeVisible({ timeout: 15000 });
+  const row = globalRouteTableRow(table);
+  await ensureRouteTableRowReachable(page, row);
+  await expect(row).toBeVisible({ timeout: 15000 });
 }
 
 async function expectGlobalRouteTableStatus(page, enabled) {
   const table = routeTableList(page);
   const row = globalRouteTableRow(table);
+  await ensureRouteTableRowReachable(page, row);
   const statusLabel = enabled
     ? DOC_ROUTE_TABLE.enabledLabel
     : DOC_ROUTE_TABLE.disabledLabel;
@@ -1707,6 +2218,7 @@ async function expectGlobalRouteTableStatus(page, enabled) {
 async function expectGlobalRouteTableToggleButtons(page, enabled) {
   const table = routeTableList(page);
   const row = globalRouteTableRow(table);
+  await ensureRouteTableRowReachable(page, row);
   const enableBtn = row.getByRole('button', {
     name: DOC_ROUTE_TABLE.enabledLabel,
   });
@@ -1728,8 +2240,10 @@ async function expectGlobalRouteTableToggleButtons(page, enabled) {
 
 async function openGlobalRouteTableDetail(page) {
   const table = routeTableList(page);
+  const row = globalRouteTableRow(table);
+  await ensureRouteTableRowReachable(page, row);
   await waitForGlobalRouteRulesGetResponse(page, async () => {
-    await globalRouteTableRow(table)
+    await row
       .getByRole('button', { name: DOC_ROUTE_RULE.viewRuleButton })
       .click();
   });
@@ -1768,6 +2282,7 @@ async function expectRouteRulesTableHeaders(page) {
 async function enableGlobalRouteTableAndWait(page) {
   const table = routeTableList(page);
   const row = globalRouteTableRow(table);
+  await ensureRouteTableRowReachable(page, row);
 
   await waitForGlobalRouteRulesPutResponse(page, async () => {
     await row
@@ -1786,6 +2301,7 @@ async function enableGlobalRouteTableAndWait(page) {
 async function disableGlobalRouteTableAndWait(page) {
   const table = routeTableList(page);
   const row = globalRouteTableRow(table);
+  await ensureRouteTableRowReachable(page, row);
 
   await waitForGlobalRouteRulesPutResponse(page, async () => {
     await row
@@ -1806,6 +2322,9 @@ async function ensureGlobalRouteTableDisabledViaUI(page) {
   await reloadRouteTableListPage(page);
   const table = routeTableList(page);
   const row = globalRouteTableRow(table);
+  // 重新加载后状态筛选回到默认「启用」，停用的 Global 行会被隐藏，
+  // 不先解除筛选下面的按钮状态判断会静默失效（前置条件形同未执行）
+  await ensureRouteTableRowReachable(page, row);
   const disableBtn = row.getByRole('button', {
     name: DOC_ROUTE_TABLE.disabledLabel,
   });
@@ -1819,6 +2338,7 @@ async function ensureGlobalRouteTableEnabledViaUI(page) {
   await reloadRouteTableListPage(page);
   const table = routeTableList(page);
   const row = globalRouteTableRow(table);
+  await ensureRouteTableRowReachable(page, row);
   const enableBtn = row.getByRole('button', {
     name: DOC_ROUTE_TABLE.enabledLabel,
   });
@@ -1837,6 +2357,7 @@ async function ensureGlobalRouteTableEnabled(page) {
 
 module.exports = {
   DOC_ROUTE_TABLE,
+  ROUTE_TABLE_SEARCH_COLUMN,
   DOC_ROUTE_RULE,
   DOC_ROUTE_RULE_FORM,
   getWeightSumErrorMessage,
@@ -1856,6 +2377,7 @@ module.exports = {
   expectRouteRulesViewMode,
   expectRouteRulesTableHeaders,
   submitGlobalRouteRulesAndWait,
+  captureGlobalRouteRulesPutPayload,
   submitGlobalRouteRulesAndExpectError,
   submitOwnerRouteRulesAndWait,
   submitOwnerRouteRulesAndWait,
@@ -1939,6 +2461,40 @@ module.exports = {
   ensureRouteTableEnabledViaUI,
   enterRouteRulesEditMode,
   expectRouteRulesEditMode,
+  routeRulesMainRows,
+  getRuleNamesInOrder,
+  moveRuleToIndex,
+  buildCopyRuleName,
+  expectRuleNamesInOrder,
+  dragRuleRow,
+  routeRulesDragTip,
+  expectRouteRulesDragTipVisible,
+  expectRuleRowsDraggable,
+  getSubmitAndEffectButton,
+  isSubmitAndEffectDisabled,
+  expectSubmitAndEffectDisabled,
+  expectCopyRuleButtonIsLeftmost,
+  clickCopyRuleButton,
+  clickCopyRuleButtonByIndex,
+  ensureRuleRowsAtLeast,
+  routeRuleRowByName,
+  routeRuleRowIndexByName,
+  getRuleRowFieldTexts,
+  openEditRuleDrawerByRowIndex,
+  getRuleFormNameValue,
+  sortRuleTableByColumn,
+  searchRuleTableByColumn,
+  createGlobalRouteRulesGuard,
+  routeTableSearchSelect,
+  selectRouteTableSearchFilter,
+  clearRouteTableSearchFilter,
+  clearRouteTableStatusFilter,
+  expectRouteTableSearchFilterValue,
+  ensureRouteTableRowReachable,
+  routeTableTypeMatches,
+  trackRouteTableListRequests,
+  waitForRouteTableListRequestUrl,
+  getRouteTableListRequestParams,
   createEntityRouteTableFixture,
   createApiKeyRouteTableFixture,
   createEntityRouteTableFixtureViaUI,

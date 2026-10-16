@@ -101,7 +101,13 @@ test.describe('操作日志 - OL-D-02 详情字段完整性与接口数据一致
       );
       await olp.expectDetailFieldContains(page, '操作人', apiLog.operator_name);
       await olp.expectDetailFieldContains(page, '操作动作', apiLog.action);
-      await olp.expectDetailFieldContains(page, '资源类型', apiLog.resource_type);
+      // 详情页「资源类型」渲染 i18n 标签（product OperationLogs/index.vue:100 的
+      // resourceTypeLabel），接口返回的是枚举值 entity → 断言走标签映射比较
+      await olp.expectDetailFieldContains(
+        page,
+        '资源类型',
+        olp.resourceTypeLabel(apiLog.resource_type),
+      );
       await olp.expectDetailFieldContains(page, '资源ID', apiLog.resource_id);
       await olp.expectDetailFieldContains(page, '资源名称', apiLog.resource_name);
       await olp.expectDetailFieldContains(

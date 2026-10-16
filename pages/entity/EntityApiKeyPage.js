@@ -90,6 +90,104 @@ async function expectAddApiKeyButtonVisible(page) {
   await expect(page.getByRole('button', { name: '创建' })).toBeVisible();
 }
 
+// ── 只读管理员视角（v-has 隐藏写操作）断言 ───────────────────────────
+
+const HAS_HIDDEN_CLASS = 'v-has-hidden';
+
+/** 匹配被 v-has 隐藏且文本包含 text 的按钮（元素仍在 DOM） */
+function hasHiddenButtons(page, text) {
+  return page.locator(`button.${HAS_HIDDEN_CLASS}`).filter({ hasText: text });
+}
+
+/** 只读：工具栏「创建」写按钮仍在 DOM 中，但被 v-has 隐藏 */
+async function expectAddApiKeyButtonHidden(page) {
+  const btn = hasHiddenButtons(page, '创建');
+  await expect(btn).toHaveCount(1, { timeout: 15000 });
+  await expect(btn.first()).toBeHidden();
+}
+
+/** 只读：行内「编辑」「删除」写按钮被 v-has 隐藏 */
+async function expectApiKeyRowWriteActionsHidden(page, description) {
+  const row = apiKeyTable(page)
+    .dataRows()
+    .filter({ hasText: description })
+    .first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  for (const label of ['编辑', '删除']) {
+    const btn = row
+      .locator(`button.${HAS_HIDDEN_CLASS}`)
+      .filter({ hasText: label });
+    await expect(btn).toHaveCount(1);
+    await expect(btn.first()).toBeHidden();
+  }
+}
+
+/** 只读：行内只读入口「管理路由规则」保持可见 */
+async function expectApiKeyRowManageRouteRulesVisible(page, description) {
+  await expect(
+    apiKeyTable(page).rowAction(description, '管理路由规则'),
+  ).toBeVisible({ timeout: 15000 });
+}
+
+/** 只读：详情抽屉「重置配额」写按钮被 v-has 隐藏 */
+async function expectResetApiKeyQuotaBtnHidden(page) {
+  const drawer = apiKeyDetailDrawer(page);
+  const btn = drawer
+    .locator(`button.${HAS_HIDDEN_CLASS}`)
+    .filter({ hasText: '重置配额' });
+  await expect(btn).toHaveCount(1, { timeout: 15000 });
+  await expect(btn.first()).toBeHidden();
+}
+
+/** 只读：检索区（只读控件）保持可见 */
+async function expectApiKeySearchAreaVisible(page) {
+  await expect(apiKeyTable(page).searchArea()).toBeVisible({ timeout: 15000 });
+}
+
+/** 管理员对照：行内「编辑」「删除」写按钮可见 */
+async function expectApiKeyRowWriteActionsVisible(page, description) {
+  const row = apiKeyTable(page)
+    .dataRows()
+    .filter({ hasText: description })
+    .first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  for (const label of ['编辑', '删除']) {
+    await expect(row.getByRole('button', { name: label })).toBeVisible({
+      timeout: 15000,
+    });
+  }
+}
+
+/** 管理员对照：详情抽屉「重置配额」按钮可见（仅有限配额渲染） */
+async function expectResetApiKeyQuotaBtnVisible(page) {
+  const drawer = apiKeyDetailDrawer(page);
+  await expect(
+    drawer.getByRole('button', { name: '重置配额' }),
+  ).toBeVisible({ timeout: 15000 });
+}
+
+/**
+ * 读取详情抽屉「Key 值」行展示的值（排除「复制」按钮文案）。
+ * 用于验证只读视角下后端返回的掩码值被前端原样展示。
+ */
+async function readApiKeyDetailKeyValue(page) {
+  const drawer = apiKeyDetailDrawer(page);
+  const row = drawer
+    .locator('.info-row')
+    .filter({ hasText: 'Key 值' })
+    .first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  const value = row.locator('.info-value');
+  return value.evaluate((el) => {
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+        return node.textContent.trim();
+      }
+    }
+    return el.textContent.replace(/复制/g, '').trim();
+  });
+}
+
 async function expectApiKeyTableVisible(page) {
   const table = apiKeyTable(page);
   await expect(table.rootLocator()).toBeVisible();
@@ -1542,6 +1640,14 @@ module.exports = {
   gotoApiKeyManagementPage,
   expectApiKeyManagementPageTitle,
   expectAddApiKeyButtonVisible,
+  expectAddApiKeyButtonHidden,
+  expectApiKeyRowWriteActionsHidden,
+  expectApiKeyRowManageRouteRulesVisible,
+  expectResetApiKeyQuotaBtnHidden,
+  expectApiKeySearchAreaVisible,
+  expectApiKeyRowWriteActionsVisible,
+  expectResetApiKeyQuotaBtnVisible,
+  readApiKeyDetailKeyValue,
   expectApiKeyTableVisible,
   expectApiKeyPageLayout,
   openAddApiKeyDrawer,

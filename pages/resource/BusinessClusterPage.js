@@ -16,6 +16,7 @@
 const { expect } = require('@playwright/test');
 const { PageTableComponent } = require('../../components/layout');
 const { IvuStepsComponent } = require('../../components/iview/IvuSteps');
+const { IvuMessageComponent } = require('../../components/iview/IvuMessage');
 const { ElSelectComponent } = require('../../components/element');
 const common = require('../../utils/common');
 const {
@@ -1185,7 +1186,7 @@ async function expectKeyPolicyStrategyOptions(
   expect(normalized).toEqual(options);
 }
 
-// 大模型配置步骤 Card 分组展示（RM-BC-56：5 张 Card）
+// 大模型配置步骤 Card 分组展示（RM-BC-56：WRR 下 7 张 Card；EPP 下追加流控配置与 EPP 运行时参数共 9 张）
 async function expectModelCardGrouping(
   page,
   cardTitles,
@@ -1740,6 +1741,15 @@ async function ensureBusinessClusterRowVisible(page, clusterName) {
   await expectBusinessClusterVisibleInAllPages(page, clusterName);
 }
 
+// API 造数后刷新列表（UI 列表仅在页面加载时拉取 GET /clusters）
+async function refreshBusinessClusterList(page) {
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: '添加集群' })).toBeVisible({
+    timeout: 15000,
+  });
+  await waitAfterResourceMutation(page, 500);
+}
+
 async function confirmDeleteBusinessCluster(page) {
   const modal = page.locator('.ivu-modal-wrap').filter({ hasText: '是否删除' });
   await expect(modal).toBeVisible();
@@ -2036,6 +2046,452 @@ async function waitForClusterReviewRequest(page, action) {
   return request;
 }
 
+// ===== 2026-10-13 EPP 运行时参数（RM-BC-115~122）=====
+// 「EPP 运行时参数」是 EPP 配置区内第 2 层 Card（外层「均衡模式配置」Card 的 body 内），
+// 外层 Card 的 hasText 也包含该标题，故按「自有 card-head 标题」过滤，避免 hasText 命中两层。
+// 分组子字段（7 个）：关闭健康检查（switch）、健康检查间隔/冷却时长/连接超时/调用超时
+// （DurationInput：数字框 + 单位下拉 ms/s/m）、失败次数阈值/成功次数阈值（InputNumber min=1）；
+// 组合写法（如 1m30s）无法拆分时该字段回退为纯文本输入（无 .ivu-input-group / 单位下拉）。
+
+function eppRuntimeCard(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.llm-section-card')
+    .filter({
+      has: page.locator(
+        ':scope > .ivu-card-head:has-text("' +
+          DOC_BUSINESS_CLUSTER.eppRuntimeCard +
+          '")',
+      ),
+    });
+}
+
+function eppRuntimeCardHead(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return eppRuntimeCard(page, drawerTitle).locator(':scope > .ivu-card-head');
+}
+
+function eppRuntimeDurationLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckIntervalLabel,
+    DOC_BUSINESS_CLUSTER.eppCooldownLabel,
+    DOC_BUSINESS_CLUSTER.eppConnectTimeoutLabel,
+    DOC_BUSINESS_CLUSTER.eppCallTimeoutLabel,
+  ];
+}
+
+function eppRuntimeThresholdLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppFailThresholdLabel,
+    DOC_BUSINESS_CLUSTER.eppSuccessThresholdLabel,
+  ];
+}
+
+function eppRuntimeLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+    ...eppRuntimeDurationLabels(),
+    ...eppRuntimeThresholdLabels(),
+  ];
+}
+
+// 2026-10-13 精简后仅 3 个字段保留 ? 提示图标
+function eppRuntimeHelpIconLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+    DOC_BUSINESS_CLUSTER.eppCooldownLabel,
+    DOC_BUSINESS_CLUSTER.eppCallTimeoutLabel,
+  ];
+}
+
+function eppRuntimeWithoutHelpIconLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckIntervalLabel,
+    ...eppRuntimeThresholdLabels(),
+    DOC_BUSINESS_CLUSTER.eppConnectTimeoutLabel,
+  ];
+}
+
+async function expectEppRuntimeCardVisible(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  await expect(eppRuntimeCard(page, drawerTitle)).toHaveCount(1);
+  await expect(eppRuntimeCard(page, drawerTitle)).toBeVisible();
+}
+
+async function expectEppRuntimeCardHidden(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  await expect(eppRuntimeCard(page, drawerTitle)).toHaveCount(0);
+}
+
+// 分组构成：7 子字段 + 4 复合 duration（数字框 + 单位下拉）+ 2 整数阈值
+async function expectEppRuntimeFieldComposition(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  await expect(card).toBeVisible();
+  await expect(card.locator('.ivu-form-item')).toHaveCount(7);
+  for (const label of eppRuntimeLabels()) {
+    await expect(eppFormItem(card, label), `子字段「${label}」应展示`).toBeVisible();
+  }
+  await expect(
+    eppFormItem(card, DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel).locator(
+      '.ivu-switch',
+    ),
+    '「关闭后台健康检查」应为 switch 开关',
+  ).toHaveCount(1);
+  for (const label of eppRuntimeDurationLabels()) {
+    const item = eppFormItem(card, label);
+    await expect(
+      item.locator('.ivu-input-group'),
+      `duration 字段「${label}」应为「数字框 + 单位下拉」复合控件`,
+    ).toHaveCount(1);
+    await expect(item.locator('input.ivu-input')).toHaveCount(1);
+    await expect(item.locator('.ivu-select-selected-value')).toHaveCount(1);
+  }
+  for (const label of eppRuntimeThresholdLabels()) {
+    await expect(
+      eppFormItem(card, label).locator('.ivu-input-number'),
+      `阈值字段「${label}」应为整数数字框（InputNumber）`,
+    ).toHaveCount(1);
+  }
+}
+
+async function expectEppRuntimeHelpIcons(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  await expect(
+    card.locator('.provider-help-icon'),
+    '? 提示图标应仅保留 3 个字段',
+  ).toHaveCount(3);
+  for (const label of eppRuntimeHelpIconLabels()) {
+    await expect(
+      eppFormItem(card, label).locator('.provider-help-icon'),
+      `字段「${label}」应保留 ? 提示图标`,
+    ).toHaveCount(1);
+  }
+  for (const label of eppRuntimeWithoutHelpIconLabels()) {
+    await expect(
+      eppFormItem(card, label).locator('.provider-help-icon'),
+      `字段「${label}」不应有 ? 提示图标`,
+    ).toHaveCount(0);
+  }
+}
+
+// 读取单个 duration 字段：{ value, unit, raw }
+// raw=true 表示组合写法（如 1m30s）回退为纯文本输入，无单位下拉
+async function getEppRuntimeDurationValue(card, label) {
+  const item = eppFormItem(card, label);
+  const isCombo = (await item.locator('.ivu-input-group').count()) > 0;
+  const value = await item.locator('input.ivu-input').first().inputValue();
+  const unit = isCombo
+    ? (await item.locator('.ivu-select-selected-value').first().innerText()).trim()
+    : null;
+  return { value, unit, raw: !isCombo };
+}
+
+async function getEppRuntimeValues(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  const readNumber = (label) =>
+    eppFormItem(card, label).locator('.ivu-input-number-input').first().inputValue();
+  return {
+    disabled: await eppFormItem(card, DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel)
+      .locator('.ivu-switch')
+      .first()
+      .evaluate((el) => el.classList.contains('ivu-switch-checked')),
+    checkInterval: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppCheckIntervalLabel,
+    ),
+    failThreshold: await readNumber(DOC_BUSINESS_CLUSTER.eppFailThresholdLabel),
+    cooldown: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppCooldownLabel,
+    ),
+    successThreshold: await readNumber(
+      DOC_BUSINESS_CLUSTER.eppSuccessThresholdLabel,
+    ),
+    connectTimeout: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppConnectTimeoutLabel,
+    ),
+    callTimeout: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppCallTimeoutLabel,
+    ),
+  };
+}
+
+// 默认值：disabled=false、间隔 2+s、失败阈值 3、冷却 45+s、成功阈值 2、连接超时 500+ms、调用超时 3+s
+async function expectEppRuntimeDefaultValues(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const values = await getEppRuntimeValues(page, drawerTitle);
+  const dft = DOC_BUSINESS_CLUSTER.defaultEppRuntime;
+  expect(values.disabled, '关闭后台健康检查默认关闭').toBe(dft.check.disabled);
+  expect(values.checkInterval, '健康检查间隔默认 2 + s').toEqual({
+    value: '2',
+    unit: 's',
+    raw: false,
+  });
+  expect(values.failThreshold, '失败次数阈值默认 3').toBe(
+    String(dft.check.fail_threshold),
+  );
+  expect(values.cooldown, '冷却时长默认 45 + s').toEqual({
+    value: '45',
+    unit: 's',
+    raw: false,
+  });
+  expect(values.successThreshold, '成功次数阈值默认 2').toBe(
+    String(dft.check.success_threshold),
+  );
+  expect(values.connectTimeout, '连接超时默认 500 + ms').toEqual({
+    value: '500',
+    unit: 'ms',
+    raw: false,
+  });
+  expect(values.callTimeout, '调用超时默认 3 + s').toEqual({
+    value: '3',
+    unit: 's',
+    raw: false,
+  });
+  return values;
+}
+
+// 单位下拉选项（ms/s/m）
+async function expectEppRuntimeUnitOptions(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await item.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+  const options = (
+    await item.locator('.ivu-select-dropdown .ivu-select-item').allInnerTexts()
+  ).map((text) => text.trim());
+  expect(options, `duration 字段「${label}」的单位选项`).toEqual(
+    DOC_BUSINESS_CLUSTER.eppDurationUnits,
+  );
+  await item.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+}
+
+async function selectEppRuntimeDurationUnit(
+  page,
+  label,
+  unit,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await item.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+  await item
+    .locator('.ivu-select-dropdown .ivu-select-item')
+    .filter({ hasText: new RegExp('^' + unit + '$') })
+    .first()
+    .click();
+  await page.waitForTimeout(200);
+  await waitAfterResourceMutation(page, 150);
+}
+
+// 填 duration 字段：先切单位再填数值（切单位会按物理时长换算数值），空串 = 未设置
+async function fillEppRuntimeDuration(
+  page,
+  label,
+  { value, unit } = {},
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  const item = eppFormItem(card, label);
+  if (unit) {
+    const isCombo = (await item.locator('.ivu-input-group').count()) > 0;
+    const currentUnit = isCombo
+      ? (await item.locator('.ivu-select-selected-value').first().innerText()).trim()
+      : null;
+    if (currentUnit !== unit) {
+      await selectEppRuntimeDurationUnit(page, label, unit, drawerTitle);
+    }
+  }
+  const input = item.locator('input.ivu-input').first();
+  await input.fill('');
+  if (value !== undefined && value !== null && value !== '') {
+    await input.fill(String(value));
+  }
+  await input.blur();
+  await waitAfterResourceMutation(page, 150);
+}
+
+// 逐字输入 duration 数字框（用于「仅接受数字与小数点」断言），返回输入框最终显示值
+async function typeEppRuntimeDuration(
+  page,
+  label,
+  text,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  const input = item.locator('input.ivu-input').first();
+  await input.fill('');
+  await input.pressSequentially(text, { delay: 40 });
+  await input.blur();
+  await waitAfterResourceMutation(page, 150);
+  return input.inputValue();
+}
+
+async function fillEppRuntimeThreshold(
+  page,
+  label,
+  value,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const input = eppFormItem(eppRuntimeCard(page, drawerTitle), label)
+    .locator('.ivu-input-number-input')
+    .first();
+  await input.fill('');
+  if (value !== undefined && value !== null && value !== '') {
+    await input.fill(String(value));
+  }
+  await input.blur();
+  await waitAfterResourceMutation(page, 150);
+}
+
+async function expectEppRuntimeSwitchState(
+  page,
+  expected,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const switchEl = eppFormItem(
+    eppRuntimeCard(page, drawerTitle),
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+  )
+    .locator('.ivu-switch')
+    .first();
+  const checked = await switchEl.evaluate((el) =>
+    el.classList.contains('ivu-switch-checked'),
+  );
+  expect(checked, '「关闭后台健康检查」开关状态').toBe(expected);
+  return switchEl;
+}
+
+async function toggleEppRuntimeSwitch(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const switchEl = eppFormItem(
+    eppRuntimeCard(page, drawerTitle),
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+  )
+    .locator('.ivu-switch')
+    .first();
+  await switchEl.click();
+  await waitAfterResourceMutation(page, 200);
+}
+
+async function expectEppRuntimeFieldError(
+  page,
+  label,
+  message,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await expect(
+    item.locator('.ivu-form-item-error-tip'),
+    `字段「${label}」的表单校验提示`,
+  ).toHaveText(message);
+}
+
+async function expectEppRuntimeFieldErrorHidden(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await expect(
+    item.locator('.ivu-form-item-error-tip'),
+    `字段「${label}」不应有校验提示`,
+  ).toHaveCount(0);
+}
+
+// 复查页 / 详情页的「EPP 运行时参数」区块（li.title + li.value）
+function eppRuntimeReviewBlock(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelStepBody(page, drawerTitle)
+    .locator('ul')
+    .filter({
+      has: page.locator(
+        'li.title:has-text("' + DOC_BUSINESS_CLUSTER.eppRuntimeReviewTitle + '")',
+      ),
+    })
+    .first();
+}
+
+async function getReviewEppRuntimeValues(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const items = eppRuntimeReviewBlock(page, drawerTitle).locator('.review-item');
+  const count = await items.count();
+  const values = {};
+  for (let i = 0; i < count; i += 1) {
+    const label = (await items.nth(i).locator('.review-label').innerText())
+      .replace(/[:：]\s*$/, '')
+      .trim();
+    const value = (await items.nth(i).locator('.review-value').innerText()).trim();
+    values[label] = value;
+  }
+  return values;
+}
+
+async function expectReviewEppRuntimeValues(
+  page,
+  expected,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const values = await getReviewEppRuntimeValues(page, drawerTitle);
+  expect(
+    Object.keys(values).length,
+    '复查页 / 详情页「EPP 运行时参数」应展示 7 项',
+  ).toBe(7);
+  for (const [label, value] of Object.entries(expected)) {
+    expect(values[label], `复查页 / 详情页「${label}」`).toBe(value);
+  }
+  return values;
+}
+
+// 未配置（epp_runtime = null）时展示「未配置（BFE 补默认）」
+async function expectReviewEppRuntimeUnset(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const block = eppRuntimeReviewBlock(page, drawerTitle);
+  await expect(block).toBeVisible();
+  await expect(block.locator('.empty-text')).toHaveText(
+    DOC_BUSINESS_CLUSTER.eppRuntimeUnsetHint,
+  );
+}
+
+async function expectEppRuntimeToast(page, text) {
+  await new IvuMessageComponent(page).expectText(text);
+}
+
+// 记录本轮是否发起过 POST /clusters（用于「校验失败不发起提交」断言）
+function watchClusterCreateRequests(page) {
+  const state = { count: 0 };
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().includes('/clusters')) {
+      state.count += 1;
+    }
+  });
+  return state;
+}
+
 module.exports = {
   openCreateBusinessClusterDrawer,
   openEditBusinessClusterDrawer,
@@ -2117,6 +2573,7 @@ module.exports = {
   searchBusinessClusterAndWait,
   expectBusinessClusterVisibleInAllPages,
   ensureBusinessClusterRowVisible,
+  refreshBusinessClusterList,
   confirmDeleteBusinessCluster,
   expectBusinessClusterFormFieldError,
   cancelCreateBusinessCluster,
@@ -2130,4 +2587,26 @@ module.exports = {
   fillEppConfig,
   waitForClusterGetResponse,
   waitForClusterReviewRequest,
+  // 2026-10-13 EPP 运行时参数（RM-BC-115~122）
+  eppRuntimeCard,
+  expectEppRuntimeCardVisible,
+  expectEppRuntimeCardHidden,
+  expectEppRuntimeFieldComposition,
+  expectEppRuntimeHelpIcons,
+  getEppRuntimeValues,
+  expectEppRuntimeDefaultValues,
+  expectEppRuntimeUnitOptions,
+  selectEppRuntimeDurationUnit,
+  fillEppRuntimeDuration,
+  typeEppRuntimeDuration,
+  fillEppRuntimeThreshold,
+  expectEppRuntimeSwitchState,
+  toggleEppRuntimeSwitch,
+  expectEppRuntimeFieldError,
+  expectEppRuntimeFieldErrorHidden,
+  getReviewEppRuntimeValues,
+  expectReviewEppRuntimeValues,
+  expectReviewEppRuntimeUnset,
+  expectEppRuntimeToast,
+  watchClusterCreateRequests,
 };

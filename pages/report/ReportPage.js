@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { expect } = require('@playwright/test');
 const rc = require('../resource/ResourcePageCommon');
+const sessionUtils = require('../../utils/session');
 const reportApi = require('../../api/report-api-utils');
 const { PageTableComponent } = require('../../components/layout');
 const {
@@ -165,6 +166,10 @@ async function gotoReportPage(page) {
   await rc.ensureAppSession(page);
   await page.goto(rc.getAppBaseUrl() + '/report', { waitUntil: 'domcontentloaded' });
   await ensureLocalStorageSession(page);
+  // 导航后会话守卫：Key 失效时页面会弹「Session Key 错误」遮罩拦截点击，先自愈再断言就绪
+  await sessionUtils.ensureSessionHealthy(page, {
+    retryUrl: rc.getAppBaseUrl() + '/report',
+  });
   await expectReportPageReady(page);
 }
 
@@ -489,14 +494,18 @@ async function setCacheTokensSeries(page, series) {
 
 /**
  * Mock report/timeseries 请求。同 URL 只允许注册一个 route，因此按 metric 分发：
- * 命中的 metric 走 fulfill，未配置的 metric 照常放行（route.continue）
- * @param {Object} mocks - { [metric]: { series?, status?, delay?, errMsg? } }
+ * 命中的 metric 走 fulfill，未配置的 metric 照常放行（route.continue）。
+ * 带拆分维度（dimension）的下钻断言用 `metric|dimension` 键区分，优先命中；
+ * 未配置该键时回退到 `metric` 键（无 dimension 请求与既有用例不受影响）。
+ * @param {Object} mocks - { [metric]: {series?, status?, delay?, errMsg?} }
+ *   或 { ['metric|dimension']: {...} }
  */
 async function mockReportTimeseries(page, mocks = {}) {
   await page.route(TIMESERIES_URL_RE, async (route) => {
     const url = new URL(route.request().url());
     const metric = url.searchParams.get('metric');
-    const mock = mocks[metric];
+    const dimension = url.searchParams.get('dimension') || '';
+    const mock = mocks[`${metric}|${dimension}`] || mocks[metric];
     if (!mock) {
       await route.continue();
       return;
@@ -956,6 +965,19 @@ async function expectMessageError(page, text) {
 }
 
 /**
+ * 断言**未**弹出指定文案的 $Message.error。
+ * 用于「按设计不应提示」的场景（如 2026-10-14 起单个图表请求失败只降级为该图表空态，
+ * 不进入 load() 全局 catch）。调用前页面须已 settled，否则提示可能尚未入 DOM；
+ * settleMs 提供一个短等待兜底。
+ */
+async function expectNoMessageError(page, text, settleMs = 500) {
+  if (settleMs > 0) await page.waitForTimeout(settleMs);
+  await expect(
+    page.locator('.ivu-message-notice', { hasText: text }),
+  ).toHaveCount(0);
+}
+
+/**
  * 读取 Report 根组件当前时间范围（vm.startTime / vm.endTime 毫秒时间戳，null 表示未填充）
  * @returns {Promise<{start: number|null, end: number|null, shortcut: string}|null>}
  */
@@ -1232,7 +1254,9 @@ async function abortReportOverview(page) {
 }
 
 /**
- * 仅中断某个 metric 的 report/timeseries 请求，其余 metric 照常放行
+ * 仅中断某个 metric 的 report/timeseries 请求，其余 metric 照常放行。
+ * 2026-10-14 起该 metric 由 Overview.loadTs(metric) 独立加载且内部 `.catch` 兜底，
+ * 失败只表现为该图表空态（不进入 load() 全局 catch、不弹全局提示）。
  */
 async function abortReportTimeseriesMetric(page, metric) {
   await page.route(TIMESERIES_URL_RE, (route) => {
@@ -1503,6 +1527,578 @@ async function clearLogsToolbarSelectAndSearch(page, label) {
   return waitForReportLogsResponse(page, () => triggerLogsSearch(page));
 }
 
+// ====== 图表维度下钻（RP-T-09 ~ RP-T-14 / RP-R-13 ~ RP-R-17） ======
+// 设计依据：docs/report/02-功能测试用例/02-时序与缓存Token.md（RP-T-09~14）、
+// 03-排行与分布新维度.md（RP-R-13~17）、06-过滤栏与页签.md（RP-F-09）
+
+// 图表卡标题（i18n report.rankingTitle / shareTitle / distTitle，变更后不再写死维度）
+const RANKING_CHART_TITLE = '排行';
+const SHARE_CHART_TITLE = '占比';
+const DIST_CHART_TITLE = '分布';
+// 过滤栏行尾「拆分维度」选择器（i18n report.tsSplitDim + tsSplitNone / cacheStatus / mirrorHit / intentAnswer）
+const TS_SPLIT_LABEL = '拆分维度';
+const TS_SPLIT_NONE_LABEL = '不分维度';
+const TS_SPLIT_OPTIONS = [
+  { value: '', label: TS_SPLIT_NONE_LABEL },
+  { value: 'ai_cache_status', label: '缓存状态' },
+  { value: 'mirror_hit', label: '镜像命中' },
+  { value: 'ai_intent_answer', label: '意图答案' },
+];
+// Overview.vue rankingDimOptions（10 项，顺序与实现一致）
+const RANKING_DIM_OPTIONS = [
+  { value: 'model', label: '模型' },
+  { value: 'provider', label: '服务商' },
+  { value: 'apikey', label: 'API Key' },
+  { value: 'host', label: 'Host' },
+  { value: 'status', label: '状态码' },
+  { value: 'protocol', label: '协议' },
+  { value: 'mode', label: '模式' },
+  { value: 'ai_cache_status', label: '缓存状态' },
+  { value: 'mirror_hit', label: '镜像命中' },
+  { value: 'ai_intent_answer', label: '意图答案' },
+];
+// Overview.vue pieDimOptions（7 项，不含 provider/model/apikey/host——distribution 不支持）
+const PIE_DIM_OPTIONS = [
+  { value: 'status', label: '状态码' },
+  { value: 'protocol', label: '协议' },
+  { value: 'mode', label: '模式' },
+  { value: 'stream', label: '流式' },
+  { value: 'ai_cache_status', label: '缓存状态' },
+  { value: 'mirror_hit', label: '镜像命中' },
+  { value: 'ai_intent_answer', label: '意图答案' },
+];
+// distribution 的 dimension 枚举不含的四项（report.md §2.4，饼图下拉不暴露）
+const PIE_UNSUPPORTED_DIMS = [
+  { value: 'provider', label: '服务商' },
+  { value: 'model', label: '模型' },
+  { value: 'apikey', label: 'API Key' },
+  { value: 'host', label: 'Host' },
+];
+// 两个饼图的默认维度（Overview.vue chartDims.pieProvider / pieStatus）
+const PIE_DEFAULT_DIMS = { share: 'protocol', dist: 'status' };
+// 时序图 y 轴 name（Overview.vue chartOptionsLine 第三参）
+const TIMESERIES_Y_AXIS = {
+  qps: 'req/s',
+  tokens: 'tokens/s',
+  latency: 'ms',
+  cache_tokens: 'tokens',
+};
+// 拆分维度下 Token 图的值字段拼名（i18n report.input / output / total）
+const TOKEN_SPLIT_FIELDS = ['输入', '输出', '总量'];
+// 拆分维度下延迟图只拆 avg / max（i18n report.avg / max），接口带 dimension 时无分位数
+const LATENCY_SPLIT_FIELDS = ['平均', '最大'];
+// 维度桶名归一（Overview.vue dimBucketName，i18n report.mirrorHitYes / No / unknownBucket）
+const MIRROR_HIT_BUCKET_NAMES = { 1: '命中', 0: '未命中' };
+const UNKNOWN_BUCKET_NAME = '未知';
+// 拆分维度作用的三张时序图（缓存 Token 图不参与）
+const TS_SPLIT_METRICS = ['qps', 'tokens', 'latency'];
+
+// ---- 过滤栏「拆分维度」 ----
+
+function tsSplitFilterItem(page) {
+  return filterBar(page)
+    .locator('.report-filter-item')
+    .filter({ has: page.locator('label', { hasText: TS_SPLIT_LABEL }) });
+}
+
+function tsSplitSelect(page) {
+  return new IvuSelectComponent(page, tsSplitFilterItem(page).locator('.ivu-select').first());
+}
+
+/**
+ * 展开「拆分维度」下拉，返回选项文案与当前选中项（读取后收起下拉）。
+ * 注意：值为 '' 的「不分维度」在 iView Select 头部按空值渲染为占位文案
+ * （.ivu-select-placeholder），选中态需从下拉项的 .ivu-select-item-selected 读取
+ * @returns {Promise<{options: string[], selected: string|null}>}
+ */
+async function getTsSplitDropdownState(page) {
+  const select = tsSplitSelect(page);
+  await expect(select.trigger).toBeVisible({ timeout: 15000 });
+  await select.trigger.click();
+  await page.waitForTimeout(300);
+  const items = page.locator('.ivu-select-dropdown:visible .ivu-select-item');
+  const count = await items.count();
+  const options = [];
+  let selected = null;
+  for (let i = 0; i < count; i++) {
+    const item = items.nth(i);
+    options.push(((await item.textContent()) || '').trim());
+    if (await item.evaluate((el) => el.classList.contains('ivu-select-item-selected'))) {
+      selected = ((await item.textContent()) || '').trim();
+    }
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  return { options, selected };
+}
+
+/**
+ * 「拆分维度」下拉选项文案列表
+ * @returns {Promise<string[]>}
+ */
+async function getTsSplitOptions(page) {
+  return (await getTsSplitDropdownState(page)).options;
+}
+
+/**
+ * 「拆分维度」选择器头部展示文案（未选择时为空值 → iView 渲染占位文案）
+ */
+async function getTsSplitHeadText(page) {
+  const item = tsSplitFilterItem(page);
+  const selected = item.locator('.ivu-select-selected-value').first();
+  if ((await selected.count()) > 0 && (await selected.isVisible())) {
+    return ((await selected.textContent()) || '').trim();
+  }
+  const placeholder = item.locator('.ivu-select-placeholder').first();
+  if ((await placeholder.count()) > 0) {
+    return ((await placeholder.textContent()) || '').trim();
+  }
+  return '';
+}
+
+/**
+ * 「拆分维度」当前值（Report 根组件 tsSplit，'' 表示不分维度）
+ */
+async function getTsSplitValue(page) {
+  return page.evaluate(() => {
+    const el = document.querySelector('.report-page');
+    return el && el.__vue__ ? el.__vue__.tsSplit : null;
+  });
+}
+
+async function selectTsSplit(page, optionText) {
+  await tsSplitSelect(page).selectOptionExact(optionText);
+  await page.waitForTimeout(300);
+}
+
+/**
+ * RP-T-09：时序图区无独立「拆分维度」工具行（.ts-split-bar 已下线）
+ */
+async function expectNoTsSplitBar(page) {
+  await expect(chartContainer(page).locator('.ts-split-bar')).toHaveCount(0);
+  await expect(page.locator('.ts-split-bar')).toHaveCount(0);
+}
+
+/**
+ * RP-T-09 / RP-F-09：过滤栏控件顺序（维度过滤区内 `.report-filter-item` 标签与按钮文案）
+ * @returns {Promise<string[]>} 形如 ['模型','API Key',...,'拆分维度','查询','重置']
+ */
+async function getFilterBarControlSequence(page) {
+  const item = tsSplitFilterItem(page);
+  await expect(item).toBeVisible({ timeout: 15000 });
+  return item.evaluate((el) => {
+    const body = el.parentElement;
+    return Array.from(body.children)
+      .map((child) => {
+        if (child.classList && child.classList.contains('report-filter-item')) {
+          const label = child.querySelector('.filter-item-label');
+          return label ? (label.textContent || '').trim() : '';
+        }
+        if (child.tagName === 'BUTTON') return (child.textContent || '').trim();
+        return '';
+      })
+      .filter((text) => text !== '');
+  });
+}
+
+/**
+ * RP-F-09：过滤栏 `.filter-item-label` 文案列表
+ * @returns {Promise<string[]>}
+ */
+async function getFilterBarItemLabels(page) {
+  const labels = await filterBar(page)
+    .locator('.report-filter-item .filter-item-label')
+    .allTextContents();
+  return labels.map((t) => t.trim());
+}
+
+/**
+ * RP-F-09：过滤栏不含「缓存状态 / 镜像命中 / 意图答案」三个死控件
+ */
+async function expectNoDeadFilterItems(page) {
+  for (const label of ['缓存状态', '镜像命中', '意图答案']) {
+    await expect(filterItem(page, label).locator('.ivu-select')).toHaveCount(0);
+  }
+}
+
+/**
+ * RP-F-09 步骤 4：Report 根组件 filters 状态键（源码层无死状态读写）
+ * @returns {Promise<string[]|null>} 已排序的键名
+ */
+async function getFilterStateKeys(page) {
+  return page.evaluate(() => {
+    const el = document.querySelector('.report-page');
+    if (!el || !el.__vue__ || !el.__vue__.filters) return null;
+    return Object.keys(el.__vue__.filters).sort();
+  });
+}
+
+// ---- 时序图 option 快照（QPS / Token / 延迟 / 缓存 Token） ----
+
+/**
+ * 读取指定时序图 ECharts option 快照（含拆分维度后的多序列）
+ * @param {'qps'|'tokens'|'latency'|'cache_tokens'} metric
+ * @returns {Promise<{hasSeries, legendData, xAxisData, yAxisName,
+ *   series: {name: string, data: any[]}[], rawSeries, tsSplit, loading}|null>}
+ */
+async function getTimeseriesChartState(page, metric) {
+  const key = JSON.stringify(metric);
+  return page.evaluate(
+    `(function () {
+    var vm = ${findOverviewVmSource()};
+    if (!vm) return null;
+    var opts = { qps: vm.qpsOption, tokens: vm.tokensOption, latency: vm.latencyOption, cache_tokens: vm.cacheTokensOption };
+    var opt = opts[${key}] || {};
+    return {
+      hasSeries: !!opt.series,
+      legendData: opt.legend ? opt.legend.data : null,
+      xAxisData: opt.xAxis ? opt.xAxis.data : null,
+      yAxisName: opt.yAxis ? opt.yAxis.name : null,
+      series: (opt.series || []).map(function (s) { return { name: s.name, data: s.data }; }),
+      rawSeries: ((vm.timeseriesData || {})[${key}] || {}).series || null,
+      tsSplit: vm.chartDims ? vm.chartDims.tsSplit : null,
+      loading: vm.loading
+    };
+    })()`,
+  );
+}
+
+// ---- 图表标题旁维度下拉（排行 / 占比 / 分布） ----
+
+function chartDimSelect(page, title) {
+  return new IvuSelectComponent(
+    page,
+    chartCardByTitle(page, title).locator('h4 .ivu-select').first(),
+  );
+}
+
+/**
+ * 展开图表卡标题旁的维度下拉，返回选项文案与当前选中项（读取后收起下拉）
+ * @returns {Promise<{options: string[], selected: string|null}>}
+ */
+async function getChartDimDropdownState(page, title) {
+  const select = chartDimSelect(page, title);
+  await expect(select.trigger).toBeVisible({ timeout: 15000 });
+  await select.trigger.click();
+  await page.waitForTimeout(300);
+  const items = page.locator('.ivu-select-dropdown:visible .ivu-select-item');
+  const count = await items.count();
+  const options = [];
+  let selected = null;
+  for (let i = 0; i < count; i++) {
+    const item = items.nth(i);
+    options.push(((await item.textContent()) || '').trim());
+    if (await item.evaluate((el) => el.classList.contains('ivu-select-item-selected'))) {
+      selected = ((await item.textContent()) || '').trim();
+    }
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  return { options, selected };
+}
+
+/**
+ * 图表卡标题旁维度下拉的选项文案列表
+ * @returns {Promise<string[]>}
+ */
+async function getChartDimOptions(page, title) {
+  return (await getChartDimDropdownState(page, title)).options;
+}
+
+/**
+ * 图表卡标题旁维度下拉当前头部展示文案（选中值 / 占位符）
+ */
+async function getChartDimSelectedText(page, title) {
+  const h4 = chartCardByTitle(page, title).locator('h4');
+  const selected = h4.locator('.ivu-select-selected-value').first();
+  if ((await selected.count()) > 0 && (await selected.isVisible())) {
+    return ((await selected.textContent()) || '').trim();
+  }
+  const placeholder = h4.locator('.ivu-select-placeholder').first();
+  if ((await placeholder.count()) > 0) {
+    return ((await placeholder.textContent()) || '').trim();
+  }
+  return '';
+}
+
+async function selectChartDim(page, title, optionText) {
+  await chartDimSelect(page, title).selectOptionExact(optionText);
+  await page.waitForTimeout(300);
+}
+
+/**
+ * 图表卡标题文案（h4 文本，含维度下拉选中值）
+ */
+async function getChartCardTitle(page, title) {
+  const h4 = chartCardByTitle(page, title).locator('h4').first();
+  return ((await h4.textContent()) || '').replace(/\s+/g, ' ').trim();
+}
+
+// ---- 图表数据快照（排行 / 两个饼图） ----
+
+/**
+ * 排行图 option 快照（横向柱：yAxis.data 为维度桶名）
+ * @returns {Promise<{hasSeries, categories, series, rawItems, vmDim}|null>}
+ */
+async function getRankingChartState(page) {
+  return page.evaluate(
+    `(function () {
+    var vm = ${findOverviewVmSource()};
+    if (!vm) return null;
+    var opt = vm.rankingOption || {};
+    return {
+      hasSeries: !!opt.series,
+      categories: opt.yAxis ? opt.yAxis.data : null,
+      series: (opt.series || []).map(function (s) { return { name: s.name, data: s.data }; }),
+      rawItems: ((vm.rankingData || {}).items || []).map(function (i) { return i.name; }),
+      vmDim: vm.chartDims ? vm.chartDims.ranking : null
+    };
+    })()`,
+  );
+}
+
+/**
+ * 饼图 option 快照
+ * @param {'share'|'dist'} key share = 「占比」饼（chartDims.pieProvider），
+ *   dist = 「分布」饼（chartDims.pieStatus）
+ * @returns {Promise<{hasSeries, data: {name: string, value: number}[], vmDim}|null>}
+ */
+async function getPieChartState(page, key) {
+  const k = JSON.stringify(key);
+  return page.evaluate(
+    `(function () {
+    var vm = ${findOverviewVmSource()};
+    if (!vm) return null;
+    var opt = (${k} === 'share' ? vm.shareOption : vm.distOption) || {};
+    var series = (opt.series || [])[0] || {};
+    return {
+      hasSeries: !!opt.series,
+      data: (series.data || []).map(function (d) { return { name: d.name, value: d.value }; }),
+      vmDim: vm.chartDims ? (${k} === 'share' ? vm.chartDims.pieProvider : vm.chartDims.pieStatus) : null
+    };
+    })()`,
+  );
+}
+
+/**
+ * 读取 vm 中维度下拉的 value/label 全量（DOM 之外用于断言「不暴露不支持维度」的确定性来源）
+ * @param {'ranking'|'share'|'dist'} kind
+ * @returns {Promise<{value: string, label: string}[]|null>}
+ */
+async function getChartDimOptionPairs(page, kind) {
+  const k = JSON.stringify(kind);
+  return page.evaluate(
+    `(function () {
+    var vm = ${findOverviewVmSource()};
+    if (!vm) return null;
+    var pairs = function (list) {
+      return list.map(function (o) { return { value: o.value, label: o.label }; });
+    };
+    if (${k} === 'ranking') return pairs(vm.rankingDimOptions);
+    return pairs(vm.pieDimOptions(${k} === 'share' ? 'protocol' : 'status'));
+    })()`,
+  );
+}
+
+/**
+ * ReportOverview.chartDims 快照（rankings / 两个饼图 / 拆分维度各自维度，用于「互不联动」断言）
+ * @returns {Promise<{ranking, pieProvider, pieStatus, tsSplit}|null>}
+ */
+async function getChartDims(page) {
+  return page.evaluate(
+    `(function () {
+    var vm = ${findOverviewVmSource()};
+    if (!vm || !vm.chartDims) return null;
+    return {
+      ranking: vm.chartDims.ranking,
+      pieProvider: vm.chartDims.pieProvider,
+      pieStatus: vm.chartDims.pieStatus,
+      tsSplit: vm.chartDims.tsSplit
+    };
+    })()`,
+  );
+}
+
+// ---- 请求等待与追踪 ----
+
+/**
+ * 等待若干 report/timeseries 响应（可限定 dimension），与动作并行执行
+ * @param {string[]} metrics
+ * @param {Function} action
+ * @param {{dimension?: string, timeout?: number}} options
+ *   dimension 为 undefined 时只按 metric 匹配；传 '' 表示要求请求不带 dimension 参数
+ * @returns {Promise<import('@playwright/test').Response[]>} 顺序与 metrics 一致
+ */
+async function waitForTimeseriesResponses(page, metrics, action, options = {}) {
+  const { dimension, timeout = 15000 } = options;
+  const waiters = metrics.map((metric) =>
+    page.waitForResponse(
+      (r) => {
+        if (r.request().method() !== 'GET' || !TIMESERIES_URL_RE.test(r.url())) return false;
+        let q;
+        try {
+          q = new URL(r.url()).searchParams;
+        } catch (e) {
+          return false;
+        }
+        if (q.get('metric') !== metric) return false;
+        if (dimension === undefined) return true;
+        return (q.get('dimension') || '') === (dimension || '');
+      },
+      { timeout },
+    ),
+  );
+  const results = await Promise.all([...waiters, action ? action() : Promise.resolve()]);
+  return results.slice(0, metrics.length);
+}
+
+/**
+ * 等待 report/rankings 响应（可限定 dimension），与动作并行执行
+ */
+async function waitForRankingsResponse(page, action, options = {}) {
+  const { dimension, timeout = 15000 } = options;
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) => {
+        if (r.request().method() !== 'GET' || !RANKINGS_URL_RE.test(r.url())) return false;
+        if (dimension === undefined) return true;
+        try {
+          return new URL(r.url()).searchParams.get('dimension') === dimension;
+        } catch (e) {
+          return false;
+        }
+      },
+      { timeout },
+    ),
+    action(),
+  ]);
+  return response;
+}
+
+/**
+ * 等待 report/distribution 响应（可限定 dimension），与动作并行执行
+ */
+async function waitForDistributionResponse(page, action, options = {}) {
+  const { dimension, timeout = 15000 } = options;
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) => {
+        if (r.request().method() !== 'GET' || !DISTRIBUTION_URL_RE.test(r.url())) return false;
+        if (dimension === undefined) return true;
+        try {
+          return new URL(r.url()).searchParams.get('dimension') === dimension;
+        } catch (e) {
+          return false;
+        }
+      },
+      { timeout },
+    ),
+    action(),
+  ]);
+  return response;
+}
+
+/**
+ * 追踪页面发起的 report/timeseries 请求（含 metric / dimension）
+ * @returns {{requests: {metric: string, dimension: string, url: string}[]}}
+ */
+function trackTimeseriesRequests(page) {
+  const tracker = { requests: [] };
+  page.on('request', (req) => {
+    if (req.method() !== 'GET' || !TIMESERIES_URL_RE.test(req.url())) return;
+    let q;
+    try {
+      q = new URL(req.url()).searchParams;
+    } catch (e) {
+      return;
+    }
+    tracker.requests.push({
+      metric: q.get('metric'),
+      dimension: q.get('dimension') || '',
+      url: req.url(),
+    });
+  });
+  return tracker;
+}
+
+/**
+ * 等待异步请求发起窗口结束后，断言 tracker 自 before 起无新增 timeseries 请求
+ */
+async function expectNoNewTimeseriesRequests(page, tracker, beforeCount) {
+  await page.waitForTimeout(1500);
+  expect(tracker.requests.length).toBe(beforeCount);
+}
+
+/**
+ * 从 tracker 中取某 metric 的请求（可选按 dimension 过滤）
+ */
+function filterTimeseriesRequests(tracker, metric, dimension) {
+  return tracker.requests.filter(
+    (r) =>
+      r.metric === metric &&
+      (dimension === undefined || r.dimension === (dimension || '')),
+  );
+}
+
+/**
+ * 等待指定时序图渲染出序列，返回其 option 快照
+ */
+async function waitForTimeseriesChart(page, metric, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  await expect
+    .poll(
+      async () => {
+        const state = await getTimeseriesChartState(page, metric);
+        return state ? state.hasSeries : false;
+      },
+      { timeout, intervals: [200, 500, 1000] },
+    )
+    .toBe(true);
+  return getTimeseriesChartState(page, metric);
+}
+
+/**
+ * 等待排行图渲染出柱条，返回其 option 快照
+ */
+async function waitForRankingChart(page, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  await expect
+    .poll(
+      async () => {
+        const state = await getRankingChartState(page);
+        return state ? state.hasSeries : false;
+      },
+      { timeout, intervals: [200, 500, 1000] },
+    )
+    .toBe(true);
+  return getRankingChartState(page);
+}
+
+/**
+ * 等待饼图渲染出扇区，返回其 option 快照
+ * @param {'share'|'dist'} key
+ */
+async function waitForPieChart(page, key, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  await expect
+    .poll(
+      async () => {
+        const state = await getPieChartState(page, key);
+        return state ? state.hasSeries : false;
+      },
+      { timeout, intervals: [200, 500, 1000] },
+    )
+    .toBe(true);
+  return getPieChartState(page, key);
+}
+
+/**
+ * 读取指定饼图卡片的维度下拉选项文案（经标题定位，标题取自 shareTitle / distTitle）
+ */
+function pieChartTitle(key) {
+  return key === 'share' ? SHARE_CHART_TITLE : DIST_CHART_TITLE;
+}
+
 // ====== 格式化工具 ======
 
 function formatTimestamp(ts) {
@@ -1677,6 +2273,7 @@ module.exports = {
   MAX_WINDOW_MS,
   INTENT_SOURCE_LABEL,
   expectMessageError,
+  expectNoMessageError,
   getReportTimeRange,
   setReportTimeByVm,
   expectActiveQuickTime,
@@ -1733,6 +2330,56 @@ module.exports = {
   filterByToolbarInput,
   clearLogsToolbarSelect,
   clearLogsToolbarSelectAndSearch,
+  // 图表维度下钻（RP-T-09 ~ RP-T-14 / RP-R-13 ~ RP-R-17）
+  RANKING_CHART_TITLE,
+  SHARE_CHART_TITLE,
+  DIST_CHART_TITLE,
+  TS_SPLIT_LABEL,
+  TS_SPLIT_NONE_LABEL,
+  TS_SPLIT_OPTIONS,
+  TS_SPLIT_METRICS,
+  RANKING_DIM_OPTIONS,
+  PIE_DIM_OPTIONS,
+  PIE_UNSUPPORTED_DIMS,
+  PIE_DEFAULT_DIMS,
+  TIMESERIES_Y_AXIS,
+  TOKEN_SPLIT_FIELDS,
+  LATENCY_SPLIT_FIELDS,
+  MIRROR_HIT_BUCKET_NAMES,
+  UNKNOWN_BUCKET_NAME,
+  tsSplitFilterItem,
+  tsSplitSelect,
+  getTsSplitDropdownState,
+  getTsSplitOptions,
+  getTsSplitHeadText,
+  getTsSplitValue,
+  selectTsSplit,
+  expectNoTsSplitBar,
+  getFilterBarControlSequence,
+  getFilterBarItemLabels,
+  expectNoDeadFilterItems,
+  getFilterStateKeys,
+  getTimeseriesChartState,
+  waitForTimeseriesChart,
+  chartDimSelect,
+  getChartDimDropdownState,
+  getChartDimOptions,
+  getChartDimSelectedText,
+  selectChartDim,
+  getChartCardTitle,
+  getRankingChartState,
+  waitForRankingChart,
+  getPieChartState,
+  waitForPieChart,
+  getChartDimOptionPairs,
+  getChartDims,
+  pieChartTitle,
+  waitForTimeseriesResponses,
+  waitForRankingsResponse,
+  waitForDistributionResponse,
+  trackTimeseriesRequests,
+  expectNoNewTimeseriesRequests,
+  filterTimeseriesRequests,
   // 工具
   formatTimestamp,
   formatDateTimeValue,

@@ -560,7 +560,11 @@ test.describe('路由管理 - RT-V-13 规则名称重复', () => {
 
     await test.step('4. 清理所有同名规则', async () => {
       await utils.deleteAllRulesByName(page, duplicateName);
-      await utils.submitGlobalRouteRulesAndWait(page);
+      // 同名规则被前端拦截、从未进后端：清理后本地表格回到原状、提交按钮置灰，
+      // 此时无内容可提交（见 RT-D-29 脏检查），跳过即可
+      await utils.submitGlobalRouteRulesAndWait(page, {
+        skipWhenNoLocalChange: true,
+      });
     });
   });
 });
@@ -908,7 +912,11 @@ test.describe('路由管理 - RT-V-13a 同名规则提交后端拦截', () => {
 
     await test.step('清理所有同名规则', async () => {
       await utils.deleteAllRulesByName(page, duplicateName);
-      await utils.submitGlobalRouteRulesAndWait(page);
+      // 同名规则被前端拦截、从未进后端：清理后本地表格回到原状、提交按钮置灰，
+      // 此时无内容可提交（见 RT-D-29 脏检查），跳过即可
+      await utils.submitGlobalRouteRulesAndWait(page, {
+        skipWhenNoLocalChange: true,
+      });
     });
   });
 });

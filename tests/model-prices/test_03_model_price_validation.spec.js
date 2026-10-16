@@ -18,7 +18,7 @@
  *
  * 覆盖用例（P0）：
  * - MP-V-01 必填字段校验（provider / model / base_model / mode）
- * - MP-V-03 mode 枚举值校验（13 种选项 + 合法枚举可进入唯一性校验阶段）
+ * - MP-V-03 mode 枚举值校验（14 种选项 + 合法枚举可进入唯一性校验阶段）
  * - MP-V-04 prices 至少包含一个价格字段
  * - MP-V-05 prices 字段值非负校验
  *
@@ -120,7 +120,7 @@ test.describe('模型定价 - MP-V-03 mode 枚举值校验', () => {
     await cleanup.cleanup(page);
   });
 
-  test('下拉选项共 13 种且与后端枚举一致，合法枚举可进入唯一性校验阶段', async ({
+  test('下拉选项共 14 种且与后端枚举一致，合法枚举可进入唯一性校验阶段', async ({
     page,
   }) => {
     const combo = {
@@ -131,9 +131,9 @@ test.describe('模型定价 - MP-V-03 mode 枚举值校验', () => {
     cleanup.trackCombo(combo.provider, combo.model, 'realtime');
 
     await mp.openCreateDrawer(page);
-    // 枚举下拉选项与接口定义一致（13 种）
+    // 枚举下拉选项与接口定义一致（14 种，含 2026-10-10 新增的 batch）
     const options = await mp.getModeDropdownOptions(page);
-    expect(options.length).toBe(13);
+    expect(options.length).toBe(14);
     expect(options).toEqual(mp.MODE_OPTIONS);
 
     // 选择非默认枚举值 realtime，填其余必填项后提交

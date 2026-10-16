@@ -1,6 +1,7 @@
 {
   "scripts": {
     "test": "playwright test tests/",
+    "test:all": "PW_WORKERS=1 playwright test tests/ --global-timeout=0",
     "test:user": "PW_WORKERS=1 playwright test tests/user/",
     "test:entity-type": "PW_WORKERS=2 playwright test tests/entity-type/",
     "test:entity-management": "PW_WORKERS=2 playwright test tests/entity-management/",
@@ -20,7 +21,8 @@
     "cleanup:modelprice": "node scripts/cleanup-model-price-test-data.cjs",
     "cleanup:modelprice:execute": "node scripts/cleanup-model-price-test-data.cjs --execute",
     "cleanup:provider": "node scripts/cleanup-provider-test-data.cjs",
-    "cleanup:provider:execute": "node scripts/cleanup-provider-test-data.cjs --execute"
+    "cleanup:provider:execute": "node scripts/cleanup-provider-test-data.cjs --execute",
+    "impact-scan": "node scripts/impact-scan.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

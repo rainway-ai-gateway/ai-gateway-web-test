@@ -678,6 +678,10 @@ test.describe('数据报表 - 总览指标卡补充用例（RP-O-02 ~ RP-O-13）
       // 上一步注册的 overview abort 路由跨 goto 持续生效，需先清除再注册新路由
       await page.unrouteAll();
       await rp.abortReportTimeseriesMetric(page, 'qps');
+      const consoleErrors = [];
+      page.on('console', (msg) => {
+        if (msg.type() === 'error') consoleErrors.push(msg.text());
+      });
       await rp.gotoReportPage(page);
 
       await expect(
@@ -687,8 +691,24 @@ test.describe('数据报表 - 总览指标卡补充用例（RP-O-02 ~ RP-O-13）
       await expect(
         rp.chartCardEmpty(page, rp.QPS_CHART_TITLE),
       ).toBeVisible({ timeout: 15000 });
-      // 同样弹出「加载失败」提示
-      await rp.expectMessageError(page, '加载失败');
+
+      // 2026-10-14「图表维度下钻」重构后：单图表请求改由 loadTs / loadRanking /
+      // loadDistribution 独立加载，各自内部 `.catch(() => {})` 吞掉失败 →
+      // 不进入 load() 的全局 catch，即**不**弹全局「加载失败」、**不**打
+      // 'Failed to load overview data:' 日志；失败只降级为该图表空态。
+      // 若把三者塞回同一个未兜底的 Promise.all，则任一图表失败都会弹全局提示。
+      await rp.expectNoMessageError(page, '加载失败');
+      expect(
+        consoleErrors.some((t) =>
+          t.startsWith('Failed to load overview data:'),
+        ),
+      ).toBe(false);
+
+      // loading 复位且 overviewData 来自成功的 overview 请求
+      const state = await rp.getOverviewVmState(page);
+      expect(state).not.toBeNull();
+      expect(state.loading).toBe(false);
+      expect(state.hasOverviewData).toBe(true);
     });
   });
 

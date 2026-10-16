@@ -30,6 +30,7 @@ const { expect, test } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const common = require('../../utils/common');
+const sessionUtils = require('../../utils/session');
 const umUtils = require('../user/UserPage');
 const apiUtils = require('../../api/traffic-mirror-api-utils');
 const { PageTableComponent } = require('../../components/layout');
@@ -242,8 +243,12 @@ async function ensureAppSession(page) {
 
   try {
     await ensureChineseLang(page);
+    // 导航入口统一会话守卫：Session Key 失效时先自愈（重新登录 + 回写 auth.json），
+    // 避免带失效 Key 加载页面后 401 弹「Session Key 错误」遮罩拦截所有点击。
+    await sessionUtils.ensureSessionHealthy(page, {
+      retryUrl: getAppBaseUrl() + TM_PATH,
+    });
     await umUtils.handleUrlInvalidAlert(page);
-    await umUtils.ensureLoggedIn(page);
     await ensureAuthenticatedShell(page);
   } catch (e) {
     if (isConnectionError(e)) {
@@ -339,17 +344,22 @@ async function expectTrafficMirrorPageReady(page) {
 }
 
 async function gotoTrafficMirrorPage(page) {
+  const targetUrl = getAppBaseUrl() + TM_PATH;
+  // 导航入口统一会话守卫（含「已在目标页」提前返回分支）
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
+
   if (await isOnTrafficMirrorPage(page)) {
     await umUtils.handleUrlInvalidAlert(page);
     return;
   }
   await ensureAppSession(page);
   await ensureChineseLang(page);
-  await page.goto(getAppBaseUrl() + TM_PATH, {
+  await page.goto(targetUrl, {
     waitUntil: 'domcontentloaded',
   });
   await page.waitForTimeout(2000);
   await umUtils.handleUrlInvalidAlert(page);
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
 }
 
 async function waitForTrafficMirrorRulesGetResponse(
@@ -377,24 +387,32 @@ async function waitForTrafficMirrorRulesGetResponse(
 }
 
 async function gotoTrafficMirrorPageAndWaitForRules(page) {
+  const targetUrl = getAppBaseUrl() + TM_PATH;
+  // 导航入口统一会话守卫（含「已在目标页」提前返回分支）
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
+
   if (await isOnTrafficMirrorPage(page)) {
     await waitForTrafficMirrorRulesGetResponse(page, () => page.reload());
     await page.waitForTimeout(1000);
     await umUtils.handleUrlInvalidAlert(page);
+    await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
     return;
   }
   await ensureAppSession(page);
   await ensureChineseLang(page);
   await waitForTrafficMirrorRulesGetResponse(page, () =>
-    page.goto(getAppBaseUrl() + TM_PATH, {
+    page.goto(targetUrl, {
       waitUntil: 'domcontentloaded',
     }),
   );
   await page.waitForTimeout(1500);
   await umUtils.handleUrlInvalidAlert(page);
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
 }
 
 async function reloadTrafficMirrorPage(page) {
+  const targetUrl = getAppBaseUrl() + TM_PATH;
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
   if (!(await isOnTrafficMirrorPage(page))) {
     await gotoTrafficMirrorPageAndWaitForRules(page);
     return;
@@ -789,12 +807,18 @@ async function fillRuleCond(page, cond) {
   await page.waitForTimeout(500);
 }
 
+/**
+ * 选择镜像集群。
+ * 环境中的集群名存在同前缀（如 test / test121 / test122 / test123），
+ * 子串匹配（selectOption）会命中多项触发 strict mode violation，
+ * 故按选项全文精确匹配（selectOptionExact），不改变所选集群本身。
+ */
 async function selectMirrorCluster(page, clusterName) {
   const trigger = ruleFormItem(
     page,
     DOC_TM_RULE_FORM.clusterFieldLabel,
   ).locator('.ivu-select');
-  await new IvuSelectComponent(page, trigger).selectOption(clusterName);
+  await new IvuSelectComponent(page, trigger).selectOptionExact(clusterName);
   await page.waitForTimeout(300);
 }
 
@@ -811,7 +835,7 @@ async function selectHeaderMode(page, optionText) {
     page,
     DOC_TM_RULE_FORM.headerModeFieldLabel,
   ).locator('.ivu-select');
-  await new IvuSelectComponent(page, trigger).selectOption(optionText);
+  await new IvuSelectComponent(page, trigger).selectOptionExact(optionText);
   await page.waitForTimeout(300);
 }
 

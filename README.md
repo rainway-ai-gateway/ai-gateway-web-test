@@ -38,8 +38,7 @@ AI网关GUI自动化测试项目,采用Playwright框架对AI网关管理控制�
 │   ├── cluster/                       # AI 业务集群测试（7个 spec）
 │   ├── providers/                     # 模型服务商测试（6个 spec）
 │   ├── model-prices/                  # 模型定价测试（5个 spec）
-│   ├── route/                         # 路由管理测试（7个 spec）
-│   └── gateway-pool/                  # AI 网关实例池测试（全局 /alb-pool 单例，内联编辑）
+│   └── route/                         # 路由管理测试（7个 spec）
 ├── test-files/                        # 测试数据文件
 │   └── model-prices/                  # YAML 导入测试文件（valid/invalid/duplicate 等）
 ├── report/                            # 测试报告
@@ -59,8 +58,7 @@ AI网关GUI自动化测试项目,采用Playwright框架对AI网关管理控制�
 │   ├── business-cluster/              # AI 业务集群模块
 │   ├── providers/                     # 模型服务商模块
 │   ├── model-prices/                  # 模型定价模块
-│   ├── route-management/              # 路由管理模块
-│   └── gateway-pool/                  # AI 网关实例池模块（全局单例，独立于 Providers 的 instance_pool）
+│   └── route-management/              # 路由管理模块
 ├── global-setup.js                    # Playwright 全局登录
 ├── global-teardown.js                 # Playwright 全局清理
 ├── playwright.config.js               # Playwright 配置
@@ -97,7 +95,8 @@ AI网关GUI自动化测试项目,采用Playwright框架对AI网关管理控制�
 | 模型服务商 | `docs/providers/` | `tests/providers/` | 实例池、模型、Keys、分段计价 |
 | 模型定价 | `docs/model-prices/` | `tests/model-prices/` | 定价 CRUD、YAML 导入、分时段价格 |
 | 路由管理 | `docs/route-management/` | `tests/route/` | 路由表、路由规则 |
-| AI 网关实例池 | `docs/gateway-pool/` | `tests/gateway-pool/` | 全局网关转发引擎实例池（`/alb-pool` 单例、内联编辑）；与 Providers 的 `instance_pool` 相互独立 |
+
+> **已移除模块**：AI 网关实例池（原 `docs/gateway-pool/` + `tests/gateway-pool/`）随 2026-09-20 `/alb-pool` 单例页面下线而清理——`docs/gateway-pool/` 已删除，`tests/gateway-pool/` 为遗留空目录（无 spec），已于 2026-10-15 一并删除；实例池相关断言改由 `tests/providers/` 覆盖。`scripts/impact-scan.js` 中的同名孤儿目录注释同步作废。
 
 ## 测试执行
 

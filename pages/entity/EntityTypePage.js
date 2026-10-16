@@ -49,6 +49,7 @@ const {
   generateTestEntityTypeName,
   waitForPageSettled,
   waitForEntityManagementShell,
+  gotoEntityTypeManagementPage,
 } = require('./entity-shared');
 const {
   getUserData,

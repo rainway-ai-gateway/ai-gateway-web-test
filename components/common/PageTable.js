@@ -22,10 +22,9 @@ const ElSelect_1 = require('../element/ElSelect');
  * pageTable 组件封装
  *
  * 结构：
- * - .searchTable   列头搜索行
+ * - .searchTable   列头搜索行（searchable 列为搜索控件）
  * - .show-iView-Table  数据表格（ivu-table）
- * - .block .expend    「全部展示/分页展示」
- * - .el-pagination    分页
+ * - .el-pagination    分页（前端分页，默认 20 条/页；产品已下线「全部展示/分页展示」控件）
  */
 class PageTableComponent {
   constructor(page, root) {
@@ -63,8 +62,31 @@ class PageTableComponent {
   searchInput(placeholder) {
     return this.searchArea().getByPlaceholder(placeholder);
   }
-  expandToggleButton() {
-    return this.root.getByRole('button', { name: /全部展示|分页展示/ });
+  /** 搜索行内指定列标题的输入框（placeholder = 请输入{title}查询） */
+  searchInputByTitle(title) {
+    return this.searchArea().locator('input[placeholder*="' + title + '"]').first();
+  }
+  /** 读取搜索行内指定列标题输入框的当前值 */
+  async columnSearchValue(title) {
+    return this.searchInputByTitle(title).inputValue();
+  }
+  /**
+   * 按列标题做本地筛选（serverPagination=false 时为纯前端筛选，不触发列表请求）
+   *
+   * iView Input 的 on-change 依赖失焦触发，fill 后统一补一次 blur，
+   * 避免调用方各自补 blur（如 ProviderPage.filterListSearch + spec 侧包装）。
+   */
+  async filterByColumn(title, keyword) {
+    const input = this.searchInputByTitle(title);
+    await (0, test_1.expect)(input).toBeVisible({ timeout: 10000 });
+    await input.click({ clickCount: 3 });
+    await input.fill(String(keyword));
+    await input.blur();
+    await this.page.waitForTimeout(300);
+  }
+  /** 分页器页码数量（前端分页下用于断言筛选结果 / 全量数据的分页状态） */
+  async pageNumberCount() {
+    return this.pagination().locator('.el-pager li.number').count();
   }
   pagination() {
     return this.root.locator('.el-pagination').first();
@@ -110,6 +132,26 @@ class PageTableComponent {
   }
   async expectRowHidden(text, timeout = 15000) {
     await (0, test_1.expect)(this.rowByText(text)).toHaveCount(0, { timeout });
+  }
+  /**
+   * 断言某行可见（分页无关）：先按「名称」本地筛选再断言行可见
+   *
+   * 前端分页默认 20 条/页，表格只渲染当前页；造数产生的新行若排在靠后位置
+   * （第 2/3 页），直接断言「当前页可见」必然超时。先按唯一名称筛选，
+   * 使目标行成为筛选结果的第 1 页，可与数据总量 / 排列顺序解耦。
+   */
+  async expectRowVisibleByName(name, timeout = 15000) {
+    await this.filterByColumn('名称', name);
+    await this.expectRowVisible(name, timeout);
+  }
+  /**
+   * 断言某行不可见（分页无关）：先按「名称」本地筛选再断言计数为 0
+   *
+   * 不做筛选时「行不在当前页」与「行已消失」不可区分，会造成假通过。
+   */
+  async expectRowHiddenByName(name, timeout = 15000) {
+    await this.filterByColumn('名称', name);
+    await this.expectRowHidden(name, timeout);
   }
   dataRowsByStatus(statusLabel) {
     return this.dataRows().filter({

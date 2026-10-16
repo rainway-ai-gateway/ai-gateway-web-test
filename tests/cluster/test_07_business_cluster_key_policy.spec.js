@@ -21,7 +21,8 @@
  * - RM-BC-53 key_policy - max_retries 校验：负数/小数拦截、默认 0、正整数提交携带。
  * - RM-BC-54 key_policy - retry_backoff_initial 校验：默认 500、修改后提交携带。
  * - RM-BC-55 key_policy - retry_backoff_max 校验：max < initial 拦截、默认 5000。
- * - RM-BC-56 LLM 配置界面 Card 分组展示：5 张 Card（含「Key 亲和性」）。
+ * - RM-BC-56 LLM 配置界面 Card 分组展示：7 张 Card（含「Key 亲和性」「均衡模式配置」
+ *   「上游错误归一」）。
  * - RM-BC-79 Key 路由策略：提交体 key_policy 结构
  *   {strategy, max_retries, retry_backoff_initial, retry_backoff_max}。
  *
@@ -34,7 +35,10 @@
  * - RM-BC-57（多 Key 编辑回显含明文）、RM-BC-60/62/63/64（provider 自由输入/
  *   为空提交/回显）：provider 已改为必填下拉（选项来自 get-provider-names），
  *   相关用例删除；编辑回显归入 test_03。
- * - RM-BC-56 由旧 4 张 Card 更新为 5 张（追加「Key 亲和性」Card）。
+ * - RM-BC-56 由旧 4 张 Card 更新为 5 张（追加「Key 亲和性」Card），再加入「均衡模式
+ *   配置」共 6 张；2026-10-10 追加「上游错误归一」Card 后共 **7 张**（默认 WRR）。
+ *   `balance_mode=EPP` 时「均衡模式配置」Card 内另渲染「流控配置」「EPP 运行时参数」
+ *   2 张子卡片（`.llm-section-card` 共 9 张），本用例走默认 WRR 不涉及。
  *
  * 运行：npx playwright test tests/cluster/test_07_business_cluster_key_policy.spec.js
  */
@@ -221,7 +225,7 @@ test.describe('AI业务集群 - RM-BC-52~56、79 Key 路由策略与 key_policy'
     expect(body.llm_config.key_policy.retry_backoff_max).toBe(5000);
   });
 
-  test('RM-BC-56 LLM 配置界面 6 张 Card 分组展示（含 Key 亲和性、均衡模式配置）', async ({
+  test('RM-BC-56 LLM 配置界面 7 张 Card 分组展示（含 Key 亲和性、均衡模式配置、上游错误归一）', async ({
     page,
   }) => {
     const clusterName = utils.generateTestBusinessClusterName();
@@ -233,6 +237,7 @@ test.describe('AI业务集群 - RM-BC-52~56、79 Key 路由策略与 key_policy'
       utils.DOC_BUSINESS_CLUSTER.serviceAuthKeysCard,
       utils.DOC_BUSINESS_CLUSTER.keyPolicyCard,
       utils.DOC_BUSINESS_CLUSTER.keyAffinityCard,
+      utils.DOC_BUSINESS_CLUSTER.normalizeUpstreamErrorCard,
       utils.DOC_BUSINESS_CLUSTER.balanceModeConfigCard,
     ]);
   });
