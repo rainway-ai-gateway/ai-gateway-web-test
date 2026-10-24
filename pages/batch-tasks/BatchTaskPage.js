@@ -19,6 +19,7 @@ const path = require('path');
 const { expect } = require('@playwright/test');
 const rc = require('../resource/ResourcePageCommon');
 const { IvuDrawerComponent, IvuSelectComponent } = require('../../components/iview');
+const readonlyUtils = require('../../utils/readonly');
 
 const AUTH_PATH = path.join(__dirname, '../../auth.json');
 
@@ -27,7 +28,7 @@ const LIST_URL_RE = /\/open-api\/v1\/batches(\?|$)/;
 const DETAIL_URL_RE = /\/open-api\/v1\/batches\/[^/?]+$/;
 const CANCEL_URL_RE = /\/open-api\/v1\/batches\/[^/?]+\/cancel$/;
 
-const PAGE_LIMIT = 20;
+const PAGE_LIMIT = 50;
 
 const DOC = {
   pageTitle: '批量任务',
@@ -43,6 +44,9 @@ const DOC = {
   reset: '重置',
   prevPage: '上一页',
   nextPage: '下一页',
+  firstPage: '首页',
+  pageIndicatorPrefix: '第 ',
+  pageCountPrefix: '本页 ',
   detailTitle: '批量任务详情',
   detail: '详情',
   cancel: '取消',
@@ -111,23 +115,41 @@ const SETTLE_LABELS = {
   released: '已释放（released）',
 };
 
+// Tag 颜色映射（对齐 index.vue 的 STATUS_TAG_TYPES / SETTLE_TAG_TYPES；iView Tag 用 color 而非 type）
+const STATUS_TAG_COLORS = {
+  validating: 'default',
+  queued: 'primary',
+  in_progress: 'primary',
+  finalizing: 'warning',
+  completed: 'success',
+  expired: 'default',
+  failed: 'error',
+  cancelled: 'default',
+  cancelling: 'warning',
+};
+
+const SETTLE_TAG_COLORS = {
+  reserved: 'warning',
+  settled: 'success',
+  released: 'default',
+};
+
 const STATUS_OPTIONS = Object.keys(STATUS_LABELS);
 
-// 12 列列头（顺序即表格顺序）
+// 6 列列头（顺序即表格顺序，2026-10-20 UI 改版由 12 列精简而来）
 const COLUMN_HEADERS = [
   DOC.batchId,
-  DOC.provider,
-  DOC.apiKeyId,
-  DOC.entityId,
   DOC.status,
   DOC.requestCounts,
-  DOC.usage,
-  DOC.reserveUnits,
-  DOC.settleUnits,
   DOC.settleStatus,
   DOC.createdAt,
   DOC.operation,
 ];
+
+// 列名 → 列索引（依赖列名定位处一律由此派生，避免列序调整后错位）
+function columnIndex(header) {
+  return COLUMN_HEADERS.indexOf(header);
+}
 
 const TERMINAL_STATUSES = ['completed', 'expired', 'failed', 'cancelled'];
 
@@ -319,8 +341,16 @@ function batchTaskTable(page) {
     async rowCount() {
       return bodyRows().count();
     },
-    cellsByBatchId: async (batchId) =>
-      bodyRows().filter({ hasText: batchId }).first().locator('td').allTextContents(),
+    // textContent 取的是原始节点文本，会带上 iView 单元格内的空占位（<!---->）与模板空格，
+    // 逐列严格比较前统一 trim（走 innerText 的读取路径已天然折叠空白）
+    cellsByBatchId: async (batchId) => {
+      const texts = await bodyRows()
+        .filter({ hasText: batchId })
+        .first()
+        .locator('td')
+        .allTextContents();
+      return texts.map((text) => text.trim());
+    },
     async waitForLoaded(timeout = 15000) {
       const loadingMask = page.locator('.batch-tasks .ivu-spin-fix');
       if ((await loadingMask.count()) > 0) {
@@ -359,28 +389,53 @@ async function columnTexts(page, index) {
     );
 }
 
+/** 指定列每行 Tag 的 class 串（用于断言颜色，如 ivu-tag-success） */
+async function columnTagClasses(page, index) {
+  return batchTaskTable(page)
+    .dataRows()
+    .evaluateAll(
+      (rows, i) =>
+        rows.map((row) => {
+          const td = row.querySelectorAll('td')[i];
+          const tag = td ? td.querySelector('.ivu-tag') : null;
+          return tag ? tag.className : '';
+        }),
+      index,
+    );
+}
+
 async function rowCount(page) {
   return batchTaskTable(page).dataRows().count();
 }
 
 async function getHeaderTexts(page) {
   const texts = await batchTaskTable(page).headers().allTextContents();
-  // 帮助 icon 为 '?'，去掉尾部帮助标记，保留纯列头文案
-  return texts.map((t) => t.replace(/[?？]\s*$/, '').trim());
+  return texts.map((t) => t.trim());
 }
 
-// 列头帮助 icon 的 title 提示（仅含帮助 icon 的列）
+// 列头帮助提示：表头帮助图标改为 iView Tooltip + Icon（2026-10-20），
+// 无 span[title] 可读 —— 只能 hover 表头的 .ivu-tooltip 后读浮层文本。
+// transfer: true 使 popper 挂在 body 下，不能限定在 .batch-tasks 内查询。
 async function getHeaderHelpMap(page) {
-  const headers = page.locator('.batch-tasks .ivu-table-header thead th');
+  const headers = batchTaskTable(page).headers();
   const count = await headers.count();
+  const popper = page.locator('body .ivu-tooltip-popper:visible');
   const map = {};
   for (let i = 0; i < count; i += 1) {
     const th = headers.nth(i);
-    const icon = th.locator('span[title]');
-    if ((await icon.count()) > 0) {
-      const label = (await th.textContent()).replace(/[?？]\s*$/, '').trim();
-      map[label] = await icon.first().getAttribute('title');
+    const trigger = th.locator('.ivu-tooltip');
+    if ((await trigger.count()) === 0) {
+      continue;
     }
+    const label = (await th.textContent()).trim();
+    await trigger.first().hover();
+    await expect(popper.first()).toBeVisible({ timeout: 5000 });
+    map[label] = (
+      await popper.first().locator('.ivu-tooltip-inner').innerText()
+    ).trim();
+    // 移开鼠标并等当前 popper 收起，避免下一次 hover 读到上一个提示
+    await page.mouse.move(0, 0);
+    await expect(popper).toHaveCount(0, { timeout: 5000 });
   }
   return map;
 }
@@ -552,10 +607,46 @@ function prevButton(page) {
     .getByRole('button', { name: DOC.prevPage });
 }
 
+function firstButton(page) {
+  return page
+    .locator('.batch-tasks .batch-pager')
+    .getByRole('button', { name: DOC.firstPage });
+}
+
 function nextButton(page) {
   return page
     .locator('.batch-tasks .batch-pager')
     .getByRole('button', { name: DOC.nextPage });
+}
+
+/** 分页区文案：形如 ['第 2 页', '本页 50 条']（CursorPager 组件的 .cursor-pager-info） */
+async function pagerInfoTexts(page) {
+  return page.locator('.batch-tasks .cursor-pager-info').allInnerTexts();
+}
+
+async function isFirstDisabled(page) {
+  return firstButton(page).isDisabled();
+}
+
+async function clickFirstPage(page) {
+  return waitForBatchTaskListResponse(page, async () => {
+    await firstButton(page).click({ force: true });
+  });
+}
+
+/** 分页条应左对齐：其左边界与表格左边界一致（容差 4px） */
+async function expectPagerAlignedWithTable(page, tolerance = 4) {
+  const tableBox = await page
+    .locator('.batch-tasks .ivu-table-wrapper')
+    .first()
+    .boundingBox();
+  const pagerBox = await page.locator('.batch-tasks .cursor-pager').first().boundingBox();
+  expect(tableBox, '表格应可见').toBeTruthy();
+  expect(pagerBox, '分页条应可见').toBeTruthy();
+  expect(
+    Math.abs(pagerBox.x - tableBox.x),
+    `分页条应与表格左对齐（表格 x=${tableBox.x}，分页条 x=${pagerBox.x}）`,
+  ).toBeLessThanOrEqual(tolerance);
 }
 
 async function clickNextPage(page) {
@@ -648,13 +739,11 @@ async function detailDrawerWidthStyle(page) {
   return (await drawer.getAttribute('style')) || '';
 }
 
-// 详情字段标题行内帮助 icon 的 title 提示（无帮助 icon 返回 null）
-async function detailFieldHelpTip(page, title) {
-  const icon = detailRow(page, title).locator('span[title]');
-  if ((await icon.count()) === 0) {
-    return null;
-  }
-  return icon.first().getAttribute('title');
+// 详情抽屉内不应再有任何帮助图标（2026-10-20 UI 改版已移除全部「?」）
+async function expectDetailNoHelpIcons(page) {
+  const drawer = detailDrawer(page);
+  await expect(drawer.locator('span[title]')).toHaveCount(0);
+  await expect(drawer.locator('.batch-help-icon')).toHaveCount(0);
 }
 
 // 详情 5 个面板标题（基本信息 / 状态与计数 / 用量与记账 / 文件与时间 / 批量文件）
@@ -666,12 +755,12 @@ async function detailPanelCount(page) {
   return page.locator('.batch-view .panel').count();
 }
 
-// 「批量文件」映射表表头（去掉帮助 icon 的 '?'）
+// 「批量文件」映射表表头
 async function batchFilesHeaderTexts(page) {
   const texts = await batchFilesTable(page)
     .locator('thead th')
     .allTextContents();
-  return texts.map((t) => t.replace(/[?？]\s*$/, '').replace(/\s+/g, '').trim());
+  return texts.map((t) => t.replace(/\s+/g, '').trim());
 }
 
 async function batchFileRowCount(page) {
@@ -739,6 +828,178 @@ function cancelButton(page, batchId) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 只读管理员视角（docs/batch-tasks/02-功能测试用例/04-只读视角.md BT-RO-01~03）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 筛选栏写入口候选文案。批量任务一期本就无创建 / 编辑入口
+ * （`src/modules/BatchTasks/index.vue:18-84` 筛选栏只有「查询」「重置」两个 Button），
+ * 列出候选文案供 BT-RO-01「不含任何写入口」逐项断言。
+ */
+const TOOLBAR_WRITE_LABELS = ['新增', '创建', '编辑', '删除', '提交', '批量取消'];
+
+/** 筛选栏容器（只读视角同样渲染 → 可作就绪锚点） */
+function filterBar(page) {
+  return page.locator('.batch-tasks .filter-bar');
+}
+
+function filterBarButtons(page) {
+  return filterBar(page).getByRole('button');
+}
+
+function filterBarButton(page, label) {
+  return filterBar(page).getByRole('button', { name: label, exact: true });
+}
+
+/**
+ * 筛选栏写入口候选按钮（CSS + `filter({ hasText })`，**含隐藏元素**）。
+ * 覆盖两种实现：被 `v-has` 加 `.v-has-hidden` 隐藏的按钮，以及根本不渲染的按钮
+ * （role 选择器会按 ARIA 树排除隐藏元素，故写入口断言统一走 CSS 文本定位）。
+ */
+function filterBarWriteButton(page, label) {
+  return filterBar(page).locator('button').filter({ hasText: label });
+}
+
+/** 筛选栏按钮文案集合（只读视角应为「查询」「重置」两项，与管理员一致） */
+async function filterBarButtonLabels(page) {
+  return (await filterBarButtons(page).allInnerTexts()).map((t) => t.trim());
+}
+
+function queryButton(page) {
+  return filterBarButton(page, DOC.query);
+}
+
+function resetButton(page) {
+  return filterBarButton(page, DOC.reset);
+}
+
+/** 创建时间起 / 止 DatePicker 输入框（which：'start' | 'end'） */
+function filterDateTimeInput(page, which) {
+  return filterItem(page, which === 'start' ? DOC.startTime : DOC.endTime)
+    .locator('input')
+    .first();
+}
+
+/** 行内「详情」按钮（源码未挂任何指令 → 只读视角保留，可开只读抽屉） */
+function rowDetailButton(page, batchId) {
+  return batchTaskTable(page).rowAction(batchId, DOC.detail);
+}
+
+/**
+ * 行内「取消」按钮。`src/modules/BatchTasks/index.vue:365`（终态置灰）/ `:381`（非终态）
+ * 均以 `directives: [{ name: 'has' }]` 挂全局指令 → 只读视角**仍在 DOM 中**且带
+ * `.v-has-hidden`，因此断言用 `readonly.expectVHasHidden`，不能用 `expectAbsent`。
+ *
+ * 定位刻意**不用 `getByRole`**：Playwright 的 role 选择器默认按 ARIA 树排除隐藏元素
+ * （`getByRole` 的 `includeHidden` 默认 false），`display:none` 的按钮匹配数为 0，
+ * `expectVHasHidden` 的 `toHaveCount(1)` 会失败。CSS + `filter({ hasText })` 是 DOM 文本匹配，
+ * 不看可见性，隐藏与可见两种态都能命中（与 pages/ai-cache 的 `.route-header-actions button`
+ * + `hasText` 同思路）。
+ */
+function rowCancelButton(page, batchId) {
+  return batchTaskTable(page)
+    .rowByBatchId(batchId)
+    .locator('button')
+    .filter({ hasText: DOC.cancel });
+}
+
+/**
+ * 详情抽屉内按钮集合（CSS 定位，含隐藏元素）。
+ * `components/BatchView.vue` 通篇无 `Button`（纯只读展示）→ BT-RO-03「抽屉无任何写操作按钮」
+ * 断言为 0 个。
+ */
+function detailDrawerButtons(page) {
+  return detailDrawer(page).locator('button');
+}
+
+/** 详情抽屉内指定文案的写操作按钮（BT-RO-03 预期 1 逐项断言用，同样不看可见性） */
+function detailDrawerWriteButton(page, label) {
+  return detailDrawer(page)
+    .locator('.ivu-drawer-body')
+    .locator('button')
+    .filter({ hasText: label });
+}
+
+/** 详情字段标题文案（5 面板 `ul.clearFloat > li.title`），供 BT-RO-03 管理员/只读结构一致比对 */
+async function detailFieldTitleTexts(page) {
+  return page
+    .locator('.batch-view .panel-body ul.clearFloat > li.title')
+    .allTextContents();
+}
+
+/**
+ * 按「任务状态」检索（**走真实 UI**：下拉选择 + 「查询」，与 BT-L-02 同路径），
+ * 返回 `{ response, batchId }`（batchId = 首页第一行的批量任务 ID）。
+ *
+ * 刻意不用 `queryWithFilters`——它直接写 `vm.filter.status`（`__vue__` 内部写入）：
+ * 只读用例需排除「测试态直写」引发的渲染差异，真实用户只会通过下拉筛选
+ * （2026-10-16 首轮只读验证中 BT-RO-02 的 v-has 丢失即出现在直写 + 查询路径上）。
+ */
+async function queryByStatusViaUi(page, status) {
+  await selectStatusOption(page, STATUS_LABELS[status] || status);
+  const response = await waitForBatchTaskListResponse(page, () =>
+    clickQuery(page),
+  );
+  await batchTaskTable(page).waitForLoaded();
+  const [batchId] = await columnTexts(page, columnIndex(DOC.batchId));
+  return { response, batchId };
+}
+
+/**
+ * 只读视角诊断探针：直接读产品 Vue store 的 `isReadonly()`（`src/utils/store.js:88-91`）。
+ *
+ * 差异点：`getUser()` 优先返回内存里的 `state.user`，其次才回落到 localStorage
+ * （`src/utils/store.js:46-55`）。因此「localStorage 仍是只读角色」并不能证明
+ * 「页面处于只读渲染态」——`readonly.expectStillReadonly` 只查 localStorage。
+ * 本探针用于区分：① 页面重渲染时没挂 v-has class（store 仍 true）；
+ * ② 只读态被换回管理员态（store false，即 `state.user` 被写入 admin/logout）。
+ *
+ * @returns {Promise<boolean|null>} null = 取不到 store（探针不可用）
+ */
+async function storeIsReadonly(page) {
+  return page.evaluate(() => {
+    const el = document.querySelector('.batch-tasks');
+    const vm = el && el.__vue__;
+    const store = vm && vm.$store;
+    if (!store || typeof store.isReadonly !== 'function') {
+      return null;
+    }
+    try {
+      return store.isReadonly();
+    } catch (e) {
+      return null;
+    }
+  });
+}
+
+/**
+ * 只读视角直连 URL 进入批量任务列表页。
+ * **不得**复用 `gotoBatchTaskPage`——它内部走 `rc.ensureAppSession` →
+ * `ensureSessionHealthy` / `handleUrlInvalidAlert`，会用 conf.json 的 admin 凭证重登并回写
+ * auth.json，把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoBatchTaskPageReadonly(page) {
+  await readonlyUtils.gotoAsReadonly(page, 'batches', {
+    ready: filterBar(page),
+  });
+  await expectBatchTaskPageReadyReadonly(page);
+  await readonlyUtils.expectStillReadonly(page);
+}
+
+/**
+ * 只读视角就绪判定。锚点全部取只读视角同样存在的元素
+ * （筛选栏 / 「查询」/ 表头）——不能用页头写入口或行内写按钮，它们只读态不可见。
+ */
+async function expectBatchTaskPageReadyReadonly(page) {
+  await expect(filterBar(page)).toBeVisible({ timeout: 15000 });
+  await expect(queryButton(page)).toBeVisible({ timeout: 15000 });
+  await expect(batchTaskTable(page).headers().first()).toBeVisible({
+    timeout: 15000,
+  });
+  await batchTaskTable(page).waitForLoaded();
+}
+
+/* ------------------------------------------------------------------ *
  * 时间工具（与 UI DatePicker 一致：yyyy-MM-dd HH:mm:ss → Unix 秒）
  * ------------------------------------------------------------------ */
 
@@ -782,8 +1043,11 @@ module.exports = {
   DOC,
   STATUS_LABELS,
   SETTLE_LABELS,
+  STATUS_TAG_COLORS,
+  SETTLE_TAG_COLORS,
   STATUS_OPTIONS,
   COLUMN_HEADERS,
+  columnIndex,
   PAGE_LIMIT,
   LIST_URL_RE,
   DETAIL_URL_RE,
@@ -807,6 +1071,7 @@ module.exports = {
   getHeaderTexts,
   getHeaderHelpMap,
   columnTexts,
+  columnTagClasses,
   rowCount,
   expectEmptyList,
   filterItem,
@@ -825,10 +1090,15 @@ module.exports = {
   queryWithFilters,
   prevButton,
   nextButton,
+  firstButton,
   clickNextPage,
   clickPrevPage,
+  clickFirstPage,
+  expectPagerAlignedWithTable,
   isNextDisabled,
   isPrevDisabled,
+  isFirstDisabled,
+  pagerInfoTexts,
   detailDrawer,
   openDetailByBatchId,
   expectDetailDrawerOpen,
@@ -839,7 +1109,7 @@ module.exports = {
   detailFieldText,
   expectDetailFieldContains,
   detailDrawerWidthStyle,
-  detailFieldHelpTip,
+  expectDetailNoHelpIcons,
   detailPanelHeaders,
   detailPanelCount,
   batchFilesTable,
@@ -855,6 +1125,25 @@ module.exports = {
   confirmCancel,
   dismissCancel,
   cancelButton,
+  // 只读管理员视角（docs/batch-tasks/02-功能测试用例/04-只读视角.md）
+  gotoBatchTaskPageReadonly,
+  expectBatchTaskPageReadyReadonly,
+  TOOLBAR_WRITE_LABELS,
+  filterBar,
+  filterBarButtons,
+  filterBarButton,
+  filterBarWriteButton,
+  filterBarButtonLabels,
+  queryButton,
+  resetButton,
+  filterDateTimeInput,
+  rowDetailButton,
+  rowCancelButton,
+  detailDrawerButtons,
+  detailDrawerWriteButton,
+  detailFieldTitleTexts,
+  queryByStatusViaUi,
+  storeIsReadonly,
   formatDateTimeValue,
   toUnixTimestamp,
 };

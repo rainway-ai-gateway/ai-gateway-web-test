@@ -907,6 +907,79 @@ async function captureAiContextScreenshots(page) {
 // 19 章：批量任务
 // ---------------------------------------------------------------------------
 
+/**
+ * 采集当前页各行的截图样本。
+ * 列索引与 BatchTaskPage.COLUMN_HEADERS 对齐：0 批量任务ID、1 状态、5 操作。
+ */
+async function collectBatchTaskRowSamples(page) {
+  const rows = page.locator('.batch-tasks .ivu-table-body tbody tr');
+  const count = await rows.count();
+  const samples = [];
+  for (let i = 0; i < count; i++) {
+    const row = rows.nth(i);
+    if ((await row.innerText()).includes('暂无数据')) continue;
+    const cells = row.locator('td');
+    const batchId = (await cells.nth(0).innerText()).trim();
+    if (!batchId) continue;
+    const cancelBtn = cells.nth(5).getByRole('button', { name: '取消' }).first();
+    const hasCancel = (await cancelBtn.count()) > 0;
+    samples.push({
+      batchId,
+      status: (await cells.nth(1).innerText()).trim(),
+      cancelDisabled: hasCancel ? await cancelBtn.isDisabled() : true,
+      row,
+    });
+  }
+  return samples;
+}
+
+/** 详情抽屉：临时放开抽屉高度，让 5 个卡片完整入镜，截图后还原样式并关闭 */
+async function captureBatchTaskDetail(page, sample) {
+  await batchPage.openDetailByBatchId(page, sample.batchId);
+  await batchPage.expectDetailDrawerOpen(page);
+  await page.waitForTimeout(600);
+
+  // 抽屉内容为绝对定位 + 固定高度，直接放开高度会塌成 0；
+  // 这里解除 bottom 锚定并放开 overflow，让 content 按内容撑高（截图后还原）
+  const style = await page.addStyleTag({
+    content:
+      '.ivu-drawer-wrap:not(.ivu-drawer-hidden) .ivu-drawer { overflow: visible !important; }' +
+      '.ivu-drawer-wrap:not(.ivu-drawer-hidden) .ivu-drawer-content {' +
+      ' bottom: auto !important; height: auto !important; overflow: visible !important; }' +
+      '.ivu-drawer-wrap:not(.ivu-drawer-hidden) .ivu-drawer-body { overflow: visible !important; }',
+  });
+  await page.waitForTimeout(300);
+
+  const panel = page
+    .locator('.ivu-drawer-wrap:not(.ivu-drawer-hidden) .ivu-drawer-content')
+    .last();
+  await screenshotElement(panel, '19-batch-tasks-detail.png');
+
+  await style.evaluate((el) => el.remove());
+  await batchPage.closeDetailDrawer(page);
+  await page.waitForTimeout(400);
+}
+
+/** 取消二次确认弹窗：截图后点「取消」关闭，不真正发起取消 */
+async function captureBatchTaskCancelConfirm(page, sample) {
+  await batchPage.clickCancelByBatchId(page, sample.batchId);
+  await batchPage.expectCancelConfirmVisible(page, sample.batchId);
+  await page.waitForTimeout(400);
+  await screenshotElement(
+    batchPage.confirmModal(page),
+    '19-batch-tasks-cancel-confirm.png',
+  );
+  await batchPage.dismissCancel(page);
+  await page.waitForTimeout(400);
+}
+
+/** 终态行「取消」置灰特写（浏览器原生 title 浮层不入镜，图片只体现置灰态） */
+async function captureBatchTaskCancelDisabled(sample) {
+  // 取整行而非单按钮：同时体现「已完成」终态与置灰的「取消」，
+  // 悬停提示是浏览器原生 title，截图无法包含浮层
+  await screenshotElement(sample.row, '19-batch-tasks-cancel-disabled.png');
+}
+
 async function captureBatchTasksScreenshots(page) {
   common.log('=== 19 章：批量任务 ===');
   await preparePage(page);
@@ -918,8 +991,8 @@ async function captureBatchTasksScreenshots(page) {
   await setViewport(page, 1920, 1080);
   await screenshot(page, '19-batch-tasks-list.png', page.locator('.batch-tasks'));
 
-  const rows = await batchPage.rowCount(page).catch(() => 0);
-  if (rows === 0) {
+  const samples = await collectBatchTaskRowSamples(page);
+  if (!samples.length) {
     skipped.push(
       '19-batch-tasks-detail.png（环境无批量任务数据，无行可打开详情抽屉）',
     );
@@ -930,6 +1003,30 @@ async function captureBatchTasksScreenshots(page) {
       '19-batch-tasks-cancel-disabled.png（环境无批量任务数据，无终态行）',
     );
     common.log('批量任务列表为空（数据面透传产生，控制台无创建入口），跳过详情/取消类截图');
+    return;
+  }
+
+  // 详情：优先取含 batch_files 的造数样本（batch-seed-01），否则首行
+  const detailSample =
+    samples.find((s) => s.batchId === 'batch-seed-01') || samples[0];
+  await captureBatchTaskDetail(page, detailSample);
+
+  // 取消确认：首个可取消（非终态）行
+  const activeSample = samples.find((s) => !s.cancelDisabled);
+  if (activeSample) {
+    await captureBatchTaskCancelConfirm(page, activeSample);
+  } else {
+    skipped.push(
+      '19-batch-tasks-cancel-confirm.png（当前页无非终态任务，无「取消」按钮可点击）',
+    );
+  }
+
+  // 取消置灰：终态行操作列
+  const terminalSample = samples.find((s) => s.cancelDisabled);
+  if (terminalSample) {
+    await captureBatchTaskCancelDisabled(terminalSample);
+  } else {
+    skipped.push('19-batch-tasks-cancel-disabled.png（当前页无终态任务）');
   }
 }
 

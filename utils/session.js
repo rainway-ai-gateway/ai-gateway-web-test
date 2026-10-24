@@ -371,6 +371,72 @@ async function persistAuthState(page) {
   }
 }
 
+/** 读取共享 auth.json 原始内容（失败返回 null） */
+function readAuthStateFile() {
+  try {
+    return JSON.parse(fs.readFileSync(AUTH_PATH, 'utf-8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 直接用「接口登录拿到的 user」回写 auth.json，不依赖页面状态。
+ *
+ * 为什么必须单独有这条路径：`recoverFromSessionError` 里接口登录**一旦成功，
+ * 后端就已经把旧 Key 作废**。旧实现要到「页面注入 + 页面侧读回校验」都通过之后才
+ * `persistAuthState`，一旦页面侧校验没过（页面尚未导航到应用源、context 已关闭等），
+ * 就会在写盘之前抛错 —— auth.json 里留着**已失效的旧 Key**，后续每个用例都重复
+ * 「探测失效 → 重新登录（又作废一把）→ 校验不过 → 不写盘」，整轮回归级联假失败。
+ * 2026-10-16 实测：一次 run 内 29 次接口重登成功、58 次「会话自愈失败」，44 条用例连带全红。
+ *
+ * 合并写入：保留 auth.json 原有的 cookies 与其它 localStorage 键，只替换 `user`（并确保 `lang`）。
+ */
+async function persistAuthUser(user) {
+  if (!user || !user.sessionKey) {
+    return false;
+  }
+  try {
+    const current = readAuthStateFile() || { cookies: [], origins: [] };
+    let origin = getAppBaseUrl();
+    try {
+      origin = new URL(getAppBaseUrl()).origin;
+    } catch (e) {
+      /* 保持原值 */
+    }
+    const origins = Array.isArray(current.origins) ? current.origins.slice() : [];
+    let target = origins.find((o) => o.origin === origin);
+    if (!target) {
+      target = { origin, localStorage: [] };
+      origins.push(target);
+    }
+    const stores = Array.isArray(target.localStorage)
+      ? target.localStorage.slice()
+      : [];
+    const upsert = (name, value) => {
+      const idx = stores.findIndex((i) => i.name === name);
+      if (idx >= 0) {
+        stores[idx] = { name, value };
+      } else {
+        stores.push({ name, value });
+      }
+    };
+    upsert('user', JSON.stringify(user));
+    upsert('lang', 'zh');
+    target.localStorage = stores;
+
+    fs.writeFileSync(
+      AUTH_PATH,
+      JSON.stringify({ ...current, origins }, null, 2),
+    );
+    common.log('已按接口登录结果直接回写 auth.json（不依赖页面状态）');
+    return true;
+  } catch (e) {
+    common.log('直接回写 auth.json 失败: ' + e.message);
+    return false;
+  }
+}
+
 /** 清空共享 auth.json 中的登录态（注销等场景；避免把已失效会话留给后续用例） */
 async function clearAuthState(page) {
   try {
@@ -502,6 +568,10 @@ async function recoverFromSessionError(page, options = {}) {
   }
 
   if (user && user.sessionKey) {
+    // 关键：接口登录一成功，后端就已作废旧 Key。必须**先把新会话落盘**，
+    // 再去做页面注入与页面侧校验 —— 否则页面侧校验一旦不过就会在写盘前抛错，
+    // auth.json 留着已失效的旧 Key，后续用例反复「失效→重登→再失效」级联全红。
+    await persistAuthUser(user);
     await injectSessionIntoPage(page, user);
   }
 
@@ -585,6 +655,7 @@ module.exports = {
   loginViaApi,
   injectSessionIntoPage,
   persistAuthState,
+  persistAuthUser,
   clearAuthState,
   restoreSharedSession,
   reloadAppPage,

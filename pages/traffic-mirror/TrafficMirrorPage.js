@@ -21,6 +21,8 @@
  * - 视图/编辑双模式：视图模式行操作仅「查看」；编辑模式行操作「编辑」+「删除」，
  *   以「提交并生效」全量 PUT；退出编辑有未提交改动时二次确认并回滚
  * - 两个抽屉在 .traffic-mirror 根下：查看抽屉（.rule-view）/ 表单抽屉（.rule-form）
+ * - 编辑模式表格行可拖拽排序（`:draggable="mode === 'edit'"` + `@dragDrop`），表格下方渲染
+ *   `.drag-tip` 提示条；`beforeRouteLeave` 对有未提交改动的页面跳转做二次确认（与退出编辑模式同文案）
  *
  * 验收文案常量（DOC_*）与 docs/traffic-mirror/02 及 i18n zh.js 对齐。
  * 数据造数/备份/恢复统一在 api/traffic-mirror-api-utils.js 中实现，本文件不直连网络。
@@ -33,8 +35,9 @@ const common = require('../../utils/common');
 const sessionUtils = require('../../utils/session');
 const umUtils = require('../user/UserPage');
 const apiUtils = require('../../api/traffic-mirror-api-utils');
-const { PageTableComponent } = require('../../components/layout');
+const { PageTableComponent, AppSidebarComponent } = require('../../components/layout');
 const { IVU_DRAWER_VISIBLE } = require('../../components/iview/constants');
+const readonly = require('../../utils/readonly');
 const {
   IvuMessageComponent,
   IvuFormComponent,
@@ -61,6 +64,8 @@ const DOC_TM_PAGE = {
   exitDoneMsg: '已退出编辑模式',
   exitCancelledMsg: '已取消退出',
   informationTips: '信息提示',
+  /** 编辑模式专有提示条（index.vue `.drag-tip`，trafficMirror.dragToChangeOrder） */
+  dragToChangeOrderTip: '拖动表格可修改生效次序',
   validateErrorMsg: '请检查参数填写是否规范!',
   loadFailedMsg: '加载流量镜像规则失败',
   tipNameDuplicate: '规则名称已存在，集合内必须唯一',
@@ -502,6 +507,129 @@ async function enterEditMode(page) {
     .getByRole('button', { name: DOC_TM_PAGE.enterEditMode, exact: true })
     .click();
   await page.waitForTimeout(500);
+}
+
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/traffic-mirror/02-功能测试用例/05-只读视角.md TM-RO-01~03）
+// ---------------------------------------------------------------------------
+
+/**
+ * 页头写入口容器 `.route-header-submit`。
+ * index.vue:33 挂 `v-has`（内含进入/退出编辑模式、提交并生效），只读视角加 `.v-has-hidden`。
+ */
+function ruleHeaderSubmit(page) {
+  return ruleHeader(page).locator('.route-header-submit');
+}
+
+/**
+ * 页头「添加规则」按钮。index.vue:23-31 同时受 `v-show="mode === 'edit'"` 与 `v-has` 约束：
+ * 管理员视图模式下 v-show 写内联 `display:none`，只读视角再由 v-has 追加 `.v-has-hidden`，
+ * 两种机制都不产出可见元素，故只读断言用「不可见」（不额外钉死 class）。
+ */
+function ruleHeaderAddRuleBtn(page) {
+  return ruleHeader(page)
+    .locator('.route-header-actions button')
+    .filter({ hasText: DOC_TM_PAGE.addRule });
+}
+
+function ruleHeaderEnterEditBtn(page) {
+  return ruleHeaderSubmit(page).getByRole('button', {
+    name: DOC_TM_PAGE.enterEditMode,
+    exact: true,
+  });
+}
+
+function ruleHeaderExitEditBtn(page) {
+  return ruleHeaderSubmit(page).getByRole('button', {
+    name: DOC_TM_PAGE.exitEditMode,
+    exact: true,
+  });
+}
+
+function ruleHeaderSubmitAndEffectBtn(page) {
+  return ruleHeaderSubmit(page).getByRole('button', {
+    name: DOC_TM_PAGE.submitAndEffect,
+    exact: true,
+  });
+}
+
+/**
+ * 规则行「操作」列单元格。
+ * index.vue:245 操作列显示分支按 `mode === 'view'` 收敛——只读恒停留视图模式，
+ * 编辑/删除分支（index.vue:255-275）整体不渲染，行内写按钮可见性复用既有
+ * `expectRuleRowOnlyViewAction` / `expectRuleRowEditDeleteActions`。
+ */
+function ruleRowActions(page, ruleName) {
+  return getRuleCell(page, ruleName, DOC_TM_RULES.columnIndex.action);
+}
+
+/** 规则行「查看」按钮（只读视角保留的只读入口） */
+function ruleRowViewBtn(page, ruleName) {
+  return getRuleRow(page, ruleName).getByRole('button', {
+    name: DOC_TM_PAGE.viewButton,
+    exact: true,
+  });
+}
+
+/**
+ * 编辑模式提示条（index.vue:65 `v-if="mode === 'edit'"`，编辑模式专有）。
+ * 只读视角恒停留视图模式 → 不渲染；作为「恒停留视图模式」的旁证。
+ */
+function rulesDragTip(page) {
+  return pageRoot(page).locator('.drag-tip');
+}
+
+/** 规则名表头排序控件（列定义 sortable:'custom' → iView `.ivu-table-sort`） */
+function ruleNameHeaderSorter(page) {
+  return ruleTable(page)
+    .headers()
+    .filter({ hasText: DOC_TM_RULES.ruleNameColumn })
+    .first()
+    .locator('.ivu-table-sort');
+}
+
+/**
+ * 只读视角直连 URL 进入流量镜像规则页。
+ * 不复用 `gotoTrafficMirrorPage`——它内部调 `ensureSessionHealthy` / `handleUrlInvalidAlert`，
+ * 会以 admin 凭证重登并回写 auth.json，把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoTrafficMirrorPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, TM_PATH, { ready: pageRoot(page) });
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 只读视角就绪判定：面包屑页头标题可见（只读仍存在）+ 页头写入口容器已被 v-has 隐藏。
+ * 不能用 `expectViewMode`——它断言「进入编辑模式」可见。
+ */
+async function expectTrafficMirrorPageReadyReadonly(page) {
+  await expect(pageRoot(page)).toBeVisible();
+  await expect(
+    pageRoot(page)
+      .locator('.route-owner-label')
+      .filter({ hasText: DOC_TM_PAGE.pageTitle })
+      .first(),
+  ).toBeVisible();
+  await readonly.expectVHasHidden(ruleHeaderSubmit(page), '页头写入口区');
+}
+
+/** TM-RO-03 预期 3：只读检索（列头搜索）与排序控件保留 */
+async function expectReadonlySearchAndSortRetained(page) {
+  const placeholders = [
+    DOC_TM_RULES.searchNamePlaceholder,
+    DOC_TM_RULES.searchCondPlaceholder,
+    DOC_TM_RULES.searchClusterPlaceholder,
+  ];
+  for (const placeholder of placeholders) {
+    await readonly.expectReadonlyVisible(
+      ruleSearchInput(page, placeholder),
+      `列头搜索输入框（${placeholder}）`,
+    );
+  }
+  await readonly.expectReadonlyVisible(
+    ruleNameHeaderSorter(page),
+    '规则名表头排序控件',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,6 +1359,209 @@ async function cancelExitEditMode(page) {
 }
 
 // ---------------------------------------------------------------------------
+// 拖拽排序（docs/traffic-mirror/02-功能测试用例/07-拖拽排序与离开拦截.md TM-DR-01~03）
+// ---------------------------------------------------------------------------
+
+/**
+ * 规则表格主数据行（限定主表格 body）。
+ *
+ * 行定位统一收敛到 `.show-iView-Table .ivu-table-body tbody tr`：`.searchTable` 的列头搜索行
+ * 是同一个 `.page-table` 内的**另一个** iView Table，用 `.page-table tbody tr` 取行会把搜索行
+ * 一起取到（按下标取行时整体串位）。
+ */
+function ruleRowsMain(page) {
+  return ruleTable(page)
+    .rootLocator()
+    .locator('.show-iView-Table .ivu-table-body tbody tr');
+}
+
+/** 复刻 TrafficMirror.onRuleDragDrop 的移动语义：拖拽行被移动到目标行的原下标处 */
+function moveRuleToIndex(names, fromIndex, toIndex) {
+  const next = names.slice();
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+/**
+ * 断言规则表格的生效次序（轮询重试）：
+ * 拖拽/退出编辑模式都是「改本地数组 → Vue 重渲染」的异步链路，静态读一次会读到旧 DOM，
+ * 故用 `expect.poll` 让期望顺序在超时窗口内收敛。
+ */
+async function expectRuleNamesInOrder(page, expectedNames) {
+  await expect
+    .poll(() => getRuleNamesInOrder(page), {
+      timeout: 15000,
+      message: '镜像规则表格生效次序不符',
+    })
+    .toEqual(expectedNames);
+}
+
+/** 真实拖拽：把 fromIndex 行拖到 toIndex 行上（Playwright 原生 dragTo，走 iView Sortable） */
+async function dragRuleRow(page, fromIndex, toIndex) {
+  const rows = ruleRowsMain(page);
+  const from = rows.nth(fromIndex);
+  const to = rows.nth(toIndex);
+  await expect(from).toBeVisible();
+  await expect(to).toBeVisible();
+  await from.dragTo(to);
+  await page.waitForTimeout(800);
+}
+
+/** 拖拽提示条（视图模式不渲染；编辑模式显示「拖动表格可修改生效次序」） */
+async function expectDragTipVisible(page, visible = true) {
+  if (visible) {
+    await expect(rulesDragTip(page)).toBeVisible();
+  } else {
+    await expect(rulesDragTip(page)).toHaveCount(0);
+  }
+}
+
+/**
+ * 行可拖拽属性：编辑模式 `<tr draggable="true">`；视图模式应为 `null`（首次即以视图模式渲染时成立）。
+ *
+ * **注意**：编辑模式切回视图模式后该属性会残留（iView `table-tr` 的 `v-if/v-else` 双 `<tr>` 原地 patch
+ * + Vue 对枚举型属性 `draggable` 不做 `removeAttribute`）——属产品缺陷，见
+ * docs/traffic-mirror/02-功能测试用例/07-拖拽排序与离开拦截.md TM-DR-01「阻塞记录」。
+ * 断言保持严格（不轮询、不放宽），缺陷未修时该断言应当失败。
+ */
+async function expectRuleRowsDraggable(page, draggable = true) {
+  const rows = ruleRowsMain(page);
+  const count = await rows.count();
+  expect(count, '规则表格无数据行，无法校验拖拽属性').toBeGreaterThan(0);
+  for (let i = 0; i < count; i += 1) {
+    expect(
+      await rows.nth(i).getAttribute('draggable'),
+      `第 ${i + 1} 行 draggable 属性不符`,
+    ).toBe(draggable ? 'true' : null);
+  }
+}
+
+/** 可拖拽行的鼠标指针：编辑模式 grab，视图模式不应出现；expected 传 null 断言「不是 grab」 */
+async function expectRuleRowsCursorStyle(page, expected = 'grab') {
+  const rows = ruleRowsMain(page);
+  const count = await rows.count();
+  expect(count, '规则表格无数据行，无法校验拖拽光标').toBeGreaterThan(0);
+  const cursors = await rows.evaluateAll((els) =>
+    els.map((el) => window.getComputedStyle(el).cursor),
+  );
+  cursors.forEach((cursor, i) => {
+    if (expected) {
+      expect(cursor, `第 ${i + 1} 行鼠标指针应为 ${expected}`).toBe(expected);
+    } else {
+      expect(cursor, `第 ${i + 1} 行不应显示拖拽光标`).not.toBe('grab');
+    }
+  });
+}
+
+/** 按列标题排序（点击表头排序图标）；order: asc / desc */
+async function sortRuleTableByColumn(page, columnTitle, order = 'desc') {
+  const th = ruleTable(page)
+    .rootLocator()
+    .locator('.show-iView-Table th')
+    .filter({ hasText: columnTitle })
+    .first();
+  const icon = th.locator(
+    order === 'asc'
+      ? '.ivu-icon-md-arrow-dropup'
+      : '.ivu-icon-md-arrow-dropdown',
+  );
+  await expect(icon).toBeVisible();
+  await icon.click();
+  await page.waitForTimeout(500);
+}
+
+/** 列标题 → 列头搜索输入框占位（pageTable 占位 =「请输入」+ 列标题 +「查询」） */
+const RULE_COLUMN_SEARCH_PLACEHOLDER = {
+  [DOC_TM_RULES.ruleNameColumn]: DOC_TM_RULES.searchNamePlaceholder,
+  [DOC_TM_RULES.condColumn]: DOC_TM_RULES.searchCondPlaceholder,
+  [DOC_TM_RULES.clusterColumn]: DOC_TM_RULES.searchClusterPlaceholder,
+};
+
+/** 按列标题做表格内本地搜索（纯前端过滤，不触发接口请求；keyword 传空串清除筛选） */
+async function searchRuleTableByColumn(page, columnTitle, keyword) {
+  const placeholder =
+    RULE_COLUMN_SEARCH_PLACEHOLDER[columnTitle] || `请输入${columnTitle}查询`;
+  await searchRulesByColumn(page, placeholder, keyword);
+}
+
+/** 「提交并生效」按钮态（`:disabled="!isDirty"`）：无本地变更置灰，任一变更后可点 */
+async function expectSubmitAndEffectDisabled(page, disabled = true) {
+  if (disabled) {
+    await expect(ruleHeaderSubmitAndEffectBtn(page)).toBeDisabled();
+  } else {
+    await expect(ruleHeaderSubmitAndEffectBtn(page)).toBeEnabled();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 离开拦截（docs/traffic-mirror/02-功能测试用例/07-拖拽排序与离开拦截.md TM-DR-04）
+// ---------------------------------------------------------------------------
+
+/** 侧栏「其它模块」菜单候选（按顺序取第一个存在的**顶层**菜单项，无需展开子菜单） */
+const SIDEBAR_LEAVE_TARGETS = ['用户管理', '数据报表', '操作日志'];
+
+/**
+ * 在应用内经侧栏点击其它模块菜单触发路由跳转（用于验证 beforeRouteLeave 离开拦截）。
+ *
+ * 菜单树来自 `GET meta`（运行时 `conf/nav_tree.toml`）：「用户管理 / 数据报表 / 操作日志」
+ * 为无子菜单的顶层项，直接渲染为 `.ivu-menu-item`；带子菜单的顶层项（如「功能增强」）
+ * 需先展开，故不列入候选。
+ */
+async function clickSidebarMenuItemToLeave(
+  page,
+  candidates = SIDEBAR_LEAVE_TARGETS,
+) {
+  const sidebar = new AppSidebarComponent(page);
+  for (const label of candidates) {
+    const item = sidebar.menuItem(label).first();
+    if ((await item.count()) > 0 && (await item.isVisible().catch(() => false))) {
+      common.log('侧栏导航离开流量镜像规则页: ' + label);
+      await item.click();
+      await page.waitForTimeout(800);
+      return label;
+    }
+  }
+  throw new Error(
+    '侧栏未找到可用作离开拦截目标的菜单项: ' + candidates.join(' / '),
+  );
+}
+
+/**
+ * 未提交改动确认框（`beforeRouteLeave` 与「退出编辑模式」共用同一 `$Modal.confirm` 文案）。
+ *
+ * 正文用 `.ivu-modal-confirm-body` 精确断言：iView confirm 的 DOM 为
+ * `.ivu-modal-confirm > [.ivu-modal-confirm-head, .ivu-modal-confirm-body, .ivu-modal-confirm-footer]`，
+ * body 内只含正文，不含标题。
+ */
+async function expectUnsavedChangesConfirmModal(page) {
+  await modal(page).expectOpen(DOC_TM_PAGE.informationTips);
+  await expect(
+    modal(page).visible().locator('.ivu-modal-confirm-body'),
+    `确认框正文应为「${DOC_TM_PAGE.exitConfirm}」`,
+  ).toHaveText(DOC_TM_PAGE.exitConfirm);
+}
+
+/** 确认框不应出现（无改动场景：不弹确认直接放行） */
+async function expectUnsavedChangesConfirmModalAbsent(page) {
+  await expect(
+    modal(page).withTitle(DOC_TM_PAGE.informationTips),
+  ).toBeHidden({ timeout: 10000 });
+}
+
+/** 未提交改动确认框：取消（`next(false)`，留在原页） */
+async function cancelUnsavedChangesConfirmModal(page) {
+  await modal(page).cancel();
+  await page.waitForTimeout(500);
+}
+
+/** 未提交改动确认框：确定（`next()` 跳走 / `performExitEditMode()` 回滚，提示 3s 内可见） */
+async function confirmUnsavedChangesConfirmModal(page) {
+  await modal(page).confirm();
+  await page.waitForTimeout(800);
+}
+
+// ---------------------------------------------------------------------------
 // 删除（确认框）
 // ---------------------------------------------------------------------------
 
@@ -1439,6 +1770,19 @@ module.exports = {
   gotoTrafficMirrorPageAndWaitForRules,
   reloadTrafficMirrorPage,
   waitForTrafficMirrorRulesGetResponse,
+  // 只读管理员视角（docs/traffic-mirror/…/05-只读视角.md）
+  gotoTrafficMirrorPageReadonly,
+  expectTrafficMirrorPageReadyReadonly,
+  ruleHeaderSubmit,
+  ruleHeaderAddRuleBtn,
+  ruleHeaderEnterEditBtn,
+  ruleHeaderExitEditBtn,
+  ruleHeaderSubmitAndEffectBtn,
+  ruleRowActions,
+  ruleRowViewBtn,
+  rulesDragTip,
+  ruleNameHeaderSorter,
+  expectReadonlySearchAndSortRetained,
   // 页头 / 双模式
   expectPageHeaderTitle,
   expectEditMode,
@@ -1528,6 +1872,24 @@ module.exports = {
   expectExitConfirmModal,
   confirmExitEditMode,
   cancelExitEditMode,
+  // 拖拽排序（TM-DR-01~03）
+  ruleRowsMain,
+  moveRuleToIndex,
+  expectRuleNamesInOrder,
+  dragRuleRow,
+  expectDragTipVisible,
+  expectRuleRowsDraggable,
+  expectRuleRowsCursorStyle,
+  sortRuleTableByColumn,
+  searchRuleTableByColumn,
+  expectSubmitAndEffectDisabled,
+  // 离开拦截（TM-DR-04）
+  SIDEBAR_LEAVE_TARGETS,
+  clickSidebarMenuItemToLeave,
+  expectUnsavedChangesConfirmModal,
+  expectUnsavedChangesConfirmModalAbsent,
+  cancelUnsavedChangesConfirmModal,
+  confirmUnsavedChangesConfirmModal,
   // 删除
   expectDeleteConfirmModal,
   confirmDelete,

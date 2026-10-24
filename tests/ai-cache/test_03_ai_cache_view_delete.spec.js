@@ -556,7 +556,7 @@ test.describe('AI 缓存规则 - 查看与删除', () => {
     });
   });
 
-  test('AC-DEL-04 提交成功后重新 GET 回填只读时间且列表一致', async ({
+  test('AC-DEL-04 提交成功后重新 GET 不含逐规则时间戳且列表一致', async ({
     page,
   }) => {
     const seedA = mockRule({ name: utils.generateTestRuleName('ac_del04_a_') });
@@ -587,13 +587,13 @@ test.describe('AI 缓存规则 - 查看与删除', () => {
       await utils.expectRulesPayloadNoTimestamps(payload);
     });
 
-    await test.step('提交成功后回到视图模式并重新 GET，每条规则带只读时间', async () => {
+    await test.step('提交成功后回到视图模式并重新 GET，响应不含逐规则时间戳', async () => {
       await utils.expectViewMode(page);
       const rules = await utils.getAiCacheRulesViaApi(page);
       expect(rules.length).toBeGreaterThan(0);
       for (const rule of rules) {
-        expect(rule.created_at).toBeTruthy();
-        expect(rule.updated_at).toBeTruthy();
+        expect(rule.created_at).toBeUndefined();
+        expect(rule.updated_at).toBeUndefined();
       }
       await utils.expectRuleRowOrder(
         page,

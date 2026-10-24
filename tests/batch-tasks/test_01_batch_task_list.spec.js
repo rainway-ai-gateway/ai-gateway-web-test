@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 /**
- * 批量任务 - 列表页（BT-L-01 ~ BT-L-12）
+ * 批量任务 - 列表页（BT-L-01 ~ BT-L-12；BT-L-09「金额列原样展示」已于 2026-10-20
+ * UI 改版删列后删除，金额展示由详情页 BT-D-08 覆盖）
  *
  * 运行：PW_WORKERS=1 npx playwright test tests/batch-tasks/test_01_batch_task_list.spec.js
  */
@@ -22,20 +23,14 @@ const { test, expect } = require('@playwright/test');
 const bp = require('../../pages/batch-tasks/BatchTaskPage');
 const batchApi = require('../../api/batch-api-utils');
 
-// 列索引（与 BatchTaskPage.COLUMN_HEADERS 对齐）
+// 列索引（与 BatchTaskPage.COLUMN_HEADERS 对齐，2026-10-20 UI 改版为 6 列）
 const COL = {
   batchId: 0,
-  provider: 1,
-  apiKeyId: 2,
-  entityId: 3,
-  status: 4,
-  requestCounts: 5,
-  usage: 6,
-  reserveUnits: 7,
-  settleUnits: 8,
-  settleStatus: 9,
-  createdAt: 10,
-  operation: 11,
+  status: 1,
+  requestCounts: 2,
+  settleStatus: 3,
+  createdAt: 4,
+  operation: 5,
 };
 
 function parseQuery(url) {
@@ -59,6 +54,13 @@ function requireData(list, hint) {
 test.describe('批量任务 - BT-L-01 列表加载与游标分页', () => {
   test('验证列表页加载、列头与游标分页请求', async ({ page }) => {
     let listResponse;
+    const vueWarnings = [];
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (text.includes('[Vue warn]') || text.includes('Invalid prop')) {
+        vueWarnings.push(text);
+      }
+    });
 
     await test.step('进入批量任务列表页', async () => {
       listResponse = await bp.waitForBatchTaskListResponse(page, () =>
@@ -66,11 +68,15 @@ test.describe('批量任务 - BT-L-01 列表加载与游标分页', () => {
       );
     });
 
-    await test.step('验证页面布局与 12 列表头', async () => {
+    await test.step('验证页面布局与 6 列表头', async () => {
       await bp.expectPageLayout(page);
     });
 
-    await test.step('验证首页请求使用游标分页参数（limit=20，无 page/page_size）', async () => {
+    await test.step('进入列表页不应出现 Vue prop 校验告警（如 Tag 误用 type）', async () => {
+      expect(vueWarnings, `Vue 告警: ${vueWarnings.join(' | ')}`).toEqual([]);
+    });
+
+    await test.step('验证首页请求使用游标分页参数（limit=50，无 page/page_size）', async () => {
       const query = parseQuery(listResponse.url());
       expect(query.limit).toBe(String(bp.PAGE_LIMIT));
       expect(query.cursor === undefined || query.cursor === '').toBeTruthy();
@@ -78,8 +84,14 @@ test.describe('批量任务 - BT-L-01 列表加载与游标分页', () => {
       expect(query.page_size, '不应携带 page_size').toBeUndefined();
     });
 
-    await test.step('验证首页「上一页」置灰', async () => {
+    await test.step('验证首页「首页」「上一页」置灰，并展示页码与条数', async () => {
       expect(await bp.isPrevDisabled(page)).toBeTruthy();
+      expect(await bp.isFirstDisabled(page)).toBeTruthy();
+      const info = await bp.pagerInfoTexts(page);
+      expect(info[0]).toContain('第 1 页');
+      expect(info[1]).toMatch(/本页 \d+ 条/);
+      // 分页条与表格左对齐（行内容与操作区均在左侧）
+      await bp.expectPagerAlignedWithTable(page);
     });
 
     await test.step('翻页请求携带 next_cursor，返回后可回退', async () => {
@@ -96,9 +108,32 @@ test.describe('批量任务 - BT-L-01 列表加载与游标分页', () => {
       expect(query2.cursor, '第二页请求应携带 cursor').toBeTruthy();
       expect(query2.limit).toBe(String(bp.PAGE_LIMIT));
       expect(await bp.isPrevDisabled(page)).toBeFalsy();
+      expect(await bp.isFirstDisabled(page)).toBeFalsy();
+      const info2 = await bp.pagerInfoTexts(page);
+      expect(info2[0]).toContain('第 2 页');
 
       await bp.clickPrevPage(page);
       expect(await bp.isPrevDisabled(page)).toBeTruthy();
+      expect(await bp.isFirstDisabled(page)).toBeTruthy();
+    });
+
+    await test.step('改了筛选未查询时，翻页仍沿用已应用的条件（条件快照）', async () => {
+      if (await bp.isNextDisabled(page)) {
+        test.info().annotations.push({
+          type: 'skip_reason',
+          description: '环境数据仅 1 页，跳过条件快照断言',
+        });
+        return;
+      }
+      await bp.providerInput(page).fill('snapshot-should-not-apply');
+      const page2 = await bp.clickNextPage(page);
+      const query2 = parseQuery(page2.url());
+      expect(
+        query2.provider,
+        '未点「查询」时翻页不应携带新输入的服务商条件',
+      ).toBeUndefined();
+      await bp.clickPrevPage(page);
+      await bp.providerInput(page).fill('');
     });
   });
 });
@@ -169,10 +204,13 @@ test.describe('批量任务 - BT-L-03 按服务商筛选', () => {
       });
       expect(parseQuery(response.url()).provider).toBe(provider);
 
-      const providerTexts = await bp.columnTexts(page, COL.provider);
-      providerTexts.forEach((text) => {
-        expect(text).toBe(provider);
-      });
+      // 「服务商」列已于 2026-10-20 改版移除，改为校验接口返回条数与页面渲染行数一致
+      const body = await response.json();
+      const returned = (body.Data && body.Data.list) || [];
+      expect(returned.length, 'provider 筛选应返回结果').toBeGreaterThan(0);
+      await expect
+        .poll(() => bp.rowCount(page))
+        .toBe(Math.min(returned.length, bp.PAGE_LIMIT));
     });
 
     await test.step('清空 provider 后请求不再携带 provider', async () => {
@@ -205,10 +243,13 @@ test.describe('批量任务 - BT-L-04 按 API Key ID 筛选', () => {
       );
       expect(parseQuery(response.url()).api_key_id).toBe(apiKeyId);
 
-      const apiKeyTexts = await bp.columnTexts(page, COL.apiKeyId);
-      apiKeyTexts.forEach((text) => {
-        expect(text).toBe(apiKeyId);
-      });
+      // 「API Key ID」列已于 2026-10-20 改版移除，改为校验接口返回条数与页面渲染行数一致
+      const body = await response.json();
+      const returned = (body.Data && body.Data.list) || [];
+      expect(returned.length, 'api_key_id 筛选应返回结果').toBeGreaterThan(0);
+      await expect
+        .poll(() => bp.rowCount(page))
+        .toBe(Math.min(returned.length, bp.PAGE_LIMIT));
     });
 
     await test.step('输入不存在的 api_key_id 返回空态', async () => {
@@ -302,24 +343,18 @@ test.describe('批量任务 - BT-L-07 重置筛选条件', () => {
 });
 
 test.describe('批量任务 - BT-L-08 表格列展示与状态 / 结算状态 Tag', () => {
-  test('验证 12 列顺序、列头帮助提示与枚举文案', async ({ page }) => {
+  test('验证 6 列顺序、请求计数列头提示与枚举文案', async ({ page }) => {
     await bp.gotoBatchTaskPage(page);
 
-    await test.step('验证 12 列列头与顺序', async () => {
+    await test.step('验证 6 列列头与顺序', async () => {
       const headers = await bp.getHeaderTexts(page);
       expect(headers).toEqual(bp.COLUMN_HEADERS);
+      expect(headers.length).toBe(6);
     });
 
-    await test.step('验证请求计数 / 用量 / 金额列头帮助提示', async () => {
+    await test.step('验证「请求计数」列头提示（hover 出现 iView Tooltip）', async () => {
       const helpMap = await bp.getHeaderHelpMap(page);
       expect(helpMap[bp.DOC.requestCounts]).toBe('总数 / 完成 / 失败');
-      expect(helpMap[bp.DOC.usage]).toBe('输入 / 输出 tokens');
-      expect(helpMap[bp.DOC.reserveUnits]).toBe(
-        '1e-8 定点整数 RMB，不做 ÷1e8 换算',
-      );
-      expect(helpMap[bp.DOC.settleUnits]).toBe(
-        '1e-8 定点整数 RMB，不做 ÷1e8 换算',
-      );
     });
 
     await test.step('验证状态 / 结算状态 Tag 文案为「中文（枚举）」', async () => {
@@ -335,9 +370,6 @@ test.describe('批量任务 - BT-L-08 表格列展示与状态 / 结算状态 Ta
 
       const settleTexts = await bp.columnTexts(page, COL.settleStatus);
       settleTexts.forEach((text) => {
-        if (!text || text === '-') {
-          return;
-        }
         const matched = Object.values(bp.SETTLE_LABELS).some((label) =>
           text.includes(label),
         );
@@ -346,30 +378,34 @@ test.describe('批量任务 - BT-L-08 表格列展示与状态 / 结算状态 Ta
         );
       });
     });
-  });
-});
 
-test.describe('批量任务 - BT-L-09 金额列原样展示 1e-8 定点整数', () => {
-  test('验证预留 / 结算金额不做 ÷1e8 换算', async ({ page }) => {
-    await bp.gotoBatchTaskPage(page);
+    await test.step('状态 / 结算状态 Tag 颜色与枚举映射一致（color 而非 type）', async () => {
+      const statusTexts = await bp.columnTexts(page, COL.status);
+      const statusClasses = await bp.columnTagClasses(page, COL.status);
+      statusTexts.forEach((text, i) => {
+        const matched = text.match(/（([a-z_]+)）/);
+        expect(matched, `状态文案应携带枚举: ${text}`).toBeTruthy();
+        const expected = bp.STATUS_TAG_COLORS[matched[1]];
+        expect(expected, `状态枚举应有颜色映射: ${matched[1]}`).toBeTruthy();
+        expect(
+          statusClasses[i],
+          `状态 ${matched[1]} 的 Tag class 应含 ivu-tag-${expected}，实际: ${statusClasses[i]}`,
+        ).toContain(`ivu-tag-${expected}`);
+      });
 
-    const { list } = await batchApi.fetchBatchTasksViaApi(page, {
-      limit: bp.PAGE_LIMIT,
+      const settleTexts = await bp.columnTexts(page, COL.settleStatus);
+      const settleClasses = await bp.columnTagClasses(page, COL.settleStatus);
+      settleTexts.forEach((text, i) => {
+        const matched = text.match(/（([a-z_]+)）/);
+        expect(matched, `结算状态文案应携带枚举: ${text}`).toBeTruthy();
+        const expected = bp.SETTLE_TAG_COLORS[matched[1]];
+        expect(expected, `结算状态枚举应有颜色映射: ${matched[1]}`).toBeTruthy();
+        expect(
+          settleClasses[i],
+          `结算状态 ${matched[1]} 的 Tag class 应含 ivu-tag-${expected}，实际: ${settleClasses[i]}`,
+        ).toContain(`ivu-tag-${expected}`);
+      });
     });
-    requireData(list, '金额列');
-
-    const item = list.find(
-      (it) => it.reserve_units !== null && it.reserve_units !== undefined,
-    );
-    if (!item) {
-      test.skip(true, '当前页无含 reserve_units 的任务，跳过金额列校验');
-    }
-
-    const cells = await bp.batchTaskTable(page).cellsByBatchId(item.batch_id);
-    expect(cells.length).toBeGreaterThan(COL.reserveUnits);
-
-    expect(cells[COL.reserveUnits]).toBe(uiText(item.reserve_units));
-    expect(cells[COL.settleUnits]).toBe(uiText(item.settle_units));
   });
 });
 
@@ -402,6 +438,15 @@ test.describe('批量任务 - BT-L-10 游标翻页与按钮置灰', () => {
       }
       expect(await bp.isNextDisabled(page)).toBeTruthy();
       expect(await bp.isPrevDisabled(page)).toBeFalsy();
+      expect(await bp.isFirstDisabled(page)).toBeFalsy();
+    });
+
+    await test.step('点「首页」回到第 1 页且「首页」「上一页」重新置灰', async () => {
+      await bp.clickFirstPage(page);
+      expect(await bp.isFirstDisabled(page)).toBeTruthy();
+      expect(await bp.isPrevDisabled(page)).toBeTruthy();
+      const info = await bp.pagerInfoTexts(page);
+      expect(info[0]).toContain('第 1 页');
     });
   });
 });
@@ -418,11 +463,12 @@ test.describe('批量任务 - BT-L-11 空列表展示', () => {
     await bp.expectEmptyList(page);
     expect(await bp.isNextDisabled(page)).toBeTruthy();
     expect(await bp.isPrevDisabled(page)).toBeTruthy();
+    expect(await bp.isFirstDisabled(page)).toBeTruthy();
   });
 });
 
 test.describe('批量任务 - BT-L-12 列表接口数据与页面展示一致性', () => {
-  test('验证列表 12 列展示值与接口返回逐一一致', async ({ page }) => {
+  test('验证列表 6 列展示值与接口返回逐一一致', async ({ page }) => {
     await bp.gotoBatchTaskPage(page);
 
     const { list, body } = await batchApi.fetchBatchTasksViaApi(page, {
@@ -442,24 +488,18 @@ test.describe('批量任务 - BT-L-12 列表接口数据与页面展示一致性
     });
 
     const cells = await bp.batchTaskTable(page).cellsByBatchId(item.batch_id);
-    expect(cells.length).toBeGreaterThanOrEqual(bp.COLUMN_HEADERS.length);
+    expect(cells.length).toBe(6);
 
     await test.step('逐列比对展示值与接口字段', async () => {
       const rc = item.request_counts || {};
       expect(cells[COL.batchId]).toBe(String(item.batch_id));
-      expect(cells[COL.provider]).toBe(uiText(item.provider));
-      expect(cells[COL.apiKeyId]).toBe(uiText(item.api_key_id));
-      expect(cells[COL.entityId]).toBe(uiText(item.entity_id));
       expect(cells[COL.status]).toContain(bp.statusLabel(item.status));
       expect(cells[COL.requestCounts]).toBe(
         `${rc.total || 0} / ${rc.completed || 0} / ${rc.failed || 0}`,
       );
-      expect(cells[COL.usage]).toBe(
-        `${item.usage_input_tokens || 0} / ${item.usage_output_tokens || 0}`,
+      expect(cells[COL.settleStatus]).toContain(
+        bp.settleLabel(item.settle_status),
       );
-      expect(cells[COL.reserveUnits]).toBe(uiText(item.reserve_units));
-      expect(cells[COL.settleUnits]).toBe(uiText(item.settle_units));
-      expect(cells[COL.settleStatus]).toContain(bp.settleLabel(item.settle_status));
       // created_at 为 RFC3339 字符串，UI 原样展示不做转换
       expect(cells[COL.createdAt]).toBe(uiText(item.created_at));
       // 操作列含「详情」按钮，终态行「取消」按钮置灰

@@ -64,8 +64,9 @@ const DOC_BUSINESS_CLUSTER = {
   healthHostFormatMsg: '格式错误',
   hashHeaderRequiredMsg: '哈希头部不能为空',
   timeoutRequiredMsg: '输入不能为空',
-  // 2026-08-27 集群描述长度校验（i18n cluster.descriptionLengthError）
-  descriptionLengthErrorMsg: '集群描述不能超过256个字符',
+  // 2026-08-27 集群描述长度校验（i18n cluster.descriptionLengthError，2026-10-22 改为 UTF-8 字节口径）
+  descriptionLengthErrorMsg: '集群描述不能超过256字节（按 UTF-8 字节计）',
+  descriptionControlCharsErrorMsg: '集群描述不能包含控制字符',
   // 2026-08-27 大模型配置新文案（对齐 i18n gatewayConfig.*）
   matchPrefixRequiredMsg: '开启裁剪前缀时，匹配前缀必填',
   matchPrefixMustEndWithSlashMsg: '匹配前缀必须以 / 结尾',

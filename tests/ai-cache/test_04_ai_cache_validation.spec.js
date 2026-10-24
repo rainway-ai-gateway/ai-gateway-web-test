@@ -473,7 +473,7 @@ test.describe('AI 缓存规则 - 字段校验矩阵', () => {
     });
   });
 
-  test('AC-V-11 表单不含创建/更新时间输入项、提交体不携带、GET 回填只读时间', async ({
+  test('AC-V-11 表单不含创建/更新时间输入项、提交体不携带、响应不返回逐规则时间', async ({
     page,
   }) => {
     const name = utils.generateTestRuleName('ac_v11_');
@@ -513,12 +513,12 @@ test.describe('AI 缓存规则 - 字段校验矩阵', () => {
       utils.expectRulesPayloadNoTimestamps(payload);
     });
 
-    await test.step('GET 回填只读 created_at/updated_at', async () => {
+    await test.step('GET 回填不含逐规则 created_at/updated_at（契约已移除）', async () => {
       const rules = await utils.getAiCacheRulesViaApi(page);
       const created = rules.find((r) => r.name === name);
       expect(created).toBeTruthy();
-      expect(created.created_at).toBeTruthy();
-      expect(created.updated_at).toBeTruthy();
+      expect(created.created_at).toBeUndefined();
+      expect(created.updated_at).toBeUndefined();
     });
   });
 
@@ -612,7 +612,8 @@ test.describe('AI 缓存规则 - 字段校验矩阵', () => {
     await test.step('规则二：语义缓存开启，列表显示「开启」', async () => {
       await utils.openAddRuleDrawer(page);
       await utils.fillRuleName(page, nameOn);
-      await utils.fillRuleCond(page, VALID_COND);
+      // 同集合内 cond 必须唯一，避免与规则一重复
+      await utils.fillRuleCond(page, `req_header_value_in("x-test-rule", "${nameOn}", false)`);
       await utils.toggleRuleFormSwitch(page);
       await utils.expectRuleFormSwitch(page, true);
       await utils.submitRuleFormExpectMessage(page, F.addSuccessMsg);
@@ -623,7 +624,7 @@ test.describe('AI 缓存规则 - 字段校验矩阵', () => {
     await test.step('规则三：策略 disabled + 语义缓存开启，仍可保存（无组合校验）', async () => {
       await utils.openAddRuleDrawer(page);
       await utils.fillRuleName(page, nameDisabled);
-      await utils.fillRuleCond(page, VALID_COND);
+      await utils.fillRuleCond(page, `req_header_value_in("x-test-rule", "${nameDisabled}", false)`);
       await utils.selectRuleFormStrategy(page, R.strategyDisabled);
       await utils.toggleRuleFormSwitch(page);
       await utils.expectRuleFormSwitch(page, true);

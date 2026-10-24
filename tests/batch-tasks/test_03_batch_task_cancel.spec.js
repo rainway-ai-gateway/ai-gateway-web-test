@@ -25,11 +25,20 @@ const batchApi = require('../../api/batch-api-utils');
 // 取消接口：POST /open-api/v1/batches/{batch_id}/cancel
 const CANCEL_GLOB = '**/open-api/v1/batches/*/cancel';
 
-// 与 UI 一致：非终态可取消
-const ACTIVE_STATUSES = ['validating', 'queued', 'in_progress', 'finalizing'];
+// 取「可取消」样本的两条约束（原白名单 ['validating','queued','in_progress','finalizing']
+// 正是在表达它们，只是写法容易让人误以为是漏项）：
+//   ① 必须是**非终态**——`cancelling` 属受理中中间态、仍是非终态
+//      （见 `ai-gateway-api/model/ibatch/types.go` 的 `TerminalStatuses` 注释）；
+//   ② 但**不能已是 `cancelling`**——对它再取消后端按冲突返回 **409**，BT-C-02 要的 200 拿不到；
+//      而 BT-C-04/05/06 断言「取消失败后不出现本地假取消态（取消中）」，样本本身就是「取消中」时断言恒不成立。
+//   ③ 必须**限定首页**：UI 固定 limit=20 只渲染首页，跨页取到的样本在页面上不存在，
+//      `expectRowVisible` 会直接失败。曾把「首页无合格样本」归因于取数范围不足而试过**跨页取数**，
+//      实测 6 条全红、已回退 —— 真因是**环境数据漂移**：首页样本被历次取消类用例消耗成 `cancelling`。
+//      漂移时的表现是三条用例以「环境中无『非终态』批量任务」跳过（2026-10-17 全量回归 4 条跳过中的 3 条），
+//      属**环境数据依赖、不是用例缺陷**：跑前执行 `npm run seed:batch:execute` 恢复设计状态即可。
 
-// 列表列索引（与 BatchTaskPage.COLUMN_HEADERS 对齐）
-const COL = { status: 4, settleStatus: 9 };
+// 列表列索引（与 BatchTaskPage.COLUMN_HEADERS 对齐，2026-10-20 UI 改版为 6 列）
+const COL = { status: 1, settleStatus: 3 };
 
 function pickListTask(page, predicate) {
   return batchApi
@@ -38,9 +47,14 @@ function pickListTask(page, predicate) {
 }
 
 function pickActiveTask(page) {
+  // 必须限定在**首页**（UI 固定 limit=20，只显示首页）——跨页取到的样本在页面上不存在，
+  // expectRowVisible 会直接失败。造数脚本的设计里首页本就有 3 个合格样本
+  // （id 末两位 02/03/04 = in_progress / validating / finalizing，见 scripts/seed-batch-task-data.cjs 的 PLAN）；
+  // 若它们被历次取消类用例消耗成 cancelling，需先 `npm run seed:batch:execute` 恢复设计状态。
   return pickListTask(
     page,
-    (it) => ACTIVE_STATUSES.indexOf(it.status) !== -1,
+    (it) =>
+      !batchApi.isTerminalStatus(it.status) && it.status !== 'cancelling',
   );
 }
 
@@ -88,7 +102,10 @@ test.describe('批量任务 - BT-C-01 取消二次确认', () => {
 
     const task = await pickActiveTask(page);
     if (!task) {
-      test.skip(true, '环境中无「非终态」批量任务，跳过');
+      test.skip(
+        true,
+        '环境中无「非终态且非 cancelling」的样本任务（须首页可见），跳过 —— 跑前请执行 npm run seed:batch:execute 恢复造数样本',
+      );
     }
 
     await bp.batchTaskTable(page).expectRowVisible(task.batch_id);
@@ -124,7 +141,10 @@ test.describe('批量任务 - BT-C-02 取消成功状态流转', () => {
 
     const task = await pickActiveTask(page);
     if (!task) {
-      test.skip(true, '环境中无「非终态」批量任务，跳过');
+      test.skip(
+        true,
+        '环境中无「非终态且非 cancelling」的样本任务（须首页可见），跳过 —— 跑前请执行 npm run seed:batch:execute 恢复造数样本',
+      );
     }
 
     test.info().annotations.push({
@@ -233,7 +253,10 @@ test.describe('批量任务 - BT-C-04 取消 409 提示', () => {
 
     const task = await pickActiveTask(page);
     if (!task) {
-      test.skip(true, '环境中无「非终态」批量任务，跳过');
+      test.skip(
+        true,
+        '环境中无「非终态且非 cancelling」的样本任务（须首页可见），跳过 —— 跑前请执行 npm run seed:batch:execute 恢复造数样本',
+      );
     }
 
     await bp.batchTaskTable(page).expectRowVisible(task.batch_id);
@@ -264,7 +287,10 @@ test.describe('批量任务 - BT-C-05 取消 502 提示', () => {
 
     const task = await pickActiveTask(page);
     if (!task) {
-      test.skip(true, '环境中无「非终态」批量任务，跳过');
+      test.skip(
+        true,
+        '环境中无「非终态且非 cancelling」的样本任务（须首页可见），跳过 —— 跑前请执行 npm run seed:batch:execute 恢复造数样本',
+      );
     }
 
     await bp.batchTaskTable(page).expectRowVisible(task.batch_id);
@@ -295,7 +321,10 @@ test.describe('批量任务 - BT-C-06 取消 404 提示', () => {
 
     const task = await pickActiveTask(page);
     if (!task) {
-      test.skip(true, '环境中无「非终态」批量任务，跳过');
+      test.skip(
+        true,
+        '环境中无「非终态且非 cancelling」的样本任务（须首页可见），跳过 —— 跑前请执行 npm run seed:batch:execute 恢复造数样本',
+      );
     }
 
     await bp.batchTaskTable(page).expectRowVisible(task.batch_id);

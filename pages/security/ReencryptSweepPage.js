@@ -19,9 +19,13 @@ const path = require('path');
 const { expect } = require('@playwright/test');
 const rc = require('../resource/ResourcePageCommon');
 const sessionUtils = require('../../utils/session');
+const readonly = require('../../utils/readonly');
 const { IvuDrawerComponent, IvuSelectComponent } = require('../../components/iview');
 
 const AUTH_PATH = path.join(__dirname, '../../auth.json');
+
+/** 「系统安全 → 密钥收敛」前端路由路径（src/router/router.js:200 `path: 'security'`） */
+const SECURITY_PATH = 'security';
 
 // 触发：POST /security/reencrypt-sweeps；轮询/查询：GET /security/reencrypt-sweeps/{id}
 const TRIGGER_URL_RE = /\/open-api\/v1\/security\/reencrypt-sweeps$/;
@@ -1186,6 +1190,107 @@ async function mockReencryptSweepListServer(page, { list = [] } = {}) {
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * 只读管理员视角（docs/reencrypt-sweep/02-功能测试用例/04-只读视角.md RS-RO-01~03）
+ *
+ * 产品依据：`design-docs/modifications/2026-10-12-readonly-admin/ui-code-changes.md`
+ * §3.4（`pages/security.html` 只读视角保留列表 / 详情，隐藏「触发任务」）与 §4
+ * （写按钮挂全局指令 `v-has`，只读视角加 `.v-has-hidden`）。
+ * 本页仅 `src/modules/Security/index.vue:61-67` 的「触发任务」Button 挂 `v-has`；
+ * 列表 / 筛选 / 分页 / 排序 / 操作列「详情」/ 详情抽屉均无 `v-has`，只读视角原样保留。
+ *
+ * **定位陷阱（2026-10-16 首轮实测）**：`v-has` 用 `display: none` 隐藏写元素，而 Playwright
+ * 的 `getByRole` 基于无障碍树、看不见 `display:none` 元素 —— 隐藏后的「触发任务」用
+ * `getByRole('button', { name })` 会得到 count 0（RS-RO-01 因此误报）。故本区块：
+ * - 只读态针对 `v-has` 元素用 **CSS + 文本** 定位（`readonly.buttonByText` / `INTERACTIVE_SELECTOR`）；
+ * - 「无写入口」计数断言也用 CSS，避免被隐藏元素「看不见」而假通过；
+ * - 只有**管理员对照组**（元素可见）才用 `getByRole` 的 `triggerButton(page)`。
+ * ------------------------------------------------------------------ */
+
+/** 页面根节点（只读视角同样渲染，用作直连就绪锚点） */
+function pageRoot(page) {
+  return page.locator('.security-page');
+}
+
+/**
+ * 只读断言用的交互元素选择器（CSS，能命中被 `v-has` 隐藏的元素）。
+ * `[role="button"]` 一并保留以兼容非 `<button>` 写法（iView 组件本身不使用该属性）。
+ */
+const INTERACTIVE_SELECTOR = 'button, .ivu-btn, [role="button"]';
+
+/**
+ * 触发区「触发任务」按钮（页面级，CSS + 文本定位）。
+ * 只读态该按钮仍在 DOM 中并带 `.v-has-hidden`，是 RS-RO-01「v-has 隐藏」断言的锚点。
+ */
+function triggerSubmitButton(page) {
+  return readonly.buttonByText(pageRoot(page), DOC.trigger);
+}
+
+/**
+ * 触发卡片内全部交互元素。
+ * 只读态应为 **1**（仅剩被 `v-has` 隐藏的「触发任务」）——触发区的「变换方向 / 扫描范围 /
+ * 预演模式」是 iView Select / Switch（div / span），不属交互按钮，故不存在其它写入口。
+ */
+function triggerCardActionButtons(page) {
+  return triggerCard(page).locator(INTERACTIVE_SELECTOR);
+}
+
+/** 运行中横幅内的全部交互元素（只读视角应为 0：横幅仅只读信息，无触发 / 取消写入口） */
+function runningCardActionButtons(page) {
+  return runningCard(page).locator(INTERACTIVE_SELECTOR);
+}
+
+/**
+ * 运行中横幅的「轮询中…」标记。
+ * **root 必须传卡片**（`pollingIndicator` 自带 `.sweep-view` 前缀；若传 `runningSweepView(page)`
+ * 会拼成 `.sweep-view >> .sweep-view .sv-polling`，永不命中 —— 2026-10-16 首轮 RS-RO-02 即因此
+ * 误报为「环境无运行中样本」）。
+ */
+function runningBannerPollingIndicator(page) {
+  return pollingIndicator(runningCard(page));
+}
+
+/** 历史表格某任务行操作列的全部交互元素（只读视角仅剩「详情」1 个） */
+function historyRowActionButtons(page, taskId) {
+  return historyRowByTaskId(page, taskId).locator(INTERACTIVE_SELECTOR);
+}
+
+/** 详情抽屉内全部交互元素（只读视角应为 0：详情本身无写操作） */
+function detailDrawerActionButtons(page) {
+  return detailDrawer(page).locator(INTERACTIVE_SELECTOR);
+}
+
+/** 详情抽屉内可编辑控件（只读视角应为 0：纯文案只读展示） */
+function detailDrawerEditableControls(page) {
+  return detailDrawer(page).locator('input, textarea');
+}
+
+/**
+ * 只读视角直连 URL 进入密钥收敛页。
+ * **不可复用 `gotoReencryptSweepPage`**：它内部调用 `rc.ensureAppSession` /
+ * `sessionUtils.ensureSessionHealthy`，会话异常时会用 conf.json 的 admin 凭证重登并回写
+ * auth.json，把只读态悄悄换成管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoReencryptSweepPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, SECURITY_PATH, { ready: pageRoot(page) });
+  await expectReencryptSweepPageReadyReadonly(page);
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 只读视角就绪判定。**不可复用 `expectReencryptSweepPageReady`**：它断言「触发任务」
+ * 按钮可见，而该按钮正是只读视角被 `v-has` 隐藏的元素。此处锚点取只读视角同样存在的
+ * 页面根 / 三张卡片 / 历史筛选栏（均为只读也渲染的只读锚点）。
+ */
+async function expectReencryptSweepPageReadyReadonly(page) {
+  await expect(pageRoot(page)).toBeVisible({ timeout: 15000 });
+  await expect(triggerCard(page)).toBeVisible({ timeout: 15000 });
+  await expect(runningCard(page)).toBeVisible({ timeout: 15000 });
+  await expect(historyCard(page)).toBeVisible({ timeout: 15000 });
+  await expect(filterBar(page)).toBeVisible({ timeout: 15000 });
+  await page.waitForTimeout(300);
+}
+
 module.exports = {
   DOC,
   MODE_LABELS,
@@ -1310,4 +1415,17 @@ module.exports = {
   forceListPage,
   mockReencryptSweepListServer,
   escapeRegExp,
+  // 只读管理员视角（docs/reencrypt-sweep/02-功能测试用例/04-只读视角.md）
+  SECURITY_PATH,
+  INTERACTIVE_SELECTOR,
+  pageRoot,
+  triggerSubmitButton,
+  triggerCardActionButtons,
+  runningCardActionButtons,
+  runningBannerPollingIndicator,
+  historyRowActionButtons,
+  detailDrawerActionButtons,
+  detailDrawerEditableControls,
+  gotoReencryptSweepPageReadonly,
+  expectReencryptSweepPageReadyReadonly,
 };

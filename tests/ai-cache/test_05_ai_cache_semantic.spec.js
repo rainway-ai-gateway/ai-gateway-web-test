@@ -413,6 +413,15 @@ test.describe('AI 缓存规则 - 语义设置', () => {
     await test.step('前置：保存原始状态并进入语义编辑态', async () => {
       await utils.ensureAppSession(page);
       await cleanup.saveOriginalState(page);
+      // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，AICache/index.vue:49）：
+      // 集合本就为空时 deleteAllRules 不产生本地净变更，提交按钮置灰、本用例第 3 步无从验证；
+      // 先经 API 确保至少一条规则，使「清空全部规则」成为确定的净变更（cleanup 结束还原）。
+      await utils.ensureAiCacheRuleExistsViaApi(
+        page,
+        utils.buildTestRule({
+          name: utils.generateTestRuleName('ac_s09_seed_'),
+        }),
+      );
       await utils.reloadAiCachePage(page);
       await utils.switchToSemanticTab(page);
       await utils.enterSemanticEditMode(page);

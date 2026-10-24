@@ -511,6 +511,23 @@ test.describe('AI 缓存规则 - 新增与编辑', () => {
       await utils.enterEditMode(page);
     });
 
+    await test.step('前置：本地新增一条规则制造改动，解除「提交并生效」置灰', async () => {
+      // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，AICache/index.vue:49），
+      // 无本地改动时点击无效，本用例的 payload 断言根本进不去。
+      // 改动刻意用「本地新增」而非「编辑造数规则」：造数规则必须原样留在本地集合里，
+      // 它的 created_at/updated_at 来自 GET 回填，只有它带时间戳进入 buildPayload
+      // 的 delete（AICache/index.vue:690-696），断言才具备可证伪性。
+      await utils.openAddRuleDrawer(page);
+      await utils.fillRuleName(
+        page,
+        utils.generateTestRuleName('ac_c13_local_'),
+      );
+      await utils.fillRuleCond(page, 'default_t()');
+      await utils.submitRuleFormExpectMessage(page, F.addSuccessMsg);
+      await utils.expectRuleFormDrawerHidden(page);
+      await utils.expectSubmitAndEffectDisabled(page, false);
+    });
+
     await test.step('提交并生效，捕获 PUT 请求体', async () => {
       const [{ payload }] = await Promise.all([
         utils.submitRulesAndCapture(page),
@@ -634,7 +651,8 @@ test.describe('AI 缓存规则 - 新增与编辑', () => {
       await utils.openAddRuleDrawer(page);
       await utils.expectRuleFormSwitch(page, false);
       await utils.fillRuleName(page, offName);
-      await utils.fillRuleCond(page, 'default_t()');
+      // 同集合内 cond 必须唯一，第二条规则使用不同条件
+      await utils.fillRuleCond(page, `req_header_value_in("x-test-rule", "${offName}", false)`);
       await utils.submitRuleFormExpectMessage(page, F.addSuccessMsg);
       await utils.expectRuleFormDrawerHidden(page);
       await utils.expectRuleSemanticTag(page, offName, R.semanticOff, 'default');

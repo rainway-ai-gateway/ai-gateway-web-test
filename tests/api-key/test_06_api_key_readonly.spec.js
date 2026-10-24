@@ -27,6 +27,11 @@
  *   只读账号 viewer（不写 auth.json，避免覆盖默认 admin 会话）。
  * - 有限配额 API-Key 供 RO-02/03/04 使用：beforeAll 用 admin context 造数，afterAll 清理
  *   （镜像 tests/epp-pool 的 beforeAll/afterAll 范式，避免污染 worker storageState）。
+ * - 行定位统一走「按描述筛选 + 断言行可见」的自愈 helper
+ *   （expectApiKeyVisibleByDescription / expectApiKeyRowWriteActions*）：
+ *   pageTable 在列表数据刷新时会清空所有列筛选，筛选若先于列表首屏返回生效就会被
+ *   静默清空、表格退回未筛选第 1 页；目标行落在第 2 页时表现为偶发 15s not found
+ *   （2026-10-17 EM-K-RO-02 只读步骤偶发失败的根因）。
  *
  * 运行：nvm use 18 && npx playwright test tests/api-key/test_06_api_key_readonly.spec.js
  */
@@ -175,9 +180,10 @@ test.describe('API-Key管理 - EM-K-RO-02 只读视角列表操作列写按钮�
     });
 
     await test.step('只读视角进入页面并定位目标行', async () => {
+      // 先按描述筛选再断言可见（自愈版）：列表刷新会清空列筛选，直接断言
+      // 「当前页可见」在目标行落到第 2 页时会偶发超时
       await utils.gotoApiKeyManagementPageReadonly(page);
-      await utils.searchApiKeyByDescription(page, readonlyKey.description);
-      await utils.expectApiKeyVisible(page, readonlyKey.description);
+      await utils.expectApiKeyVisibleByDescription(page, readonlyKey.description);
     });
 
     await test.step('行内「编辑」「删除」写按钮被 v-has 隐藏', async () => {

@@ -26,6 +26,7 @@ const {
   IvuSelectComponent,
   IvuTabsComponent,
 } = require('../../components/iview');
+const { IVU_DRAWER_VISIBLE } = require('../../components/iview/constants');
 
 const AUTH_PATH = path.join(__dirname, '../../auth.json');
 const LOGS_URL_RE = /\/open-api\/v1\/report\/logs/;
@@ -73,7 +74,7 @@ const DOC = {
     '操作',
   ],
   filterLabels: {
-    model: '模型',
+    model: '目标模型',
     apikey: 'API Key',
     provider: '服务商',
     host: 'Host',
@@ -770,8 +771,8 @@ async function reloadReportPage(page) {
 
 /**
  * 明细过滤 - 请求模型 (Logs.vue 使用 <i-Input> 输入框，label = "请求模型")
- * 注意：不能使用 DOC.filterLabels.model ('模型') 做 hasText，因为 index.vue 也有
- * label="模型" 的 .report-filter-item，会定位到错误的 Select 元素。
+ * 注意：不能用 DOC.filterLabels.model ('目标模型') 做 hasText 去定位顶部过滤栏的模型多选框，
+ * 以免与明细工具栏的「请求模型」输入框混淆。
  */
 function requestedModelInput(page) {
   return page.locator('.report-filter-item')
@@ -830,11 +831,96 @@ async function triggerLogsSearch(page) {
 
 // ====== 详情 Drawer ======
 
+/**
+ * 详情 Drawer 字段项标签（按模板顺序，与 Logs.vue 详情 38 个 detail-item 一致）
+ * 来源：docs/report/02-功能测试用例/04-明细新列与过滤.md RP-L-21
+ */
+const DETAIL_FIELD_LABELS = [
+  '日志ID',
+  '时间',
+  '主机ID',
+  '产品线',
+  'API Key',
+  '请求模型',
+  '目标模型',
+  '服务商',
+  '协议',
+  '模式',
+  '流式',
+  '状态码',
+  '错误码',
+  '错误',
+  '输入Tokens',
+  '输出Tokens',
+  '总Tokens',
+  '耗时',
+  'TTFT',
+  'TPOT',
+  '费用',
+  '一级归类',
+  '二级归类',
+  '三级归类',
+  '四级归类',
+  '五级归类',
+  '客户端IP',
+  'Header Host',
+  '原始URI',
+  '缓存状态',
+  '镜像命中',
+  '意图问题',
+  '意图答案',
+  '意图置信度',
+  '意图来源',
+  '意图延迟',
+  '意图缓存命中',
+  '意图问题版本',
+];
+
+/**
+ * 详情 Drawer JSON 区块字段名（与 Logs.vue jsonFields 顺序一致，仅非 null 时渲染）
+ */
+const DETAIL_JSON_FIELDS = [
+  'ai_rate_limit_hits',
+  'ai_auth_reject_quota_plans',
+  'req_headers',
+  'res_headers',
+];
+
+/**
+ * 明细主表数据行（iView 的 fixed-right「操作」列会渲染克隆表，须限定主表）
+ */
+function reportLogsMainRows(page) {
+  return page.locator(
+    '.report-page .page-table .ivu-table-body tbody tr:not(:has-text("暂无筛选结果")):not(:has-text("暂无数据"))',
+  );
+}
+
+/**
+ * 明细行「详情」按钮：iView 把 fixed-right「操作」列渲染为克隆表（主表 td 内有「详情」
+ * 文本但按钮不可见），可见按钮只存在于克隆表，故按可见按钮序号定位，序号即行序
+ */
+function logRowDetailButton(page, index = 0) {
+  return page
+    .locator('.report-page .page-table')
+    .getByRole('button', { name: DOC.detailButton })
+    .nth(index);
+}
+
 async function openDetailByRowText(page, rowText) {
-  await reportLogsTable(page)
-    .rowAction(rowText, DOC.detailButton)
-    .click();
+  const row = page
+    .locator('.report-page .page-table .ivu-table-fixed-right tbody tr')
+    .filter({ hasText: rowText })
+    .first();
+  await row.getByRole('button', { name: DOC.detailButton }).click();
   await page.waitForTimeout(500);
+}
+
+/**
+ * 按行序号打开详情抽屉（表格不显示 logid，mock 行常共享模型名，故按序号定位）
+ */
+async function openDetailByRowIndex(page, index = 0) {
+  await logRowDetailButton(page, index).click();
+  await expectDetailDrawerOpen(page);
 }
 
 async function expectDetailDrawerOpen(page) {
@@ -845,15 +931,57 @@ function detailDrawer(page) {
   return ivuDrawer(page).withTitle(DOC.drawerTitle);
 }
 
+/**
+ * 按 dt 标签精确定位字段项：避免「错误」命中「错误码」、「意图问题」命中「意图问题版本」等子串歧义
+ */
+function detailFieldItem(page, label) {
+  return detailDrawer(page)
+    .locator('.detail-item')
+    .filter({ has: page.locator(`dt:text-is("${label}")`) })
+    .first();
+}
+
+async function getDetailFieldValue(page, label) {
+  const text = await detailFieldItem(page, label).locator('dd').innerText();
+  return text.trim();
+}
+
+async function getDetailFieldLabels(page) {
+  const texts = await detailDrawer(page).locator('.detail-item dt').allInnerTexts();
+  return texts.map((text) => text.trim());
+}
+
+async function expectDetailFieldValue(page, label, value) {
+  await expect(
+    detailFieldItem(page, label).locator('dd'),
+    `详情字段「${label}」展示值`,
+  ).toHaveText(String(value));
+}
+
+async function expectDetailFieldsPresent(page, labels = DETAIL_FIELD_LABELS) {
+  for (const label of labels) {
+    await expect(
+      detailFieldItem(page, label),
+      `详情抽屉应包含字段项「${label}」`,
+    ).toHaveCount(1);
+  }
+}
+
+async function expectDetailFieldsAbsent(page, labels) {
+  for (const label of labels) {
+    await expect(
+      detailFieldItem(page, label),
+      `详情抽屉不应包含字段项「${label}」`,
+    ).toHaveCount(0);
+  }
+}
+
 async function expectDetailFieldContains(page, label, text) {
-  const drawer = detailDrawer(page);
-  const row = drawer.locator('.detail-item').filter({ hasText: label }).first();
-  await expect(row).toContainText(String(text));
+  await expect(detailFieldItem(page, label)).toContainText(String(text));
 }
 
 async function expectDetailFieldNotVisible(page, label) {
-  const drawer = detailDrawer(page);
-  await expect(drawer.locator('.detail-item').filter({ hasText: label })).toHaveCount(0);
+  await expect(detailFieldItem(page, label)).toHaveCount(0);
 }
 
 async function closeDetailDrawer(page) {
@@ -862,8 +990,13 @@ async function closeDetailDrawer(page) {
 }
 
 async function closeDetailDrawerByMask(page) {
-  // 该 Drawer 配置了 maskClosable=false，遮罩点击不应关闭 Drawer
-  await page.locator('.ivu-drawer-mask').first().click();
+  // 该 Drawer 配置了 maskClosable=false，点击遮罩区不应关闭 Drawer。
+  // iView 的命中测试落在 .ivu-drawer-wrap 本体（遮罩不参与命中），点选左侧空白区
+  // 等价于用户点击遮罩：wrapClosable 时该点击才会关闭抽屉，故断言非空转。
+  await page
+    .locator(IVU_DRAWER_VISIBLE)
+    .first()
+    .click({ position: { x: 100, y: 300 } });
   await page.waitForTimeout(300);
   await expect(detailDrawer(page)).toBeVisible({ timeout: 5000 });
   // 通过 X 按钮关闭以清理
@@ -871,21 +1004,63 @@ async function closeDetailDrawerByMask(page) {
   await expect(detailDrawer(page)).toBeHidden({ timeout: 10000 });
 }
 
+function detailJsonSection(page, field) {
+  return detailDrawer(page)
+    .locator('.detail-json-item')
+    .filter({ has: page.locator(`.detail-json-label:text-is("${field}")`) })
+    .first();
+}
+
+async function getDetailJsonLabels(page) {
+  const texts = await detailDrawer(page)
+    .locator('.detail-json-item .detail-json-label')
+    .allInnerTexts();
+  return texts.map((text) => text.trim());
+}
+
+function detailJsonHeader(page, field) {
+  return detailJsonSection(page, field).locator('.detail-json-header');
+}
+
+function detailJsonContent(page, field) {
+  return detailJsonSection(page, field).locator('.detail-json-content pre');
+}
+
+async function toggleJsonField(page, field) {
+  await detailJsonHeader(page, field).click();
+  await page.waitForTimeout(200);
+}
+
+async function expectJsonFieldExpanded(page, field) {
+  await expect(detailJsonContent(page, field).first()).toBeVisible();
+}
+
+async function expectJsonFieldCollapsed(page, field) {
+  await expect(detailJsonContent(page, field).first()).toBeHidden();
+}
+
+async function getDetailDrawerText(page) {
+  return (await detailDrawer(page).innerText()).trim();
+}
+
 async function expectJsonFieldCollapsible(page, fieldLabel) {
-  const drawer = detailDrawer(page);
-  const jsonSection = drawer.locator('.detail-json-item').filter({ hasText: fieldLabel }).first();
-  await expect(jsonSection).toBeVisible();
-  // 默认折叠
-  const toggleBtn = jsonSection.locator('.ivu-icon-ios-arrow-forward');
-  if ((await toggleBtn.count()) > 0) {
-    await toggleBtn.first().click();
-    await page.waitForTimeout(200);
-    // 展开后应有内容
-    await expect(jsonSection.locator('.detail-json-content pre').first()).toBeVisible();
-    // 再次点击折叠
-    await toggleBtn.first().click();
-    await page.waitForTimeout(200);
-  }
+  const section = detailJsonSection(page, fieldLabel);
+  const header = detailJsonHeader(page, fieldLabel);
+  // 默认折叠（v-show 隐藏，仅显示箭头 + 字段名）
+  await expect(detailJsonContent(page, fieldLabel).first()).toBeHidden();
+  await expect(
+    section.locator('.ivu-icon-ios-arrow-forward').first(),
+  ).toBeVisible();
+  // 点击标题展开：箭头转为 down，内容区 pre 可见
+  await toggleJsonField(page, fieldLabel);
+  await expect(
+    section.locator('.ivu-icon-ios-arrow-down').first(),
+  ).toBeVisible();
+  await expect(detailJsonContent(page, fieldLabel).first()).toBeVisible();
+  // 再次点击折叠
+  await header.click();
+  await page.waitForTimeout(200);
+  await expect(detailJsonContent(page, fieldLabel).first()).toBeHidden();
 }
 
 // ====== 维度过滤（共有过滤栏） ======
@@ -1407,6 +1582,17 @@ async function getLogsRowCellTexts(page, rowIndex) {
 }
 
 /**
+ * 明细主表某行的单元格文本（限定主表，排除 iView fixed-right 克隆行）
+ */
+async function getLogsMainRowCellTexts(page, rowIndex) {
+  const texts = await reportLogsMainRows(page)
+    .nth(rowIndex)
+    .locator('td')
+    .allTextContents();
+  return texts.map((t) => t.trim());
+}
+
+/**
  * 明细列表信息行（.logs-info，i18n report.logsInfo：
  * 共 {total} 条，第 {page}/{pages} 页，每页 {size} 条）
  */
@@ -1546,7 +1732,7 @@ const TS_SPLIT_OPTIONS = [
 ];
 // Overview.vue rankingDimOptions（10 项，顺序与实现一致）
 const RANKING_DIM_OPTIONS = [
-  { value: 'model', label: '模型' },
+  { value: 'model', label: '目标模型' },
   { value: 'provider', label: '服务商' },
   { value: 'apikey', label: 'API Key' },
   { value: 'host', label: 'Host' },
@@ -1570,7 +1756,7 @@ const PIE_DIM_OPTIONS = [
 // distribution 的 dimension 枚举不含的四项（report.md §2.4，饼图下拉不暴露）
 const PIE_UNSUPPORTED_DIMS = [
   { value: 'provider', label: '服务商' },
-  { value: 'model', label: '模型' },
+  { value: 'model', label: '目标模型' },
   { value: 'apikey', label: 'API Key' },
   { value: 'host', label: 'Host' },
 ];
@@ -2252,10 +2438,30 @@ module.exports = {
   triggerLogsSearch,
   // 详情 Drawer
   openDetailByRowText,
+  openDetailByRowIndex,
   expectDetailDrawerOpen,
   detailDrawer,
+  detailFieldItem,
+  getDetailFieldValue,
+  getDetailFieldLabels,
+  expectDetailFieldValue,
+  expectDetailFieldsPresent,
+  expectDetailFieldsAbsent,
   expectDetailFieldContains,
   expectDetailFieldNotVisible,
+  detailJsonSection,
+  detailJsonHeader,
+  detailJsonContent,
+  toggleJsonField,
+  expectJsonFieldExpanded,
+  expectJsonFieldCollapsed,
+  getDetailJsonLabels,
+  getDetailDrawerText,
+  reportLogsMainRows,
+  getLogsMainRowCellTexts,
+  logRowDetailButton,
+  DETAIL_FIELD_LABELS,
+  DETAIL_JSON_FIELDS,
   closeDetailDrawer,
   closeDetailDrawerByMask,
   expectJsonFieldCollapsible,

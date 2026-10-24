@@ -60,19 +60,6 @@ const FILE_TIME_FIELDS = [
   bp.DOC.terminalAt,
 ];
 
-// 字段帮助提示精确文案（取自 i18n zh.js batchTasks.*）
-const HELP_TIPS = [
-  [bp.DOC.productName, 'product_name，中间件强制注入，只读'],
-  [bp.DOC.requestTotal, 'request_counts.total'],
-  [bp.DOC.usageSource, 'usage_source：download=输出文件下载回读 / reconcile=对账'],
-  [bp.DOC.reserveUnits, 'reserve_units，1e-8 定点整数 RMB，不做 ÷1e8 换算'],
-  [bp.DOC.settleUnits, 'settle_units，1e-8 定点整数 RMB，不做 ÷1e8 换算'],
-  [bp.DOC.overReserved, 'over_reserved，预留金额 > 结算金额 表示结算后仍有剩余'],
-  [bp.DOC.syncSource, 'sync_source：redis=BATCH_TASK 回源 / log=日志对账落库'],
-  [bp.DOC.outputFileId, 'output_file_id，未完成时为空'],
-  [bp.DOC.terminalAt, 'terminal_at，未终结为空'],
-];
-
 const BATCH_FILE_HEADERS = [
   bp.DOC.fileId,
   bp.DOC.provider,
@@ -157,8 +144,8 @@ test.describe('批量任务 - BT-D-01 打开详情抽屉', () => {
   });
 });
 
-test.describe('批量任务 - BT-D-02 详情字段完整性与帮助提示', () => {
-  test('验证 5 面板字段齐全与 9 处 help 文案', async ({ page }) => {
+test.describe('批量任务 - BT-D-02 详情字段完整性与无帮助图标', () => {
+  test('验证 5 面板字段齐全且抽屉内无帮助图标', async ({ page }) => {
     await bp.gotoBatchTaskPage(page);
 
     const detail = await pickTaskWithDetail(
@@ -201,13 +188,8 @@ test.describe('批量任务 - BT-D-02 详情字段完整性与帮助提示', () 
       expect(drawerText).not.toContain('NaN');
     });
 
-    await test.step('逐处核对 help 提示文案', async () => {
-      for (const [title, tip] of HELP_TIPS) {
-        expect(
-          await bp.detailFieldHelpTip(page, title),
-          `字段「${title}」help 提示`,
-        ).toBe(tip);
-      }
+    await test.step('验证详情抽屉内无任何帮助图标', async () => {
+      await bp.expectDetailNoHelpIcons(page);
     });
   });
 });
@@ -261,10 +243,14 @@ test.describe('批量任务 - BT-D-04 无批量文件显示占位', () => {
   test('验证 batch_files 为空时展示占位「-」', async ({ page }) => {
     await bp.gotoBatchTaskPage(page);
 
-    const detail = await pickTaskWithDetail(
-      page,
-      (d) => Array.isArray(d.batch_files) && d.batch_files.length === 0,
-    );
+    // 守卫口径必须与产品一致：产品对「无文件」的语义是「batch_files 不是数组」——
+    // BatchView.vue:323-326 的 computed 把非数组（接口对无文件任务返回 null，而非 []）归一为 []，
+    // 再按 length 决定渲染文件表格还是占位「-」。旧守卫 `Array.isArray(d.batch_files) && d.batch_files.length === 0`
+    // 要求接口返回空数组，而实测无文件任务返回 null → 守卫恒不成立、用例恒被跳过（改前一直是 skip，从未真正执行）。
+    const detail = await pickTaskWithDetail(page, (d) => {
+      const files = Array.isArray(d.batch_files) ? d.batch_files : [];
+      return files.length === 0;
+    });
     if (!detail) {
       test.skip(true, '环境中无 batch_files 为空的批量任务，跳过');
     }
@@ -294,12 +280,9 @@ test.describe('批量任务 - BT-D-05 回源任务结算字段未就绪不报错
     await bp.expectDetailDrawerOpen(page);
     await expectDrawerPanels(page);
 
-    await test.step('验证同步来源字段与 help 文案', async () => {
+    await test.step('验证同步来源字段', async () => {
       expect(await bp.detailFieldText(page, bp.DOC.syncSource)).toBe(
         uiText(detail.sync_source),
-      );
-      expect(await bp.detailFieldHelpTip(page, bp.DOC.syncSource)).toBe(
-        'sync_source：redis=BATCH_TASK 回源 / log=日志对账落库',
       );
     });
 

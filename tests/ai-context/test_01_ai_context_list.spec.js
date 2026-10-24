@@ -20,6 +20,8 @@
  * 说明：列表渲染类用例（L-01~L-06）优先使用 mockRulesGetResponse
  * 注入受控集合，避免后端默认值干扰；退出确认类（L-11/12/13）经 UI 删除本地行制造
  * dirty；提交类（L-14）真实提交后由 cleanup 还原；失败/查重类（L-07/15/16）经 mock。
+ * 「提交并生效」自 2026-10-15 起带 `:disabled="!isRulesDirty"`（无未提交改动时置灰），
+ * AX-L-16 注入重复 cond 集合后先本地新增一条异 cond 规则制造改动，再提交验证查重拦截。
  * 规则无 name 字段，cond（生效条件表达式）即身份，行定位一律按 cond。
  */
 const { test, expect } = require('@playwright/test');
@@ -572,6 +574,24 @@ test.describe('AI 上下文压缩 - 列表与双模式', () => {
         await utils.reloadAiContextPage(page);
         await utils.enterEditMode(page);
         await utils.expectEditMode(page);
+      });
+
+      await test.step('前置：本地新增一条异 cond 规则制造改动，解除「提交并生效」置灰', async () => {
+        // 「提交并生效」带 :disabled="!isRulesDirty"（2026-10-15 变更，AIContext/index.vue:49），
+        // 无本地改动时点击无效、等不到查重提示。
+        // 注入的两条同 cond 规则字段完全相同，拖拽重排前后 JSON 相等（isRulesDirty 仍为 false），
+        // 故改用「本地新增一条异 cond 规则」制造改动：两条重复规则仍在集合内，查重照旧命中。
+        await utils.openAddRuleDrawer(page);
+        await utils.fillRuleCond(
+          page,
+          'req_path_in("/test/ax_l16_extra", false)',
+        );
+        await utils.submitRuleFormExpectMessage(
+          page,
+          utils.DOC_AI_CONTEXT_RULE_FORM.addSuccessMsg,
+        );
+        await utils.expectRuleFormDrawerHidden(page);
+        await utils.expectSubmitAndEffectDisabled(page, false);
       });
 
       await test.step('提交被拦截，提示「生效条件已存在，集合内必须唯一」', async () => {

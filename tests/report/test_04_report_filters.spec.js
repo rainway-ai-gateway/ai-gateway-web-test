@@ -322,7 +322,7 @@ test.describe('数据报表 - RP-F-09 过滤栏构成与无死控件', () => {
     await test.step('过滤栏 = 时间范围 + 6 个通用过滤项 + 行尾「拆分维度」+ 查询/重置', async () => {
       const sequence = await rp.getFilterBarControlSequence(page);
       expect(sequence).toEqual([
-        '模型',
+        rp.DOC.filterLabels.model,
         'API Key',
         '服务商',
         'Host',
@@ -345,7 +345,7 @@ test.describe('数据报表 - RP-F-09 过滤栏构成与无死控件', () => {
 
     await test.step('6 个通用过滤项顺序与集合固定（不含缓存状态 / 镜像命中 / 意图答案过滤项）', async () => {
       const labels = await rp.getFilterBarItemLabels(page);
-      expect(labels).toEqual(['模型', 'API Key', '服务商', 'Host', '流式', '状态码', rp.TS_SPLIT_LABEL]);
+      expect(labels).toEqual([rp.DOC.filterLabels.model, 'API Key', '服务商', 'Host', '流式', '状态码', rp.TS_SPLIT_LABEL]);
       await rp.expectNoDeadFilterItems(page);
       for (const dead of ['缓存状态', '镜像命中', '意图答案']) {
         expect(labels).not.toContain(dead);

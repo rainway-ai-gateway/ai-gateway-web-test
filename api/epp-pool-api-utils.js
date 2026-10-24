@@ -206,14 +206,15 @@ function createEppPoolTestCleanup() {
  * 为 EPP 调度分配测试批量创建前置数据
  *
  * 策略：
- * 1. 创建 13 组双实例的 EPP 实例池 + 30 个 EPP 集群（满足 ASGN-01~04/06）
+ * 1. 创建 13 组单实例的 EPP 实例池 + 30 个 EPP 集群（满足 ASGN-01~04/06）
+ *    ——「每组恰好 1 个实例」为当前设计约束（空组或 ≥2 个实例的组会被 PATCH 拒绝）
  * 2. 集群创建时 AssignCluster 自动分配，reconciler 周期兜底
  *
  * 注意：unassigned_clusters 无法通过 Open API 持久化产生，原因：
  *   - PATCH /epp-pool 同步调用 RepairDangling 修复所有悬空分配
  *   - Reconcile（30s 周期）回填所有未分配集群
- *   - PUT /epp-assignments 校验 primary_instance_id 必须在指定实例组内存在
- *   因此 ASGN-05 需要环境中天然存在未分配/降级集群才能完整验证
+ *   - PUT /epp-assignments 校验 group_name 必须在实例池中存在
+ *   因此 ASGN-05 需要环境中天然存在未分配集群才能完整验证
  *
  * @param {object} page Playwright page（需已登录）
  * @returns {Promise<{ originalPool: object, createdClusters: string[], providerName: string, testGroups: object[], unassignedClusters: string[] }>}
@@ -253,7 +254,7 @@ async function setupEppAssignmentTestData(page) {
     common.log('[setup] 获取原始池失败: ' + e.message);
   }
 
-  // ---- 2) 扩展实例池到 13 组（g1-g13 双实例） ----
+  // ---- 2) 扩展实例池到 13 组（g1-g13，每组恰好 1 个实例） ----
   const totalGroups = 13;
   const totalClusters = 30;
   const testGroups = [];
@@ -261,10 +262,7 @@ async function setupEppAssignmentTestData(page) {
     const base = 100 + i * 10;
     testGroups.push({
       name: 'g' + i,
-      instances: [
-        { id: 'epp-g' + i + 'a', host: '10.0.' + base + '.1', port: 9002 },
-        { id: 'epp-g' + i + 'b', host: '10.0.' + base + '.2', port: 9002 },
-      ],
+      instances: [{ id: 'epp-g' + i, host: '10.0.' + base + '.1', port: 9002 }],
     });
   }
 
@@ -350,8 +348,8 @@ async function setupEppAssignmentTestData(page) {
     },
     balance_mode: 'EPP',
     epp_config: {
-      scheduling_profile: 'balanced',
-      cache_affinity: 'medium',
+      load_profile: 'balanced',
+      affinity: 'medium',
       prefix_cache_affinity: false,
       kv_cache_utilization_max: 0.5,
     },

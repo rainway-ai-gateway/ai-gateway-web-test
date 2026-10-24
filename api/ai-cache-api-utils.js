@@ -161,9 +161,12 @@ function generateTestRuleName(prefix = 'ac_') {
  * 构造一条完整字段的测试规则。
  */
 function buildTestRule(overrides = {}) {
+  const name = overrides.name || generateTestRuleName();
   return {
-    name: generateTestRuleName(),
-    cond: 'req_path_in("/v1/chat/completions", false)',
+    name,
+    // cond 必须集合内唯一（后端 422 duplicate ai cache rule cond）。
+    // 默认值不能是固定串，否则多条规则并存、或与环境既有 demo 规则碰撞时整单被拒。
+    cond: `req_header_value_in("x-test-rule", "${name}", false)`,
     cache_key_strategy: 'lastQuestion',
     cache_ttl: 3600,
     max_body_bytes: 1048576,

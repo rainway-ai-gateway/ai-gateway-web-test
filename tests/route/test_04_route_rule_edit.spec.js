@@ -520,15 +520,18 @@ test.describe('路由管理 - RT-D-15 提交后端校验失败', () => {
     });
 
     await test.step('2. 提交并生效，预期失败', async () => {
-      await page
-        .getByRole('button', { name: utils.DOC_ROUTE_TABLE.submitAndEffect })
-        .click();
-      await page.waitForTimeout(2000);
+      // 前端查重是同步拦截、提示只存活 3s（src/main.js duration:3）：
+      // 必须与点击并发等待，不能「先点、再 sleep 2000、再断言」——那样只剩约 1s 窗口，
+      // 页面主线程阻塞 ≥1s 就会永久错过（2026-10-17 批次内偶发的失败形态）
+      await utils.submitGlobalRouteRulesAndExpectBlockedTip(
+        page,
+        /duplicate|重复|参数非法/,
+      );
     });
 
-    await test.step('3. 验证停留在编辑模式且出现错误提示', async () => {
+    await test.step('3. 验证停留在编辑模式', async () => {
+      // 错误提示已在第 2 步并发断言（提示窗口 3s，此处不重复断言）
       await utils.expectRouteRulesEditMode(page);
-      await utils.expectRouteRulesSubmitError(page, /duplicate|重复|参数非法/);
     });
 
     await test.step('4. 清理所有同名规则', async () => {

@@ -547,15 +547,16 @@ test.describe('路由管理 - RT-V-13 规则名称重复', () => {
     });
 
     await test.step('2. 提交并生效，预期后端校验失败', async () => {
-      await page
-        .getByRole('button', { name: utils.DOC_ROUTE_TABLE.submitAndEffect })
-        .click();
-      await page.waitForTimeout(2000);
+      // 前端查重同步拦截、提示只存活 3s（src/main.js duration:3）→ 与点击并发等待
+      await utils.submitGlobalRouteRulesAndExpectBlockedTip(
+        page,
+        /duplicate|重复|参数非法/,
+      );
     });
 
-    await test.step('3. 验证停留在编辑模式且出现错误提示', async () => {
+    await test.step('3. 验证停留在编辑模式', async () => {
+      // 错误提示已在第 2 步并发断言（提示窗口 3s，此处不重复断言）
       await utils.expectRouteRulesEditMode(page);
-      await utils.expectRouteRulesSubmitError(page, /duplicate|重复|参数非法/);
     });
 
     await test.step('4. 清理所有同名规则', async () => {
@@ -901,13 +902,13 @@ test.describe('路由管理 - RT-V-13a 同名规则提交后端拦截', () => {
     });
 
     await test.step('提交并生效，预期后端校验失败', async () => {
-      await page
-        .getByRole('button', { name: utils.DOC_ROUTE_TABLE.submitAndEffect })
-        .click();
-      await page.waitForTimeout(2000);
-      // 拦截后仍停留在编辑模式并提示规则名重复
+      // 前端查重同步拦截、提示只存活 3s（src/main.js duration:3）→ 与点击并发等待
+      await utils.submitGlobalRouteRulesAndExpectBlockedTip(
+        page,
+        /duplicate|重复|参数非法/,
+      );
+      // 拦截后仍停留在编辑模式
       await utils.expectRouteRulesEditMode(page);
-      await utils.expectRouteRulesSubmitError(page, /duplicate|重复|参数非法/);
     });
 
     await test.step('清理所有同名规则', async () => {

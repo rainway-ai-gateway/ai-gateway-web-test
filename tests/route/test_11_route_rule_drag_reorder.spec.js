@@ -67,6 +67,8 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
     await utils.expectRouteRulesViewMode(page);
     await test.step('查看模式：无拖拽提示、行不可拖拽', async () => {
       await utils.expectRouteRulesDragTipVisible(page, false);
+      // 步骤名承诺的「行不可拖拽」必须是真断言（此前只查提示条，属性从未校验）
+      await utils.expectRuleRowsDraggable(page, false);
     });
     await utils.enterRouteRulesEditMode(page);
     await utils.expectRouteRulesEditMode(page);
@@ -106,6 +108,10 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
       ).toBeGreaterThanOrEqual(MIN_RULES_FOR_DRAG);
     });
 
+    await test.step('0. 编辑模式下规则行显示「可拖拽」光标（cursor: grab）', async () => {
+      await utils.expectRuleRowsCursorStyle(page, 'grab');
+    });
+
     await test.step('1. 拖拽首行到第 3 行：首行移动到第 3 行的原下标处', async () => {
       await utils.dragRuleRow(page, 0, 2);
       await utils.expectRuleNamesInOrder(
@@ -131,6 +137,9 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
       await utils.expectRouteRulesDragTipVisible(page, false);
       // 放弃修改后回到进入编辑模式时的原始规则（补齐用的本地副本一并丢弃）
       await utils.expectRuleNamesInOrder(page, originalNames);
+      await utils.expectRuleRowsDraggable(page, false);
+      // 查看模式不可拖拽：行上不再显示 grab 光标
+      await utils.expectRuleRowsCursorStyle(page, null);
       await guard.verifyUnchanged(page);
     });
   });
@@ -191,6 +200,7 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
     await test.step('3. 退出编辑模式放弃本地修改，后端 Global 路由规则未变化', async () => {
       await utils.clickExitEditMode(page);
       await utils.expectRouteRulesViewMode(page);
+      await utils.expectRuleRowsDraggable(page, false);
       await guard.verifyUnchanged(page);
     });
   });
@@ -258,6 +268,7 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
     await test.step('3. 退出编辑模式放弃本地修改，后端 Global 路由规则未变化', async () => {
       await utils.clickExitEditMode(page);
       await utils.expectRouteRulesViewMode(page);
+      await utils.expectRuleRowsDraggable(page, false);
       await guard.verifyUnchanged(page);
     });
   });

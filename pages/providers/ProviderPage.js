@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const rc = require('../resource/ResourcePageCommon');
 const sessionUtils = require('../../utils/session');
+const readonly = require('../../utils/readonly');
 const { PageTableComponent } = require('../../components/layout');
 const {
   IvuMessageComponent,
@@ -64,6 +65,12 @@ const AUTH_PATH = path.join(__dirname, '../../auth.json');
  *    `expectProviderRowVisibleByName`（按名称筛选后断言行可见）与行操作自动定位
  *    （`clickRowAction` 内部 `locateRowByName`：行不在当前页时先按名称筛选），
  *    行操作与「行存在 / 消失」断言不再依赖行恰好落在第 1 页。
+ * 12. 只读视角密钥展示（2026-10-16）：08-只读视角.md PR-RO-03 预期 2 称「掩码值原样展示，
+ *    前端不做二次脱敏」，但源码 `components/ProviderView.vue:140` 对 key 追加调用前端
+ *    `maskSecretKey`（`src/utils/const.js:562`：长度 ≤12 → `****`；>12 → 前 8 + `****` + 后 4），
+ *    详情抽屉实际展示「后端 xmask 结果再经前端掩码」的二次结果。只读 spec 按源码实际行为
+ *    断言，期望值由 `displayMaskSecretKey`（前端规则）与 `utils/readonly.maskSecret`（后端规则）
+ *    组合得出；明文长度 >12 时两条规则结果一致。
  */
 
 const LABEL = {
@@ -1475,12 +1482,131 @@ async function expectMessageContaining(page, text) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/providers/02-功能测试用例/08-只读视角.md PR-RO-01~03）
+// ---------------------------------------------------------------------------
+
+/** 服务商模块根节点（只读视角下同样存在，作为就绪锚点） */
+function providersRoot(page) {
+  return page.locator('.providers');
+}
+
+/**
+ * 列表工具栏「添加服务商」按钮（CSS / 文本定位，**不可用 `getByRole`**）。
+ *
+ * 源码 `src/modules/Providers/index.vue:18` 该 `Button` 挂 `v-has`，只读视角加
+ * `.v-has-hidden`（display:none !important）——元素仍在 DOM，但 `v-has` 的隐藏手段是
+ * `display:none`，而 Playwright 的 role 定位基于无障碍树、看不见 display:none 的元素，
+ * 只读态下 `getByRole('button', { name })` 会返回 count 0，导致 expectVHasHidden 误报
+ * （2026-10-16 实测）。
+ * 管理员态该按钮可见，同一 CSS/文本定位同样命中，故两侧对照共用本函数。
+ */
+function createProviderButton(page) {
+  return readonly.buttonByText(providersRoot(page), DOC.createButton);
+}
+
+/** 目标服务商所在数据行（CSS / 文本定位；只读态行内写按钮 display:none，不能用 getByRole） */
+function providerRow(page, providerName) {
+  return providerTable(page)
+    .body()
+    .locator('tr')
+    .filter({ hasText: providerName })
+    .first();
+}
+
+/**
+ * 行内操作按钮（CSS / 文本定位，**不可用 `getByRole`**，理由同 `createProviderButton`）。
+ * 服务商行内按钮：详情 / 查询模型价格 / 分段计价配置 / 编辑 / 删除，
+ * 后三者由 `index.vue:172/184/196` 的 `directives: [{ name: 'has' }]` 驱动隐藏。
+ *
+ * @param {string} actionText 操作列按钮文案
+ */
+function providerRowActionButton(page, providerName, actionText) {
+  return readonly.buttonByText(
+    providerRow(page, providerName),
+    actionText,
+  );
+}
+
+/**
+ * 工具栏（列表表格之外的页面级按钮区）：`.providers` 的直接子 Button。
+ * 一期该区域只有「添加服务商」一个写入口，用于断言「工具栏不含任何创建 / 新增写入口」。
+ */
+function providerToolbarButtons(page) {
+  return providersRoot(page).locator(':scope > .ivu-btn');
+}
+
+/** 工具栏内仍可见的按钮（只读视角应为 0 个） */
+function providerToolbarVisibleButtons(page) {
+  return providersRoot(page).locator(':scope > .ivu-btn:visible');
+}
+
+/** 列表「名称」列头搜索框（只读视角保留的筛选控件） */
+function providerNameSearchInput(page) {
+  return providerTable(page).searchInputByTitle(LABEL.name);
+}
+
+/** 详情抽屉「服务鉴权 Keys」卡片内 Key 值列文本（只读视角密钥展示断言用） */
+async function viewKeyValueTexts(page) {
+  const cells = viewTableRows(page, LABEL.serviceAuthKeys).locator(
+    'td:nth-child(2)',
+  );
+  await expect(cells.first()).toBeVisible({ timeout: 10000 });
+  return (await cells.allInnerTexts()).map((text) => text.trim());
+}
+
+/**
+ * 前端密钥展示掩码规则（复刻 `src/utils/const.js:562 maskSecretKey`）。
+ * 注意与后端 `lib/xmask`（utils/readonly.maskSecret）不同：
+ * 详情抽屉的 Key 值是「后端掩码后再经前端掩码」的二次结果。
+ * - 长度 ≤ 12 → `****`
+ * - 长度 > 12 → 前 8 位 + `****` + 后 4 位
+ */
+function displayMaskSecretKey(value) {
+  const key = String(value ?? '').trim();
+  if (!key) return '';
+  if (key.length <= 12) return '****';
+  return `${key.substring(0, 8)}****${key.substring(key.length - 4)}`;
+}
+
+/**
+ * 只读视角直连 URL 进入服务商列表页。
+ * 不复用 `gotoProvidersPage`：它内部调用 `rc.ensureAppSession` +
+ * `sessionUtils.ensureSessionHealthy`，会用 admin 凭证重登并回写 auth.json，
+ * 把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoProvidersPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, 'providers', {
+    ready: providersRoot(page),
+  });
+  await readonly.expectStillReadonly(page);
+}
+
+/** 只读视角就绪判定：根节点 + 列头（只读也存在的锚点），不依赖「添加服务商」 */
+async function expectProvidersPageReadyReadonly(page) {
+  await expect(providersRoot(page)).toBeVisible({ timeout: 15000 });
+  await expectTableHeaders(page);
+  await readonly.expectStillReadonly(page);
+}
+
 module.exports = {
   LABEL,
   MSG,
   DRAWER_TITLE,
   COLUMN_HEADERS,
   DOC,
+  // 只读管理员视角（docs/providers/02-功能测试用例/08-只读视角.md）
+  providersRoot,
+  createProviderButton,
+  providerRow,
+  providerRowActionButton,
+  providerToolbarButtons,
+  providerToolbarVisibleButtons,
+  providerNameSearchInput,
+  viewKeyValueTexts,
+  displayMaskSecretKey,
+  gotoProvidersPageReadonly,
+  expectProvidersPageReadyReadonly,
   gotoProvidersPage,
   expectProvidersPageReady,
   providerTable,

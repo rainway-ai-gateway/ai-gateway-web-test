@@ -18,12 +18,14 @@ const { expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const rc = require('../resource/ResourcePageCommon');
+const readonly = require('../../utils/readonly');
 const { PageTableComponent } = require('../../components/layout');
 const { ElSelectComponent } = require('../../components/element/ElSelect');
 const {
   IvuMessageComponent,
   IvuSelectComponent,
 } = require('../../components/iview');
+const { IVU_DRAWER_VISIBLE } = require('../../components/iview/constants');
 
 const AUTH_PATH = path.join(__dirname, '../../auth.json');
 
@@ -266,6 +268,9 @@ const SEARCH_SELECT_PLACEHOLDER = {
 };
 
 const COLUMN_HEADERS = ['提供商', '模型名', '归一化模型名', '模型模式', '操作'];
+
+/** 前端路由路径（见 ai-gateway-web src/router/router.js:180，只读视角直连 URL 用） */
+const MODEL_PRICE_PATH = 'model-prices';
 
 function getAppBaseUrl() {
   return rc.getAppBaseUrl();
@@ -1546,6 +1551,153 @@ async function confirmDeleteAndWait(page) {
   await expectMessage(page, MSG.deleteSuccess);
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/model-prices/02-功能测试用例/08-只读视角.md MP-RO-01~03）
+//
+// 产品依据（ai-gateway-web src/modules/ModelPrices/）：
+// - index.vue:18 `.action-bar` 整体挂 `v-has`（含「+ 新增定价」「YAML 导入」）→ 只读加
+//   `.v-has-hidden`，元素仍在 DOM，用 `readonly.expectVHasHidden` 断言；
+// - index.vue:179 操作列 `if (!store.isReadonly())` 才 push 「编辑」「删除」→ 只读下
+//   根本不渲染（count=0），用 `readonly.expectHidden` / `expectAbsent` 断言；
+// - ModelPriceView.vue 详情抽屉为纯展示组件（无任何 Button），只读与管理员一致。
+// ---------------------------------------------------------------------------
+
+/** 模块根容器（只读视角下同样渲染，作为就绪判定锚点） */
+function modelPriceRoot(page) {
+  return page.locator('.model-prices');
+}
+
+/** 页头写入口容器（挂 `v-has`：新增定价 + YAML 导入） */
+function modelPriceActionBar(page) {
+  return modelPriceRoot(page).locator('.action-bar');
+}
+
+/** 页头「+ 新增定价」写按钮 */
+function modelPriceCreateBtn(page) {
+  return modelPriceActionBar(page).getByRole('button', { name: '新增定价' });
+}
+
+/** 页头「YAML 导入」写按钮 */
+function modelPriceImportBtn(page) {
+  return modelPriceActionBar(page).getByRole('button', { name: 'YAML 导入' });
+}
+
+/**
+ * 列表数据行，按 (provider, model, mode) 三重文本过滤。
+ * 单用 provider 会命中该 provider 全部行，单用 model 会被同名子串
+ * （如 deepseek-v3 与 deepseek-v3-0324）误命中，故三重过滤。
+ */
+function modelPriceRowByCombo(page, combo) {
+  return modelPriceTable(page)
+    .dataRows()
+    .filter({ hasText: combo.provider })
+    .filter({ hasText: combo.model })
+    .filter({ hasText: combo.mode })
+    .first();
+}
+
+/** 行内只读入口「查看」（文档称「详情」，UI 文案取自 com.see） */
+function modelPriceRowViewBtn(page, combo) {
+  return modelPriceRowByCombo(page, combo).getByRole('button', { name: '查看' });
+}
+
+/** 行内写入口「编辑」（只读视角不渲染） */
+function modelPriceRowEditBtn(page, combo) {
+  return modelPriceRowByCombo(page, combo).getByRole('button', { name: '编辑' });
+}
+
+/** 行内写入口「删除」（只读视角不渲染） */
+function modelPriceRowDeleteBtn(page, combo) {
+  return modelPriceRowByCombo(page, combo).getByRole('button', { name: '删除' });
+}
+
+/**
+ * 用 provider + mode 服务端筛选把目标行带入当前页并断言可见。
+ * 默认 pageSize=50，不在首页的行直接断言会假失败；筛选后目标行必然落在第 1 页。
+ * 路径与 tests/model-prices/test_01_model_price_list.spec.js 的 MP-L-02/05 相同
+ * （下拉筛选走 `onSearchChange` → `index.vue:41` 已监听该事件）。
+ */
+async function focusModelPriceRow(page, combo) {
+  await searchField(page, 'provider', combo.provider);
+  await searchField(page, 'mode', combo.mode);
+  await expect(modelPriceRowByCombo(page, combo)).toBeVisible({
+    timeout: 15000,
+  });
+}
+
+/** 点击行内「查看」打开只读详情抽屉 */
+async function openViewModelPriceDrawer(page, combo) {
+  await modelPriceRowViewBtn(page, combo).click();
+  await waitForDrawerContent(page, '.model-price-view', DRAWER_TITLE.view);
+}
+
+/** 当前可见的详情抽屉容器（iView Drawer wrap，选择器取 components/iview/constants） */
+function viewDrawer(page) {
+  return page.locator(IVU_DRAWER_VISIBLE).last();
+}
+
+/** 详情抽屉内的写操作按钮——MP-RO-03 断言其不存在 */
+function viewDrawerWriteActionButtons(page) {
+  return viewDrawer(page).getByRole('button', { name: /编辑|删除|保存|导入/ });
+}
+
+/** 详情内容区（`.model-price-view`）内的全部按钮——纯只读展示下应为 0 个 */
+function viewScopeButtons(page) {
+  return viewScope(page).getByRole('button');
+}
+
+/** 详情四张 Card（基本信息 / 限制对象 / 价格 / 元数据）均可见 */
+async function expectViewCards(page) {
+  const scope = viewScope(page);
+  await expect(scope).toBeVisible({ timeout: 10000 });
+  const titles = [LABEL.basicInfo, LABEL.limits, LABEL.prices, LABEL.metadata];
+  for (const title of titles) {
+    // 「元数据」卡片含「价格来源」，纯 hasText 过滤会同时命中价格卡片 → 取首个
+    await expect(viewCard(scope, title).first()).toBeVisible({ timeout: 10000 });
+  }
+}
+
+/**
+ * 写入口在只读视角不可被触发（MP-RO-01 测试步骤 4 / 预期结果 4）。
+ * 用 `click({ trial: true })` 只做可操作性检查、不真正点击：被 v-has 置为
+ * `display:none !important` 的元素必然判为不可触发，且不产生任何副作用。
+ */
+async function expectWriteEntryUntriggerable(locator, label, timeout = 1500) {
+  const outcome = await locator
+    .click({ trial: true, timeout })
+    .then(() => 'triggerable')
+    .catch(() => 'blocked');
+  expect(outcome, `只读视角「${label}」不应可被触发`).toBe('blocked');
+}
+
+/**
+ * 只读视角直连 URL 进入模型定价列表页。
+ * 不走 `gotoModelPricePage`——它内部 `rc.ensureAppSession` →
+ * `ensureSessionHealthy` / `handleUrlInvalidAlert` 会以 conf.json 的 admin 凭证重登
+ * 并回写 auth.json，把只读态换成管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoModelPricePageReadonly(page) {
+  await readonly.gotoAsReadonly(page, MODEL_PRICE_PATH, {
+    ready: modelPriceRoot(page),
+  });
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 只读视角就绪判定：模块根容器 + 表头（只读下同样渲染的锚点）
+ * + 页头写入口区已挂 `.v-has-hidden`。
+ * 不能用 `gotoModelPricePage` 的「新增定价」可见性判定——只读视角该按钮被 v-has 隐藏。
+ */
+async function expectModelPricePageReadyReadonly(page) {
+  await expect(modelPriceRoot(page)).toBeVisible();
+  await expectTableHeaders(page);
+  await readonly.expectVHasHidden(
+    modelPriceActionBar(page),
+    '模型定价页头写入口区',
+  );
+  await readonly.expectStillReadonly(page);
+}
+
 module.exports = {
   LABEL,
   MSG,
@@ -1680,4 +1832,23 @@ module.exports = {
   clickDeleteConfirmOk,
   clickDeleteConfirmCancel,
   confirmDeleteAndWait,
+  // 只读管理员视角（docs/model-prices/02-功能测试用例/08-只读视角.md）
+  MODEL_PRICE_PATH,
+  modelPriceRoot,
+  modelPriceActionBar,
+  modelPriceCreateBtn,
+  modelPriceImportBtn,
+  modelPriceRowByCombo,
+  modelPriceRowViewBtn,
+  modelPriceRowEditBtn,
+  modelPriceRowDeleteBtn,
+  focusModelPriceRow,
+  openViewModelPriceDrawer,
+  viewDrawer,
+  viewDrawerWriteActionButtons,
+  viewScopeButtons,
+  expectViewCards,
+  expectWriteEntryUntriggerable,
+  gotoModelPricePageReadonly,
+  expectModelPricePageReadyReadonly,
 };

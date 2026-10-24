@@ -20,6 +20,9 @@
  * 说明：
  * - 必填/长度/范围等前端校验为纯前端行为，用 mockRulesGetResponse 注入空集合构造受控环境；
  * - 集合内查重的「本地保存」路径用 API 造数 + 真实 GET，「提交并生效」查重路径用 mock 注入重复集合；
+ * - 「提交并生效」自 2026-10-15 起带 `:disabled="!isDirty"`（无未提交改动时置灰），
+ *   TM-V-03 / TM-V-05 的「提交并生效」查重步骤注入重复集合后先拖拽重排制造一次本地改动再提交
+ *   （重复语义不变，查重仍由 submitRules 的 Set 去重命中）；
  * - TM-V-07 镜像集群 Select 非 clearable，UI 不可清空，仅断言默认选中首项 + 必填星号；
  * - TM-V-08 为纯服务端引用校验，直接经 OpenAPI 断言 422；
  * - afterEach cleanup 经 API 恢复原始集合（mock 不改变服务端数据，恢复幂等）。
@@ -177,6 +180,11 @@ test.describe('流量镜像规则 - 字段校验', () => {
       });
       await utils.reloadTrafficMirrorPage(page);
       await utils.enterEditMode(page);
+      // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，index.vue:47）：
+      // 注入的重复集合即基线，需先制造一次不改变重复语义的改动（拖拽重排）。
+      // 两行同名、按名称无法断言新次序，故以按钮解禁作为改动已生效的判据。
+      await utils.dragRuleRow(page, 0, 1);
+      await utils.expectSubmitAndEffectDisabled(page, false);
       const tracker = utils.trackTrafficMirrorRuleRequests(page);
       try {
         await utils.expectTrafficMirrorMessageDuringAction(
@@ -251,6 +259,16 @@ test.describe('流量镜像规则 - 字段校验', () => {
       });
       await utils.reloadTrafficMirrorPage(page);
       await utils.enterEditMode(page);
+      // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，index.vue:47）：
+      // 注入的重复集合即基线，需先制造一次不改变重复语义的改动（拖拽重排）。
+      // 两条规则名称不同、可以按名称钉住新次序，顺带验证拖拽确实改了本地数组。
+      const names = await utils.getRuleNamesInOrder(page);
+      await utils.dragRuleRow(page, 0, 1);
+      await utils.expectRuleNamesInOrder(
+        page,
+        utils.moveRuleToIndex(names, 0, 1),
+      );
+      await utils.expectSubmitAndEffectDisabled(page, false);
       const tracker = utils.trackTrafficMirrorRuleRequests(page);
       try {
         await utils.expectTrafficMirrorMessageDuringAction(

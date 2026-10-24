@@ -21,8 +21,9 @@
  *   携带登录 session）直接请求 report/rankings 与 report/distribution，
  *   校验 HTTP 状态码、RankingItem / DistItem 结构、name 取值域与 limit 边界。
  * - RP-R-08 / RP-R-11 为 UI 用例：捕获 loadFilterOptions() 发起的 rankings 请求
- *   （2026-10-14 变更后仅 4 个 dimension：model / apikey / provider / host，limit=50、
- *   无 unneedTips 静默标记；不再请求 ai_intent_answer），并断言总览过滤栏不含
+ *   （2026-10-14 变更后仅 4 个 dimension：model / apikey / provider / host；2026-10-23
+ *   issue #129 起「目标模型」选项改取集群 llm_config.models，故只剩 apikey / provider / host
+ *   三个 rankings 请求，limit=50、无 unneedTips 静默标记；不再请求 ai_intent_answer），并断言总览过滤栏不含
  *   「缓存状态 / 镜像命中 / 意图答案」过滤项——三者不是通用过滤参数，其过滤由
  *   「明细」页签工具栏承担（RP-L-04 ~ RP-L-08）。
  * - RP-R-09 断言筛选栏无 .doris-hint 门控提示节点，且三个新维度过滤项不在总览过滤栏。
@@ -43,8 +44,9 @@ const rp = require('../../pages/report/ReportPage');
 
 const RANKING_NUMERIC_FIELDS = ['request_count', 'error_count', 'input_tokens', 'output_tokens'];
 const DIST_NUMERIC_FIELDS = ['request_count', 'ratio'];
-// 过滤栏维度下拉选项请求覆盖的 4 个通用维度（2026-10-14 变更后不含 ai_intent_answer）
-const FILTER_OPTION_DIMENSIONS = ['model', 'apikey', 'provider', 'host'];
+// 过滤栏维度下拉选项请求覆盖的 3 个通用维度（2026-10-14 变更后不含 ai_intent_answer；
+// 2026-10-23 issue #129 起「目标模型」选项改为取集群 llm_config.models，不再请求 model 维度排行）
+const FILTER_OPTION_DIMENSIONS = ['apikey', 'provider', 'host'];
 // 2026-10-14 变更已从总览过滤栏移除的三个过滤项（现由明细工具栏承担）
 const REMOVED_FILTER_LABELS = ['缓存状态', '镜像命中', '意图答案'];
 const CACHE_STATUS_BUCKETS = ['hit', 'miss', 'skip'];
@@ -337,7 +339,7 @@ test.describe('数据报表 - 排行与分布新维度', () => {
       await waitForFilterOptionRequests(captured, FILTER_OPTION_DIMENSIONS.length);
     });
 
-    await test.step('loadFilterOptions 只请求 4 个 dimension（model / apikey / provider / host）', async () => {
+    await test.step('loadFilterOptions 只请求 3 个 dimension（apikey / provider / host；目标模型取集群配置）', async () => {
       const dimensions = captured.map((url) => new URL(url).searchParams.get('dimension'));
       for (const dimension of FILTER_OPTION_DIMENSIONS) {
         expect(dimensions.filter((d) => d === dimension).length).toBeGreaterThanOrEqual(1);
@@ -440,7 +442,7 @@ test.describe('数据报表 - 排行与分布新维度', () => {
   });
 
   test('RP-R-11 过滤栏维度筛选请求两后端可用（不含新维度）', async ({ page }) => {
-    // 当前测试环境为单一后端，按当前后端验证 4 个维度选项请求均 200 且无门控错误；
+    // 当前测试环境为单一后端，按当前后端验证 3 个维度选项请求均 200 且无门控错误；
     // MySQL / Doris 两后端对照需人工 / 环境矩阵覆盖（见用例文档前置条件）。
     const captured = captureFilterOptionRequests(page);
 
@@ -449,7 +451,7 @@ test.describe('数据报表 - 排行与分布新维度', () => {
       await waitForFilterOptionRequests(captured, FILTER_OPTION_DIMENSIONS.length);
     });
 
-    await test.step('4 个 dimension 请求均携带 limit=50 且无 unneedTips 静默标记', async () => {
+    await test.step('3 个 dimension 请求均携带 limit=50 且无 unneedTips 静默标记', async () => {
       expectFilterOptionRequestParams(captured);
       const dimensions = captured.map((url) => new URL(url).searchParams.get('dimension'));
       expect(dimensions.sort()).toEqual([...FILTER_OPTION_DIMENSIONS].sort());
@@ -556,12 +558,12 @@ test.describe('数据报表 - 排行与分布新维度', () => {
       await expect(rp.chartDimSelect(page, rp.RANKING_CHART_TITLE).trigger).toBeVisible();
     });
 
-    await test.step('下拉共 10 个选项，默认选中「模型」', async () => {
+    await test.step('下拉共 10 个选项，默认选中「目标模型」', async () => {
       const state = await rp.getChartDimDropdownState(page, rp.RANKING_CHART_TITLE);
       expect(state.options).toEqual(rp.RANKING_DIM_OPTIONS.map((o) => o.label));
       expect(state.options).toHaveLength(10);
-      expect(state.selected).toBe('模型');
-      expect(await rp.getChartDimSelectedText(page, rp.RANKING_CHART_TITLE)).toBe('模型');
+      expect(state.selected).toBe(rp.DOC.filterLabels.model);
+      expect(await rp.getChartDimSelectedText(page, rp.RANKING_CHART_TITLE)).toBe(rp.DOC.filterLabels.model);
       expect((await rp.getChartDims(page)).ranking).toBe('model');
     });
 

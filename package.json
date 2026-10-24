@@ -10,6 +10,7 @@
     "test:route": "PW_WORKERS=1 playwright test tests/route/",
     "test:journey": "playwright test tests/entity-management/test_05_entity_full_journey.spec.js",
     "report": "node utils/generate_report.js test-results.json report/test-report.md",
+    "report:tracked": "node scripts/aggregate-report.js",
     "cleanup:testdata": "node scripts/cleanup-entity-test-data.cjs",
     "cleanup:testdata:execute": "node scripts/cleanup-entity-test-data.cjs --execute",
     "cleanup:user": "node scripts/cleanup-user-test-data.cjs",
@@ -22,6 +23,10 @@
     "cleanup:modelprice:execute": "node scripts/cleanup-model-price-test-data.cjs --execute",
     "cleanup:provider": "node scripts/cleanup-provider-test-data.cjs",
     "cleanup:provider:execute": "node scripts/cleanup-provider-test-data.cjs --execute",
+    "seed:batch": "node scripts/seed-batch-task-data.cjs",
+    "seed:batch:execute": "node scripts/seed-batch-task-data.cjs --execute",
+    "cleanup:batch": "node scripts/seed-batch-task-data.cjs --clean",
+    "cleanup:batch:execute": "node scripts/seed-batch-task-data.cjs --clean --execute",
     "impact-scan": "node scripts/impact-scan.js"
   },
   "devDependencies": {

@@ -148,7 +148,7 @@ const DOC_ENTITY_ORG = {
   // TPM/RPM 规则字段仍为 int64，溢出值需超过 int64 上界
   ruleValueOverMax: '9223372036854775808',
   rateLimitRuleRequiredMsg:
-    /请添加 TPM\/RPM 规则|最大并发.*封禁.*限制并发数|启用限流时，至少(需要配置TPM、RPM或最大并发中的一项|配置一项限流规则\s*[（(]TPM\/RPM\/最大并发[）)])/,
+    /请添加 TPM\/RPM 规则|配置批量限流|最大并发.*封禁.*限制并发数|启用限流时，至少(需要配置TPM、RPM或最大并发中的一项|配置一项限流规则\s*[（(]TPM\/RPM\/最大并发[）)])/,
   deleteBlockedMsg:
     /无法删除|API-Key|api.?key|挂载|Conflict|associated|in use/i,
   tpmWindowMinutesInvalidMsgTemplate:
@@ -240,7 +240,7 @@ const DOC_API_KEY = {
   // TPM/RPM 规则字段仍为 int64，溢出值需超过 int64 上界
   ruleValueOverMax: '9223372036854775808',
   rateLimitRuleRequiredMsg:
-    /请添加 TPM\/RPM 规则|最大并发.*封禁.*限制并发数|启用限流时，至少配置一项限流规则\s*[（(]TPM\/RPM\/最大并发[）)]/,
+    /请添加 TPM\/RPM 规则|配置批量限流|最大并发.*封禁.*限制并发数|启用限流时，至少配置一项限流规则\s*[（(]TPM\/RPM\/最大并发[）)]/,
   tpmWindowMinutesInvalidMsgTemplate: '第{index}条规则时间窗口范围为1-360分钟',
   tpmWindowMinutesRequiredMsgTemplate: '第{index}条规则时间窗口不能为空',
   tpmRuleNameRequiredMsgTemplate: '第{index}条规则名称不能为空',
@@ -616,9 +616,26 @@ async function waitForApiKeyManagementShellReadonly(page, timeout = 15000) {
 }
 
 /**
+ * API-Key 列表首屏请求（ApiKeyList mount 时发起的 GET /api-keys，无分页参数）
+ */
+function isApiKeyListResponse(response) {
+  return (
+    /\/api-keys$/.test(response.url().split('?')[0]) &&
+    response.request().method() === 'GET' &&
+    response.status() === 200
+  );
+}
+
+/**
  * 只读视角进入 API-Key 管理页：直连 URL + 面包屑判定。
  * 不调用 ensureLoggedIn（会以 admin 凭证重登并覆盖 auth.json 会话），
  * 也不要求「创建」按钮可见（只读态该按钮被 v-has 隐藏）。
+ *
+ * 导航后额外等一次列表首屏请求：pageTable 在 tableData 刷新时会清空所有列筛选
+ * （pageTable.vue 的 tableData watcher「数据刷新即重置 searchMessage / searchValue」）。
+ * 若筛选输入先于列表返回生效，这次刷新会把筛选静默清空、表格退回未筛选的第 1 页，
+ * 目标行不在第 1 页时即 15s 超时的 element(s) not found（EM-K-RO-02 偶发失败的根因）。
+ * 这里只等首屏那一次网络响应，不做任何登录 / 鉴权动作。
  */
 async function gotoApiKeyManagementPageReadonly(page) {
   if (await isApiKeyManagementShellVisibleReadonly(page)) {
@@ -627,8 +644,13 @@ async function gotoApiKeyManagementPageReadonly(page) {
   }
   const url = buildProductPageUrl(page, 'api-key');
   common.log('只读视角直连 URL 进入 API-Key 管理页面: ' + url);
+  // 监听必须先于 goto 挂上，否则请求可能已发出、waitForResponse 只能空等到超时
+  const listLoaded = page
+    .waitForResponse(isApiKeyListResponse, { timeout: 30000 })
+    .catch(() => null);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await waitForApiKeyManagementShellReadonly(page);
+  await listLoaded;
 }
 
 // ── Layout expectations ─────────────────────────────────────────────

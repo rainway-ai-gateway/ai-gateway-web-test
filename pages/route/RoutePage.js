@@ -33,6 +33,7 @@ const {
   IvuSelectComponent,
 } = require('../../components/iview');
 const resourceApi = require('../../api/resource-api-utils');
+const readonly = require('../../utils/readonly');
 
 /** 与 docs/route-management/02 及 design 原型对齐的验收文案 */
 /**
@@ -76,15 +77,25 @@ const DOC_ROUTE_TABLE = {
   apiKeyTypeLabel: 'API-Key',
   globalOwner: 'global',
   globalDetailBreadcrumb: /路由规则 - Global \/ Global/,
-  // 后端 route-tables 的 type 是 api_key，列表页与详情页文案直接渲染该值，
-  // 而 TYPE_MAP 只登记了 apikey → API-Key（前端缺口），故断言同时接受两种写法
-  apiKeyDetailBreadcrumb: /路由规则 - (API-Key|api_key|apikey)/,
-  entityDetailBreadcrumb: /路由规则 - Entity|entity /,
-  apiKeyTypeLabels: /API-Key|api_key|apikey/,
+  // 面包屑标题 = `路由规则 - detailTypeLabel / detailOwnerLabel`
+  // （`RouteTable/index.vue:355`），其中 detailTypeLabel 取 TYPE_MAP（`:165-167`）
+  // —— 即**显示文案**，与接口 type 原值（api_key）不是同一层。
+  // 产品 792bb73 已给 TYPE_MAP 补 `api_key: 'API-Key'`（`:53-58`），显示层不再
+  // 出现裸枚举，故断言由「API-Key / api_key / apikey 三写法并列」收紧为精确值。
+  apiKeyDetailBreadcrumb: /路由规则 - API-Key \/ /,
+  entityDetailBreadcrumb: /路由规则 - Entity \/ /,
+  // 属主栏「当前路由表」的类型文案：由 RouteRules 组件**自己的** TYPE_LABELS 渲染
+  // （`RouteRules.vue:132-136`：global / entity / apikey / **api_key**），组件收到的
+  // `:type` 是接口原值（`RouteTable/index.vue:36` `:type="currentType"`；`onView(row)`
+  // 里 `currentType = row.type` = `api_key`），命中 `api_key → API-Key` 后渲染映射文案。
+  // 2026-10-17 产品已补 `api_key: 'API-Key'` 键，属主栏不再渲染裸枚举，与同页面包屑
+  // （走 index.vue 的 TYPE_MAP）一致；此处不再需要单独的期望常量，断言直接复用
+  // `typeLabel`（详见 `expectRouteTableDetailOpen`）。
   enableSuccessToast: '路由表已启用',
   disableSuccessToast: '路由表已停用',
   enterEditMode: '进入编辑模式',
   exitEditMode: '退出编辑模式',
+  backButton: '返回',
   submitAndEffect: '提交并生效',
   createRule: '添加规则',
   enabledLabel: '启用',
@@ -458,6 +469,36 @@ async function waitForOwnerRouteRulesUpdateResponse(
   return response;
 }
 
+/** 路由表列表**数据行**列下标（与搜索行同序：类型 / 属主 / 状态 / 操作） */
+const ROUTE_TABLE_DATA_COLUMN = { type: 0, owner: 1, status: 2, operation: 3 };
+
+/**
+ * 数据行「路由表类型」单元格（第 1 列）
+ *
+ * 产品渲染 `TYPE_MAP[params.row.type] || params.row.type || '-'`
+ * （`RouteTable/index.vue:96`）——单元格里看到的恒为**映射后的显示文案**。
+ */
+function routeTableTypeCell(row) {
+  return row.locator('td').nth(ROUTE_TABLE_DATA_COLUMN.type);
+}
+
+/**
+ * 断言类型列**显示文案**精确等于 typeLabel（API-Key 场景即精确 `API-Key`）。
+ *
+ * 收紧依据：产品 `792bb73` 已给 `TYPE_MAP` 补 `api_key: 'API-Key'`
+ * （`RouteTable/index.vue:53-58`），裸枚举不再进入显示层，故类型列不允许再用
+ * `api_key` / `apikey` 等接口原值兜底。接口原值的归一比较只允许出现在
+ * `routeTableTypeMatches`（见其注释），本函数走 `toHaveText` 精确匹配。
+ */
+async function expectRouteTableTypeCell(page, typeLabel, owner) {
+  const row = routeTableRow(routeTableList(page), typeLabel, owner);
+  await ensureRouteTableRowReachable(page, row);
+  await expect(
+    routeTableTypeCell(row),
+    `路由表类型列应精确显示 ${typeLabel}`,
+  ).toHaveText(typeLabel, { timeout: 15000 });
+}
+
 async function expectRouteTableRowVisible(page, typeLabel, owner) {
   const table = routeTableList(page);
   const row = routeTableRow(table, typeLabel, owner);
@@ -465,6 +506,11 @@ async function expectRouteTableRowVisible(page, typeLabel, owner) {
   await expect(row).toBeVisible({
     timeout: 15000,
   });
+  // 行可见之外，类型列显示文案一并收紧（Global / Entity / API-Key 均为映射后文案）
+  await expect(
+    routeTableTypeCell(row),
+    `路由表类型列应精确显示 ${typeLabel}`,
+  ).toHaveText(typeLabel, { timeout: 15000 });
 }
 
 async function expectRouteTableStatus(page, typeLabel, owner, enabled) {
@@ -536,11 +582,13 @@ async function expectRouteTableDetailOpen(page, typeLabel, owner) {
         ),
     ).toBeVisible();
   }
-  await expect(page.locator('.route-owner-label')).toContainText(
-    typeLabel === DOC_ROUTE_TABLE.apiKeyTypeLabel
-      ? DOC_ROUTE_TABLE.apiKeyTypeLabels
-      : typeLabel,
-  );
+  // `.route-owner-label`（`RouteRules.vue:19-21`）＝ `当前路由表：<strong>typeLabel</strong> / owner`。
+  // 注意：这里的 `<strong>` 与面包屑**不是同一个数据源** —— 面包屑走 index.vue 的
+  // TYPE_MAP，属主栏走 RouteRules 自带的 TYPE_LABELS（两张同义表）。
+  // 2026-10-17 产品已给 TYPE_LABELS 补 `api_key: 'API-Key'`（`:132-136`），两处显示
+  // 一致，故 `<strong>` 直接精确等于 `typeLabel`；仍用 `toHaveText` 精确匹配，
+  // 不再用 `/API-Key|api_key|apikey/` 三写法并列兜底（换成裸枚举即失败）。
+  await expect(page.locator('.route-owner-label strong')).toHaveText(typeLabel);
 }
 
 async function enableRouteTableAndWait(page, typeLabel, owner, apiOwner) {
@@ -865,14 +913,52 @@ async function setRouteTableEnabledInDetail(page, enabled) {
   await page.waitForTimeout(500);
 }
 
+/** iView 全局提示（Message / Notice）：提交拦截类提示都落在这些节点上 */
+function routeRulesNotice(page) {
+  return page.locator('.ivu-notice, .ivu-message-error, .ivu-message-notice');
+}
+
+/**
+ * 断言「提交拦截」提示已出现（可选校验文案）——**事后**断言，仅用于提示已经在屏幕上
+ * 的场合。等提交结果请用 `submitGlobalRouteRulesAndExpectBlockedTip`：iView 提示只存活
+ * 3s（`src/main.js:59-62` `duration: 3`），先 sleep 再断言的写法会把抓取窗口压到约 1s。
+ */
 async function expectRouteRulesSubmitError(page, message) {
-  const errorNotice = page.locator(
-    '.ivu-notice, .ivu-message-error, .ivu-message-notice',
-  );
+  const errorNotice = routeRulesNotice(page);
   await expect(errorNotice.first()).toBeVisible();
   if (message) {
     await expect(errorNotice.first()).toContainText(message);
   }
+}
+
+/**
+ * 点「提交并生效」并与点击**并发**等待前端查重拦截提示（同名规则等）。
+ *
+ * 为什么必须并发等待：`submitRules`（`src/modules/RouteTable/components/RouteRules.vue:532-539`）
+ * 的前端查重是**同步**的 —— 命中重复即 `$Message.error(route.ruleNameDuplicate)` 后
+ * `return`（不发请求、不改模式、不动脏标记），而 iView 提示只存活 3s
+ * （`src/main.js:59-62` `duration: 3`）。提示的可见窗口 = 「点击 → +3s」。
+ * 原写法「click → `waitForTimeout(2000)` → 断言」只留约 1s 抓取窗口：页面主线程或 CDP
+ * 一旦阻塞 ≥1s（dev server 重编译 / GC / 批次负载），首次轮询就会落在提示被回收之后，
+ * 断言永久落空 —— 2026-10-17 七文件批次内 RT-D-15 的失败形态正是「无 PUT、仍在编辑模式、
+ * 按钮仍可点、两条同名规则都在」（= 前端已拦下，但提示已消失）。
+ *
+ * 并发写法沿用 `IvuMessageComponent.waitForTextDuringAction` 的思路，**不弱化断言**：
+ * 提示节点限定在 Message / Notice 容器内（页面静态文案不会误命中），且必须可见 + 命中
+ * `message` 文案；产品若不再拦截（放行或改由后端拒绝），本次仍会因等不到提示而失败。
+ */
+async function submitGlobalRouteRulesAndExpectBlockedTip(
+  page,
+  message,
+  timeout = 10000,
+) {
+  const blockedTip = routeRulesNotice(page)
+    .filter({ hasText: message })
+    .first();
+  await Promise.all([
+    expect(blockedTip).toBeVisible({ timeout }),
+    getSubmitAndEffectButton(page).click(),
+  ]);
 }
 
 function ruleDrawerScope(page) {
@@ -1419,6 +1505,26 @@ async function expectRuleRowsDraggable(page, draggable = true) {
   }
 }
 
+/**
+ * 可拖拽行的鼠标指针样式：编辑模式应为「小手」grab（按下时 grabbing），
+ * 查看模式不应再出现拖拽光标。expected 传 null 表示断言「不是 grab」。
+ */
+async function expectRuleRowsCursorStyle(page, expected = 'grab') {
+  const rows = routeRulesMainRows(page);
+  const count = await rows.count();
+  expect(count, '规则表格无数据行，无法校验拖拽光标').toBeGreaterThan(0);
+  const cursors = await rows.evaluateAll((els) =>
+    els.map((el) => window.getComputedStyle(el).cursor),
+  );
+  cursors.forEach((cursor, i) => {
+    if (expected) {
+      expect(cursor, `第 ${i + 1} 行鼠标指针应为 ${expected}`).toBe(expected);
+    } else {
+      expect(cursor, `第 ${i + 1} 行不应显示拖拽光标`).not.toBe('grab');
+    }
+  });
+}
+
 function getSubmitAndEffectButton(page) {
   return page.getByRole('button', { name: DOC_ROUTE_TABLE.submitAndEffect });
 }
@@ -1726,9 +1832,15 @@ async function gotoApiKeyPageForFixture(page) {
 }
 
 /**
- * 比较路由表类型：后端 route-tables 的 type 取值为 api_key，
- * 而列表页筛选项与 DOC 文案用的是 apikey，助手内统一归一化后比较
+ * 比较路由表类型**取值**（接口响应 / URL 参数层）：后端 route-tables 的 type 取值
+ * 为 api_key，而列表筛选项的 value 与 DOC 文案用 apikey，助手内统一归一化后比较
  * （否则 api_key 行会被判定为「不存在」，如 RT-L-14/15 的前置等待）
+ *
+ * ⚠️ 只允许用于比较**接口取值 / URL 参数**。表格单元格与详情页的类型**显示文案**
+ * 一律走 TYPE_MAP 映射后的精确值（`expectRouteTableTypeCell` /
+ * `expectRouteTableDetailOpen`），**不得**再用本函数兜底：产品 `792bb73` 已补
+ * `api_key → API-Key` 映射（`RouteTable/index.vue:53-58`），显示层不存在裸枚举，
+ * 用归一比较会把「映射又缺了 → 列里显示 api_key」这类回归掩盖成通过。
  */
 function routeTableTypeMatches(actualType, expectedType) {
   const normalize = (value) =>
@@ -2355,6 +2467,346 @@ async function ensureGlobalRouteTableEnabled(page) {
   await ensureGlobalRouteTableEnabledViaUI(page);
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/route-management/02-功能测试用例/06-只读视角.md RT-RO-01~03）
+//
+// 产品依据（ai-gateway-web）：
+// - 列表操作列「启用 / 停用」：`RouteTable/index.vue:148,154` render 里挂
+//   `directives: [{ name: 'has' }]`，只读视角加 `.v-has-hidden` → DOM 常在，用 `expectVHasHidden`；
+// - 详情工具栏「进入编辑模式」：`RouteTable/components/RouteRules.vue:30,33` 是
+//   `v-if="mode === 'view'"` + `v-has`，只读视角无法离开视图模式 → DOM 常在（挂 v-has）；
+// - 详情工具栏「退出编辑模式 / 提交并生效」：`RouteRules.vue:37` 的
+//   `v-if="mode !== 'view'"` 模板分支，只读视角恒不渲染 → 用 `expectHidden`；
+// - 「添加规则」：`RouteRules.vue:72` 为 `v-show="mode === 'edit'"` + `v-has`，DOM 常在（挂 v-has）；
+// - 规则行「编辑 / 删除 / 复制」：`RouteRules.vue:296` 在 `mode === 'view'` 时整个操作列只 render 一个
+//   「查看」按钮，写按钮随模式收敛根本不渲染 → 用 `expectHidden`。
+//
+// 两条定位 / 数据纪律（2026-10-16 实测踩坑后固化）：
+// 1. **写入口一律用 `readonly.buttonByText`（CSS/文本）定位，不要用 `getByRole`**：
+//    v-has 的隐藏手段是 `display: none`，而 Playwright 的 role 定位基于无障碍树、
+//    看不见 `display:none` 的元素 → 隐藏后的写按钮 `getByRole` 恒为 count 0，
+//    「仍在 DOM 中（`expectVHasHidden`）」与「点击」类断言必然误报失败。
+//    只读视角**保留可见**的「查看」入口仍用 `getByRole`（可见元素在无障碍树中）。
+// 2. **行内写入口以「行已渲染」为前提**：列表 `searchParams` 默认 `{ enabled: 'true' }`
+//    （`RouteTable/index.vue:75`），而联调环境路由表全为停用态 → 首屏列表为空、
+//    行内「启用 / 停用」根本不渲染。必须先清空「状态」筛选并校验数据行数 > 0
+//    （`clearRouteTableStatusFilterReadonly`；同 docs RT-L-17 / `test_06` 的既有坑）。
+// ---------------------------------------------------------------------------
+
+/** 路由表列表视图根（只读视角恒存在，用作就绪锚点） */
+function routeTableListView(page) {
+  return page.locator('.route-table .list-view');
+}
+
+/** 列表表头「路由表类型」单元格（只读视角恒存在，用作就绪锚点） */
+function routeTableListTypeHeader(page) {
+  return routeTableList(page)
+    .headers()
+    .filter({ hasText: DOC_ROUTE_TABLE.listHeaders[0] })
+    .first();
+}
+
+/** 列表 Global 行（列表页写入口可见性断言的作用域） */
+function routeTableGlobalRow(page) {
+  return globalRouteTableRow(routeTableList(page));
+}
+
+/** 列表 Global 行「启用」写入口（挂 v-has → CSS/文本定位，见文件头纪律 1） */
+function routeTableGlobalEnableBtn(page) {
+  return readonly.buttonByText(
+    routeTableGlobalRow(page),
+    DOC_ROUTE_TABLE.enabledLabel,
+  );
+}
+
+/** 列表 Global 行「停用」写入口（挂 v-has → CSS/文本定位，见文件头纪律 1） */
+function routeTableGlobalDisableBtn(page) {
+  return readonly.buttonByText(
+    routeTableGlobalRow(page),
+    DOC_ROUTE_TABLE.disabledLabel,
+  );
+}
+
+/** 列表操作列「查看」只读入口（只读视角保留可见，role 定位可用） */
+function routeTableGlobalViewBtn(page) {
+  return routeTableGlobalRow(page).getByRole('button', {
+    name: DOC_ROUTE_RULE.viewRuleButton,
+  });
+}
+
+/**
+ * 列表页「新增 / 创建 / 添加」类写入口（本模块列表页无此类入口，只读视角下断言其为空）。
+ *
+ * 必须用 CSS/文本定位：只有 CSS 定位才可能命中「渲染了但没被隐藏」的写入口；
+ * role 定位对已隐藏元素恒为 count 0，会让这条断言退化成恒真。
+ */
+function routeTableListCreateEntries(page) {
+  return readonly.buttonByText(routeTableListView(page), /新增|创建|添加/);
+}
+
+/**
+ * 只读视角列表页：清空「状态」筛选，并把 Global 行等出来（缺一不可）。
+ *
+ * 联调环境路由表**全部为停用态**，而列表 `searchParams` 默认 `{ enabled: 'true' }`
+ * （`RouteTable/index.vue:75`）→ 首屏列表为空、行内「启用 / 停用」根本不渲染，
+ * 直接断言行内按钮会因「DOM 中不存在」而失败（同 docs RT-L-17 / `test_06` 的既有坑）。
+ * 清空走仓库既有写法 `clearRouteTableSearchFilter(page, ROUTE_TABLE_SEARCH_COLUMN.status)`，
+ * 随后**硬校验数据行数 > 0**：清空动作若静默失效（找不到清空图标 / 请求未回流），
+ * 这里立刻报「列表仍无数据行」，而不是把问题伪装成「写入口不存在」。
+ */
+async function clearRouteTableStatusFilterReadonly(page) {
+  const trigger = routeTableSearchSelect(page, ROUTE_TABLE_SEARCH_COLUMN.status);
+  await expect(trigger, '只读视角列表应保留「状态」筛选只读控件').toBeVisible(
+    { timeout: 15000 },
+  );
+  if ((await trigger.locator('.ivu-select-selected-value').count()) > 0) {
+    common.log('清空列表「状态」筛选（默认「启用」会隐藏全部停用路由表）');
+    await waitForRouteTablesListResponse(page, () =>
+      clearRouteTableSearchFilter(page, ROUTE_TABLE_SEARCH_COLUMN.status),
+    );
+  }
+  await ensureRouteTableRowReachable(page, routeTableGlobalRow(page));
+  const rowCount = await routeTableList(page).dataRows().count();
+  expect(
+    rowCount,
+    '只读视角清空「状态」筛选后路由表列表仍无数据行，无法断言行内写入口',
+  ).toBeGreaterThan(0);
+  common.log(`只读视角路由表列表数据行数=${rowCount}`);
+  return rowCount;
+}
+
+/** 列表只读控件：类型筛选下拉 */
+function routeTableTypeFilterSelect(page) {
+  return routeTableSearchSelect(page, ROUTE_TABLE_SEARCH_COLUMN.type);
+}
+
+/** 列表只读控件：属主搜索框 */
+function routeTableOwnerSearchBox(page) {
+  return routeTableList(page)
+    .searchArea()
+    .getByPlaceholder('请输入路由表属主查询');
+}
+
+/** 列表只读控件：分页器 */
+function routeTablePager(page) {
+  return routeTableList(page).pagination();
+}
+
+/** 路由规则详情视图根（只读视角恒存在，用作就绪锚点） */
+function routeRulesView(page) {
+  return page.locator('.route-rules');
+}
+
+/** 详情页「当前路由表」标识（只读视角恒存在，用作就绪锚点） */
+function routeRulesOwnerLabel(page) {
+  return routeRulesView(page).locator('.route-owner-label');
+}
+
+/** 详情页工具栏（写入口容器：返回 / 进入编辑模式 / 退出编辑模式 / 提交并生效） */
+function routeRulesHeaderActions(page) {
+  return routeRulesView(page).locator('.route-editor-header .header-actions');
+}
+
+/** 详情页「返回」列表入口（只读视角保留） */
+function routeRulesBackBtn(page) {
+  return routeRulesHeaderActions(page).getByRole('button', {
+    name: DOC_ROUTE_TABLE.backButton,
+  });
+}
+
+/** 详情页「进入编辑模式」（v-if="mode === 'view'" + v-has → CSS/文本定位） */
+function routeRulesEnterEditBtn(page) {
+  return readonly.buttonByText(
+    routeRulesHeaderActions(page),
+    DOC_ROUTE_TABLE.enterEditMode,
+  );
+}
+
+/** 详情页「退出编辑模式」（`v-if="mode !== 'view'"` 分支，只读视角不渲染 → CSS/文本定位） */
+function routeRulesExitEditBtn(page) {
+  return readonly.buttonByText(
+    routeRulesHeaderActions(page),
+    DOC_ROUTE_TABLE.exitEditMode,
+  );
+}
+
+/** 详情页「提交并生效」（`v-if="mode !== 'view'"` 分支，只读视角不渲染 → CSS/文本定位） */
+function routeRulesSubmitAndEffectBtn(page) {
+  return readonly.buttonByText(
+    routeRulesHeaderActions(page),
+    DOC_ROUTE_TABLE.submitAndEffect,
+  );
+}
+
+/** 详情页「添加规则」（v-show="mode === 'edit'" + v-has → CSS/文本定位） */
+function routeRulesAddRuleBtn(page) {
+  return readonly.buttonByText(
+    routeRulesView(page).locator('.action-bar'),
+    DOC_ROUTE_TABLE.createRule,
+  );
+}
+
+/** 详情页「路由表已启用」下拉（视图模式下 disabled，只读视角恒停留视图模式） */
+function routeRulesEnabledSelectDisabled(page) {
+  return routeRulesView(page).locator('.enable-row .ivu-select-disabled');
+}
+
+/** 规则表格主区第 index 行（规则行写入口可见性断言的作用域） */
+function routeRulesRowByIndex(page, index) {
+  return routeRulesMainRows(page).nth(index);
+}
+
+/** 规则行「查看」只读入口（只读视角保留可见，role 定位可用） */
+function routeRulesRowViewBtn(page, index) {
+  return routeRulesRowByIndex(page, index).getByRole('button', {
+    name: DOC_ROUTE_RULE.viewRuleButton,
+  });
+}
+
+/** 规则行「编辑」写入口（视图模式下不渲染 → CSS/文本定位） */
+function routeRulesRowEditBtn(page, index) {
+  return readonly.buttonByText(
+    routeRulesRowByIndex(page, index),
+    DOC_ROUTE_TABLE.editRuleButton,
+  );
+}
+
+/** 规则行「删除」写入口（视图模式下不渲染 → CSS/文本定位） */
+function routeRulesRowDeleteBtn(page, index) {
+  return readonly.buttonByText(
+    routeRulesRowByIndex(page, index),
+    DOC_ROUTE_TABLE.deleteRuleButton,
+  );
+}
+
+/** 规则行「复制」写入口（视图模式下不渲染 → CSS/文本定位） */
+function routeRulesRowCopyBtn(page, index) {
+  return readonly.buttonByText(
+    routeRulesRowByIndex(page, index),
+    DOC_ROUTE_TABLE.copyRuleButton,
+  );
+}
+
+/** 读取规则行「备用集群和模型」单元格内的标签文本（列下标 3） */
+async function getRuleRowFallbackTags(page, index) {
+  const cell = routeRulesRowByIndex(page, index).locator('td').nth(3);
+  const tags = cell.locator('.ivu-tag');
+  const count = await tags.count();
+  const texts = [];
+  for (let i = 0; i < count; i += 1) {
+    texts.push((await tags.nth(i).innerText()).trim());
+  }
+  return texts;
+}
+
+/**
+ * 优先返回含 fallbacks 的规则行下标（doc RT-RO-03「含 fallbacks 更佳」），
+ * 无含 fallbacks 的行时退回第 1 行；表格无数据行时返回 -1。
+ */
+async function findRuleIndexWithFallback(page) {
+  const names = await getRuleNamesInOrder(page);
+  for (let i = 0; i < names.length; i += 1) {
+    if ((await getRuleRowFallbackTags(page, i)).length > 0) {
+      return i;
+    }
+  }
+  return names.length > 0 ? 0 : -1;
+}
+
+/**
+ * 只读视角直连 URL 进入路由表列表页。
+ * 不走 `gotoRouteTableListPage` —— 它内含 `ensureSessionHealthy` / `handleUrlInvalidAlert`，
+ * 会以 conf.json 的 admin 凭证重登并回写 auth.json，把只读态换回管理员态
+ * （见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoRouteTableListPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, ROUTE_TABLE_LIST_PATH, {
+    ready: routeTableListView(page),
+  });
+  await readonly.expectStillReadonly(page);
+}
+
+/** 只读视角列表就绪判定：列表视图 + 表头；写入口隐藏不影响这两个锚点 */
+async function expectRouteTableListPageReadyReadonly(page) {
+  await expect(routeTableListView(page)).toBeVisible({ timeout: 15000 });
+  await expect(routeTableListTypeHeader(page)).toBeVisible({ timeout: 15000 });
+  await readonly.expectStillReadonly(page);
+}
+
+/** 只读视角详情就绪判定：详情视图 + 「当前路由表」标识 */
+async function expectRouteRulesDetailReadyReadonly(page) {
+  await expect(routeRulesView(page)).toBeVisible({ timeout: 15000 });
+  await expect(routeRulesOwnerLabel(page)).toBeVisible({ timeout: 15000 });
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 只读视角从路由表列表进入 Global 路由规则详情页。
+ *
+ * 只读视角保留「查看」入口（RT-RO-01 预期 2），故按 doc 前置条件「从路由表列表进入某张
+ * 路由表的规则详情页」经列表点击进入；全程只用只读控件（清空「状态」筛选）与只读入口，
+ * 不触碰会话守卫。
+ */
+async function openGlobalRouteRulesDetailAsReadonly(page) {
+  // 先清空「状态」筛选并硬校验数据行已渲染（Global 行不在则必失败，不会静默点空）
+  await clearRouteTableStatusFilterReadonly(page);
+  await waitForGlobalRouteRulesGetResponse(page, () =>
+    routeTableGlobalViewBtn(page).click(),
+  );
+  await page.waitForTimeout(1000);
+  await expectRouteRulesDetailReadyReadonly(page);
+}
+
+/** 只读视角详情页恒停留视图模式（RT-RO-02 预期 2：无编辑模式专属元素） */
+async function expectRouteRulesViewModeReadonly(page) {
+  await expect(routeRulesEnabledSelectDisabled(page)).toBeVisible({
+    timeout: 15000,
+  });
+  await expect(routeRulesDragTip(page)).toHaveCount(0);
+}
+
+/**
+ * 按行下标点开「查看规则」抽屉（不使用按规则名的 `rowByText`——它是子串匹配，
+ * 会把 `test` 与 `test123` 串到同一行）。
+ */
+async function openViewRuleDrawerByRowIndex(page, index) {
+  await routeRulesRowViewBtn(page, index).click();
+  await page.waitForTimeout(500);
+  await expect(page.locator('.rule-view-panel')).toBeVisible({ timeout: 15000 });
+  await expect(
+    page
+      .locator('.ivu-drawer-header-inner')
+      .getByText(DOC_ROUTE_RULE_FORM.viewRuleTitle, { exact: true }),
+  ).toBeVisible();
+}
+
+/** 只读「查看规则」抽屉就绪（规则详情只读入口保留） */
+async function expectRuleViewDrawerReadyReadonly(page) {
+  await expect(page.locator('.rule-view-panel')).toBeVisible({ timeout: 15000 });
+  await expect(
+    page
+      .locator('.ivu-drawer-header-inner')
+      .getByText(DOC_ROUTE_RULE_FORM.viewRuleTitle, { exact: true }),
+  ).toBeVisible();
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 只读「查看规则」抽屉的 fallbacks 展示应与列表行一致：
+ * 行内有 fallbacks 时逐项比对标签文案，行内无 fallbacks 时抽屉展示 '-'
+ * （RT-RO-03 预期 2「点击可打开规则详情（含 fallbacks 展示）」）。
+ */
+async function expectRuleViewFallbackMatchesRow(page, index) {
+  const expected = await getRuleRowFallbackTags(page, index);
+  const infoRow = ruleViewFallbackInfoRow(page);
+  await expect(infoRow).toBeVisible();
+  if (expected.length === 0) {
+    await expect(infoRow.locator('.info-value')).toHaveText('-');
+    return;
+  }
+  await expectRuleViewFallbackTags(page, expected);
+}
+
 module.exports = {
   DOC_ROUTE_TABLE,
   ROUTE_TABLE_SEARCH_COLUMN,
@@ -2395,6 +2847,7 @@ module.exports = {
   deleteRuleByName,
   setRouteTableEnabledInDetail,
   expectRouteRulesSubmitError,
+  submitGlobalRouteRulesAndExpectBlockedTip,
   ruleForm,
   fillRuleName,
   fillRuleExpression,
@@ -2449,8 +2902,11 @@ module.exports = {
   navigateToRouteTableByOwner,
   clearRouteTableOwnerSearch,
   routeTableRow,
+  routeTableTypeCell,
+  ROUTE_TABLE_DATA_COLUMN,
   buildDetailBreadcrumbPattern,
   expectRouteTableRowVisible,
+  expectRouteTableTypeCell,
   expectRouteTableStatus,
   expectRouteTableToggleButtons,
   openRouteTableDetail,
@@ -2470,6 +2926,7 @@ module.exports = {
   routeRulesDragTip,
   expectRouteRulesDragTipVisible,
   expectRuleRowsDraggable,
+  expectRuleRowsCursorStyle,
   getSubmitAndEffectButton,
   isSubmitAndEffectDisabled,
   expectSubmitAndEffectDisabled,
@@ -2508,4 +2965,41 @@ module.exports = {
   getRouteTablesViaApi: apiUtils.getRouteTablesViaApi,
   setGlobalRouteRulesViaApi: apiUtils.setGlobalRouteRulesViaApi,
   findGlobalRouteTableViaApi: apiUtils.findGlobalRouteTableViaApi,
+
+  // 只读管理员视角（docs/route-management/02-功能测试用例/06-只读视角.md RT-RO-01~03）
+  routeTableListView,
+  routeTableListTypeHeader,
+  routeTableGlobalRow,
+  routeTableGlobalEnableBtn,
+  routeTableGlobalDisableBtn,
+  routeTableGlobalViewBtn,
+  routeTableListCreateEntries,
+  clearRouteTableStatusFilterReadonly,
+  routeTableTypeFilterSelect,
+  routeTableOwnerSearchBox,
+  routeTablePager,
+  routeRulesView,
+  routeRulesOwnerLabel,
+  routeRulesHeaderActions,
+  routeRulesBackBtn,
+  routeRulesEnterEditBtn,
+  routeRulesExitEditBtn,
+  routeRulesSubmitAndEffectBtn,
+  routeRulesAddRuleBtn,
+  routeRulesEnabledSelectDisabled,
+  routeRulesRowByIndex,
+  routeRulesRowViewBtn,
+  routeRulesRowEditBtn,
+  routeRulesRowDeleteBtn,
+  routeRulesRowCopyBtn,
+  getRuleRowFallbackTags,
+  findRuleIndexWithFallback,
+  gotoRouteTableListPageReadonly,
+  expectRouteTableListPageReadyReadonly,
+  expectRouteRulesDetailReadyReadonly,
+  openGlobalRouteRulesDetailAsReadonly,
+  expectRouteRulesViewModeReadonly,
+  openViewRuleDrawerByRowIndex,
+  expectRuleViewDrawerReadyReadonly,
+  expectRuleViewFallbackMatchesRow,
 };

@@ -28,6 +28,9 @@
  * - 问题名称即身份（全局唯一）；类型双枚举 choice（选项 map）/ score（档位数组），互斥
  * - 问题 ≤10、选项/档位 1-10、选项名不含 |、单问题阈值 min_confidence 可选（0-1）
  * - 表格分页器 CSS 隐藏（.page-table .page { display:none }）
+ * - 离开拦截：`beforeRouteLeave` 在「编辑模式 + 有未提交改动」时弹二次确认
+ *   （2026-10-16 补齐，文案与「退出编辑模式」同串 `intentConfig.exitConfirm`）；
+ *   只拦应用内路由跳转，`page.goto()` 等整页跳转不触发
  *
  * 数据造数/备份/恢复统一在 api/intent-config-api-utils.js 中实现，本文件不直连网络。
  * 本文件内部禁用裸选择器于 spec —— 所有定位集中于此；spec 只调用本模块导出函数。
@@ -36,9 +39,13 @@ const { expect, test } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const common = require('../../utils/common');
+const readonly = require('../../utils/readonly');
 const umUtils = require('../user/UserPage');
 const apiUtils = require('../../api/intent-config-api-utils');
-const { PageTableComponent } = require('../../components/layout');
+const {
+  PageTableComponent,
+  AppSidebarComponent,
+} = require('../../components/layout');
 const { IVU_DRAWER_VISIBLE } = require('../../components/iview/constants');
 const {
   IvuMessageComponent,
@@ -1190,6 +1197,158 @@ async function cancelExitEditMode(page) {
 }
 
 // ---------------------------------------------------------------------------
+// 离开拦截（应用内路由跳转，IC-DR-01 / IC-DR-02）
+// ---------------------------------------------------------------------------
+
+/**
+ * 侧栏菜单组件（`components/layout/AppSidebarComponent`）。
+ * 离开拦截必须用**应用内路由跳转**触发：`src/modules/IntentConfig/index.vue` 的
+ * `beforeRouteLeave` 只拦 vue-router 跳转，`page.goto()` / 刷新属整页跳转，守卫不会执行
+ * （与路由规则页 `pages/route/RoutePage.js` 的「SPA 的离开确认框不会拦硬跳转」同理），
+ * 用硬跳转验证会得到假通过。
+ */
+function sidebar(page) {
+  return new AppSidebarComponent(page);
+}
+
+/**
+ * 可与意图配置交叉跳转的兄弟模块菜单项。文案取自 `src/i18n/zh.js` / `en.js` 的 `nav.*`
+ * （节点结构见 `ai-gateway-runtime/conf/nav_tree.toml`「功能增强 / 消费方管理」），
+ * 中英双写在先，`slug` 取自 `src/router/router.js`。
+ * 这些菜单项只用于触发一次应用内路由跳转，取第一个可见者，避免环境菜单差异导致硬失败。
+ */
+const OTHER_MODULE_MENU_ITEMS = [
+  {
+    label: 'AI缓存规则',
+    enLabel: 'AI Cache Rule',
+    slug: 'ai-cache-rules',
+  },
+  {
+    label: '流量镜像规则',
+    enLabel: 'Traffic Mirror Rule',
+    slug: 'traffic-mirror-rules',
+  },
+  {
+    label: 'AI上下文压缩',
+    enLabel: 'AI Context Compress',
+    slug: 'ai-context-rules',
+  },
+  { label: '批量任务', enLabel: 'Batch Tasks', slug: 'batches' },
+  { label: 'API Key 管理', enLabel: 'API Key Manage', slug: 'api-key' },
+];
+
+/**
+ * 点击侧栏中其它模块的菜单项，触发应用内路由跳转（返回被点击的目标，含 label / slug）。
+ * 侧栏在 `sidebarNav.openDefauleMenu()` 里展开全部一级子菜单，故目标项无需先展开父级即可见；
+ * 仍按可见性择一（中/英文案都试），菜单结构变化时给出明确报错而非误判。
+ */
+async function clickOtherModuleMenuItem(page, items = OTHER_MODULE_MENU_ITEMS) {
+  await expect(sidebar(page).menu()).toBeVisible({ timeout: 15000 });
+  for (const item of items) {
+    for (const text of [item.label, item.enLabel].filter(Boolean)) {
+      const menuItem = sidebar(page).menuItem(text).first();
+      if (await menuItem.isVisible().catch(() => false)) {
+        common.log(`侧栏跳转目标：${text}（/${item.slug}）`);
+        await menuItem.click();
+        await page.waitForTimeout(1000);
+        return item;
+      }
+    }
+  }
+  throw new Error(
+    '侧栏未找到可点击的其它模块菜单项（尝试过: ' +
+      items.map((i) => `${i.label}/${i.enLabel}`).join('、') +
+      '）',
+  );
+}
+
+/** `$Modal.confirm` 的标题（iView `modal/confirm.js` → `.ivu-modal-confirm-head-title`） */
+function confirmModalTitle(page) {
+  return modal(page).visible().locator('.ivu-modal-confirm-head-title');
+}
+
+/** `$Modal.confirm` 的正文容器（iView `modal/confirm.js` → `.ivu-modal-confirm-body`） */
+function confirmModalBody(page) {
+  return modal(page).visible().locator('.ivu-modal-confirm-body');
+}
+
+/**
+ * 离开拦截确认框：标题「信息提示」+ 正文与退出编辑模式同串文案
+ * （`intentConfig.exitConfirm`，`src/i18n/zh.js:1658`）。
+ * 比 `expectExitConfirmModal` 更强：正文按 `.ivu-modal-confirm-body` 精确取值。
+ */
+async function expectLeaveConfirmModal(
+  page,
+  expected = DOC_INTENT_CONFIG_PAGE.exitConfirm,
+) {
+  await modal(page).expectOpen(DOC_INTENT_CONFIG_PAGE.informationTips);
+  await expect(confirmModalTitle(page)).toHaveText(
+    DOC_INTENT_CONFIG_PAGE.informationTips,
+  );
+  await expect(confirmModalBody(page)).toHaveText(expected);
+}
+
+/** 当前 URL（取消拦截后要求一字不变，故先取值再比对） */
+function currentUrl(page) {
+  return page.url();
+}
+
+/** 取消拦截后 URL 必须保持不变（仍停留在意图配置页，且未被改写成目标路由） */
+async function expectUrlUnchanged(page, expectedUrl) {
+  expect(page.url(), `取消离开拦截后 URL 应保持 ${expectedUrl}`).toBe(
+    expectedUrl,
+  );
+}
+
+/** 仍停留在意图配置页（页面根可见 + URL 命中 /intent-config + 无会话异常弹窗） */
+async function expectStillOnIntentConfigPage(page, expectedUrl) {
+  await expect(pageRoot(page)).toBeVisible();
+  await expect(confirmModalBody(page)).toHaveCount(0);
+  if (expectedUrl) {
+    await expectUrlUnchanged(page, expectedUrl);
+  } else {
+    expect(page.url(), 'URL 应仍命中 /intent-config').toContain(
+      INTENT_CONFIG_PATH,
+    );
+  }
+}
+
+/** 确定离开后跳转到目标模块（URL 命中目标 slug、不再命中 /intent-config） */
+async function expectNavigatedToOtherModule(page, slug, timeout = 15000) {
+  await expect
+    .poll(() => page.url(), {
+      timeout,
+      message: `确定离开后应跳转到 /${slug}`,
+    })
+    .toContain(`/${slug}`);
+  expect(page.url(), '跳转后 URL 不应再命中 /intent-config').not.toContain(
+    INTENT_CONFIG_PATH,
+  );
+}
+
+/** 离开拦截确认框：点「确定」（放行跳转） */
+async function confirmLeaveNavigation(page) {
+  await modal(page).confirm();
+  await page.waitForTimeout(1000);
+}
+
+/** 离开拦截确认框：点「取消」（留在本页） */
+async function cancelLeaveNavigation(page) {
+  await modal(page).cancel();
+  await page.waitForTimeout(500);
+}
+
+/**
+ * 在视图中点击侧栏其它菜单后**不应**出现确认框（视图模式 / 编辑模式无改动时不拦截）。
+ * 返回被点击的目标，供调用方继续断言跳转结果。
+ */
+async function clickOtherModuleMenuItemExpectNoModal(page, items) {
+  const target = await clickOtherModuleMenuItem(page, items);
+  await expectNoModal(page);
+  return target;
+}
+
+// ---------------------------------------------------------------------------
 // 删除问题（确认框）
 // ---------------------------------------------------------------------------
 
@@ -1473,6 +1632,118 @@ async function expectIntentConfigMessageDuringAction(
   );
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/intent-config/02-功能测试用例/05-只读视角.md IC-RO-01~03）
+// ---------------------------------------------------------------------------
+
+/** 页头「进入编辑模式」写入口（位于挂 `v-has` 的 `.ic-actions` 内，只读视角不可见） */
+function headerEnterEditBtn(page) {
+  return headerActions(page).getByRole('button', {
+    name: DOC_INTENT_CONFIG_PAGE.enterEditMode,
+    exact: true,
+  });
+}
+
+/** 页头「退出编辑模式」写入口（与「保存并发布」同在 `v-else` 分支，只读视角不渲染） */
+function headerExitEditBtn(page) {
+  return headerActions(page).getByRole('button', {
+    name: DOC_INTENT_CONFIG_PAGE.exitEditMode,
+    exact: true,
+  });
+}
+
+/** 页头「保存并发布」写入口（只读视角不渲染；只读用例只断言可见性，不点击） */
+function headerSaveAndPublishBtn(page) {
+  return headerActions(page).getByRole('button', {
+    name: DOC_INTENT_CONFIG_PAGE.saveAndPublish,
+    exact: true,
+  });
+}
+
+/** 问题列表「添加问题」按钮（容器 `.ic-list-toolbar` 同时受 v-show 与 v-has 约束） */
+function questionToolbarAddBtn(page) {
+  return questionToolbar(page).getByRole('button', {
+    name: DOC_INTENT_CONFIG_PAGE.addQuestion,
+    exact: true,
+  });
+}
+
+/** 问题行「查看」按钮（只读视角保留的只读入口） */
+function questionRowViewBtn(page, name) {
+  return getQuestionRow(page, name).getByRole('button', {
+    name: DOC_INTENT_CONFIG_PAGE.viewButton,
+    exact: true,
+  });
+}
+
+/** 问题行「编辑」按钮（只读视角因显示分支收敛为 `mode === 'view'` 而不渲染） */
+function questionRowEditBtn(page, name) {
+  return getQuestionRow(page, name).getByRole('button', {
+    name: DOC_INTENT_CONFIG_PAGE.editButton,
+    exact: true,
+  });
+}
+
+/** 问题行「删除」按钮（只读视角因显示分支收敛为 `mode === 'view'` 而不渲染） */
+function questionRowDeleteBtn(page, name) {
+  return getQuestionRow(page, name).getByRole('button', {
+    name: DOC_INTENT_CONFIG_PAGE.deleteButton,
+    exact: true,
+  });
+}
+
+/**
+ * 查看抽屉字段 label 全集（只读查看能力保留：IC-RO-02 预期 2「全字段纯文案」）。
+ * QuestionView 固定渲染 5 行：问题名称 / 类型 / 判定说明 /（选项 | 档位）/ 最小置信度覆盖，
+ * 其中第 4 行 label 随问题类型二选一（choice → 选项，score → 档位），故按「二者之一」断言。
+ */
+async function expectViewDrawerFieldLabels(page) {
+  const [name, type, instructions, criteria, levels, minConfidence] =
+    DOC_INTENT_CONFIG_VIEW.fieldLabels;
+  const infoRows = questionViewScope(page).locator('.info-row');
+  await expect(infoRows).toHaveCount(5);
+  for (const label of [name, type, instructions, minConfidence]) {
+    await expect(viewDrawerRow(page, label).locator('.info-label')).toHaveText(
+      label,
+    );
+  }
+  const optionRowLabel = (
+    await infoRows.nth(3).locator('.info-label').innerText()
+  ).trim();
+  expect(
+    [criteria, levels],
+    `查看抽屉第 4 行 label 应为「${criteria}」或「${levels}」`,
+  ).toContain(optionRowLabel);
+}
+
+/**
+ * 只读视角直连 URL 进入意图配置页。
+ * 不走 `ensureAppSession` / `handleUrlInvalidAlert` —— 它们会以 admin 凭证重登并回写
+ * auth.json，把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoIntentConfigPageReadonly(page) {
+  await ensureChineseLang(page);
+  await readonly.gotoAsReadonly(page, INTENT_CONFIG_PATH, {
+    ready: pageRoot(page),
+  });
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 只读视角就绪判定：锚点只用只读视角也存在且可见的元素
+ * （页面根 / 页面描述 / 问题表格表头），不能用 `expectViewMode`——它断言
+ * 「进入编辑模式」可见，只读视角必然失败。
+ */
+async function expectIntentConfigPageReadyReadonly(page) {
+  await expect(pageRoot(page)).toBeVisible();
+  await expectPageDesc(page);
+  await expectQuestionTableHeaders(page);
+  await readonly.expectVHasHidden(
+    headerActions(page),
+    '意图配置页头写入口区',
+  );
+}
+
 module.exports = {
   // 常量
   DOC_INTENT_CONFIG_PAGE,
@@ -1510,6 +1781,17 @@ module.exports = {
   waitForIntentConfigGetResponse,
   gotoIntentConfigPageAndWaitForConfig,
   reloadIntentConfigPage,
+  // 只读管理员视角（docs/intent-config/…/05-只读视角.md IC-RO-01~03）
+  gotoIntentConfigPageReadonly,
+  expectIntentConfigPageReadyReadonly,
+  headerEnterEditBtn,
+  headerExitEditBtn,
+  headerSaveAndPublishBtn,
+  questionToolbarAddBtn,
+  questionRowViewBtn,
+  questionRowEditBtn,
+  questionRowDeleteBtn,
+  expectViewDrawerFieldLabels,
   // 页头 / 模式 / 未发布提示 / 全局配置
   expectPageDesc,
   expectViewMode,
@@ -1595,6 +1877,20 @@ module.exports = {
   expectExitConfirmModal,
   confirmExitEditMode,
   cancelExitEditMode,
+  // 离开拦截（应用内路由跳转，IC-DR-01 / IC-DR-02）
+  OTHER_MODULE_MENU_ITEMS,
+  sidebar,
+  clickOtherModuleMenuItem,
+  clickOtherModuleMenuItemExpectNoModal,
+  confirmModalTitle,
+  confirmModalBody,
+  expectLeaveConfirmModal,
+  currentUrl,
+  expectUrlUnchanged,
+  expectStillOnIntentConfigPage,
+  expectNavigatedToOtherModule,
+  confirmLeaveNavigation,
+  cancelLeaveNavigation,
   // 删除
   expectDeleteConfirmModal,
   confirmDeleteQuestion,

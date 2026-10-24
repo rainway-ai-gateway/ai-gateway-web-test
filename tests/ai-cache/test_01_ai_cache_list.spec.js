@@ -20,6 +20,8 @@
  * 说明：列表渲染类用例（L-01/02/03/04/05/18）优先使用 mockRulesGetResponse
  * 注入受控集合，避免后端默认值干扰；退出确认类（L-09/10）经 UI 删除本地行制造
  * dirty；提交类（L-13）真实提交后由 cleanup 还原；失败类（L-06/14/15）经 mock。
+ * 「提交并生效」自 2026-10-15 起带 `:disabled="!isDirty"`（无未提交改动时置灰），
+ * AC-L-15 注入同名集合后先本地新增一条异名规则制造改动，再提交验证查重拦截。
  */
 const { test, expect } = require('@playwright/test');
 const utils = require('../../pages/ai-cache/AICachePage');
@@ -453,7 +455,8 @@ test.describe('AI 缓存规则 - 列表与双模式', () => {
     page,
   }) => {
     const newName = utils.generateTestRuleName('ac_l13_');
-    const condText = 'req_path_in("/v1/chat/completions", false)';
+    // 真实集合已含 req_path_in("/v1/chat/completions", false) 的规则，新增规则需用不冲突的 cond
+    const condText = 'default_t()';
 
     await test.step('前置：备份原始集合后进入编辑模式', async () => {
       await utils.ensureAppSession(page);
@@ -492,7 +495,8 @@ test.describe('AI 缓存规则 - 列表与双模式', () => {
 
   test('AC-L-14 提交失败提示「提交失败!」并停留编辑模式', async ({ page }) => {
     const name = utils.generateTestRuleName('ac_l14_');
-    const condText = 'req_path_in("/v1/chat/completions", false)';
+    // 真实集合已含同名默认 cond 的规则，改用不冲突的条件
+    const condText = 'default_t()';
 
     await test.step('前置：拦截 PUT 失败并进入编辑模式新增一条规则', async () => {
       await utils.ensureAppSession(page);
@@ -529,6 +533,25 @@ test.describe('AI 缓存规则 - 列表与双模式', () => {
         await utils.reloadAiCachePage(page);
         await utils.enterEditMode(page);
         await utils.expectEditMode(page);
+      });
+
+      await test.step('前置：本地新增一条规则制造改动，解除「提交并生效」置灰', async () => {
+        // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，AICache/index.vue:49），
+        // 无本地改动时点击无效、等不到查重提示。
+        // 注入的两条同名规则字段完全相同，拖拽重排前后 JSON 相等（isDirty 仍为 false），
+        // 故改用「本地新增一条异名规则」制造改动：两条同名规则仍在集合内，名称查重照旧命中。
+        await utils.openAddRuleDrawer(page);
+        await utils.fillRuleName(page, utils.generateTestRuleName('ac_l15_extra_'));
+        await utils.fillRuleCond(
+          page,
+          'req_path_in("/v1/chat/completions", false)',
+        );
+        await utils.submitRuleFormExpectMessage(
+          page,
+          utils.DOC_AI_CACHE_RULE_FORM.addSuccessMsg,
+        );
+        await utils.expectRuleFormDrawerHidden(page);
+        await utils.expectSubmitAndEffectDisabled(page, false);
       });
 
       await test.step('提交被拦截，提示「规则名称已存在，集合内必须唯一」', async () => {

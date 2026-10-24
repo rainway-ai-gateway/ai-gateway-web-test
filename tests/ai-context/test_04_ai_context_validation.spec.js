@@ -125,6 +125,18 @@ test.describe('AI 上下文压缩 - 字段校验矩阵', () => {
         });
         await utils.reloadAiContextPage(page);
         await utils.enterEditMode(page);
+        // 「提交并生效」带 :disabled="!isRulesDirty"（2026-10-15 变更，AIContext/index.vue:49），
+        // 无本地改动时点击无效、等不到查重提示。
+        // 注入的两条同 cond 规则字段完全相同，拖拽重排前后 JSON 相等（isRulesDirty 仍为 false），
+        // 故改用「本地新增一条异 cond 规则」制造改动：两条重复规则仍在集合内，查重照旧命中。
+        await utils.openAddRuleDrawer(page);
+        await utils.fillRuleCond(
+          page,
+          'req_path_in("/test/ax_v03_extra", false)',
+        );
+        await utils.submitRuleFormExpectMessage(page, F.addSuccessMsg);
+        await utils.expectRuleFormDrawerHidden(page);
+        await utils.expectSubmitAndEffectDisabled(page, false);
         await utils.expectAiContextMessageDuringAction(
           page,
           F.condDuplicateMsg,

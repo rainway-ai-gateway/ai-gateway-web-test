@@ -33,6 +33,7 @@ const {
   ENTITY_DETAIL_DRAWER_PARTS,
   API_KEY_DETAIL_DRAWER_PARTS,
   getAppBaseUrl,
+  isTabActive,
   ivuDrawer,
   entityDetailDrawer,
   apiKeyDetailDrawer,
@@ -55,7 +56,9 @@ const {
   getUserData,
   getOpenApiBaseUrl,
   findEntityByNameViaApi,
+  fetchAllEntityTypesViaApi,
 } = require('../../api/entity-api-utils');
+const readonly = require('../../utils/readonly');
 // Lazy requires to break horizontal circular dependency
 
 function entityTypeForm(page, drawerTitle = DRAWER_TITLE.createType) {
@@ -1238,6 +1241,277 @@ async function expectEntityTypeNameInputMaxLength(page, maxLength) {
   await expectEntityTypeNameLengthValidation(page);
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/entity-type/02-功能测试用例/02-只读视角.md EM-T-RO-01~03）
+//
+// 产品依据（ai-gateway-web src/modules/Entity/）：
+// - components/EntityTypeList.vue:20  「创建类型」Button 挂 `v-has`
+// - components/EntityTypeList.vue:124 操作列「编辑」Button `directives:[{name:'has'}]`
+// - components/EntityTypeList.vue:143 操作列「删除」Button `directives:[{name:'has'}]`
+// 上述三处均由全局指令 `v-has`（src/utils/directive.js）在只读态加 `.v-has-hidden`
+// （src/assets/css/global.less:63，display:none !important），元素仍在 DOM 中。
+//
+// 只读路径不得调用 `gotoEntityTypeManagementPage` / `ensureAppSession` /
+// `handleUrlInvalidAlert`——它们会以 conf.json 的 admin 凭证重登并回写 auth.json，
+// 把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）。
+// ---------------------------------------------------------------------------
+
+/** 「Entity类型管理」Tab 文案（src/i18n/zh.js entity.typeManagement） */
+const ENTITY_TYPE_TAB_LABEL = 'Entity类型管理';
+
+/** Entity 管理前端路由（src/router/router.js path:'Entity'） */
+const ENTITY_PAGE_PATH = 'Entity';
+
+/** 列表写入口文案（i18n entity.createType / com.edit / com.del） */
+const ENTITY_TYPE_CREATE_LABEL = '创建类型';
+const ENTITY_TYPE_ROW_WRITE_LABELS = ['编辑', '删除'];
+
+/**
+ * 「创建类型」按钮（EntityTypeList.vue:20 挂 `v-has`）。
+ * 用 `readonly.buttonByText`（CSS 选择器 + 文本过滤）而非 `getByRole`：
+ * 只读态该按钮带 `.v-has-hidden`（`display:none`），而 Playwright 的 role 定位基于
+ * 无障碍树、看不见隐藏元素，用 `getByRole` 会得到 count=0，无法断言 v-has 机制本身。
+ * 同一 locator 在管理员对照步骤复用（样式不同、定位机制相同）。
+ */
+function entityTypeCreateBtn(page) {
+  return readonly.buttonByText(page, ENTITY_TYPE_CREATE_LABEL);
+}
+
+/** 「创建类型」抽屉（未打开时 `.ivu-drawer-wrap` 带 `.ivu-drawer-hidden`，count 为 0） */
+function entityTypeCreateDrawer(page) {
+  return ivuDrawer(page).withTitle(DRAWER_TITLE.createType);
+}
+
+/** 类型列表数据行（排除搜索行与「暂无数据」空态行） */
+function entityTypeRowByText(page, typeName) {
+  return entityTypeTable(page)
+    .dataRows()
+    .filter({ hasText: typeName })
+    .first();
+}
+
+/** 行内写按钮（EntityTypeList.vue:124 / :143 操作列「编辑」「删除」，同样挂 `v-has`） */
+function entityTypeRowWriteBtn(page, typeName, label) {
+  return readonly.buttonByText(entityTypeRowByText(page, typeName), label);
+}
+
+/**
+ * 只读视角切到「Entity类型管理」Tab。
+ * 不复用 `switchToEntityTypeTab`：它以「创建类型」按钮可见判定就绪，
+ * 只读态该按钮被 v-has 隐藏，会误判为「Tab 切换未生效」。
+ */
+async function switchToEntityTypeTabReadonly(page) {
+  if (!(await isTabActive(page, ENTITY_TYPE_TAB_LABEL))) {
+    await entityTabs(page).clickTabByText(ENTITY_TYPE_TAB_LABEL);
+  }
+  await expect(
+    entityTabs(page).tabByText(ENTITY_TYPE_TAB_LABEL),
+    '「Entity类型管理」Tab 应处于选中态',
+  ).toHaveClass(/ivu-tabs-tab-active/, { timeout: 15000 });
+  await entityTypeTable(page).waitForLoaded();
+}
+
+/**
+ * 只读视角就绪判定：布局内容容器 + 面包屑页标题 + 类型 Tab 选中 + 表格表头。
+ * 全部为只读态同样存在的锚点（「创建类型」按钮等写入口只读态不可见，不能用于就绪判定）。
+ * 不用 `waitForEntityManagementShell`（它额外断言 Tab 标签可见，此处已用更强的「Tab 选中」替代）。
+ */
+async function expectEntityTypePageReadyReadonly(page) {
+  await readonly.expectReadonlyVisible(
+    readonly.contentView(page),
+    '布局内容容器（.bfe-content-view）',
+  );
+  await expectEntityManagementPageTitle(page);
+  await expect(
+    entityTabs(page).tabByText(ENTITY_TYPE_TAB_LABEL),
+    '「Entity类型管理」Tab 应处于选中态',
+  ).toHaveClass(/ivu-tabs-tab-active/, { timeout: 15000 });
+  await expectEntityTypeTableVisible(page);
+}
+
+/**
+ * 只读视角直接进入 Entity 类型管理页（直连 URL + 切 Tab + 就绪判定）。
+ * 全程不做会话自愈，只校验 localStorage.user.role 仍为只读角色。
+ *
+ * 坑（2026-10-16 实测踩过）：`readonly.gotoAsReadonly` 的第二个参数是**前端路由路径**，
+ * 它内部会自己拼 `getAppBaseUrl()`。传 `buildProductPageUrl(page, 'Entity')` 这种
+ * **完整 URL** 会拼成 `http://host:port/http://host:port/Entity` → 无匹配路由 → 路由守卫
+ * `authorize.js` 的 `findNav(undefined)` 失败 → 跳登录页 → 页面整体不渲染，
+ * 表现为就绪锚点 `element(s) not found`。
+ */
+async function gotoEntityTypeManagementPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, ENTITY_PAGE_PATH, {
+    // 就绪锚点用布局内容容器：layout.vue:42 恒定渲染，与模块、角色无关
+    ready: readonly.contentView(page),
+  });
+  await switchToEntityTypeTabReadonly(page);
+  await expectEntityTypePageReadyReadonly(page);
+  await readonly.expectStillReadonly(page);
+}
+
+/** 只读：页头「创建类型」写入口被 v-has 隐藏，且创建抽屉未打开（EM-T-RO-01 预期 1、2） */
+async function expectEntityTypeCreateEntryHiddenReadonly(page) {
+  await readonly.expectVHasHidden(
+    entityTypeCreateBtn(page),
+    '「创建类型」按钮',
+  );
+  await readonly.expectHidden(
+    entityTypeCreateDrawer(page),
+    '「创建类型」抽屉（未打开）',
+  );
+}
+
+/** 只读：检索区与分页器等只读能力保留（EM-T-RO-01 预期 3 / EM-T-RO-03 预期 2） */
+async function expectEntityTypeReadonlyCapabilitiesVisible(page) {
+  const table = entityTypeTable(page);
+  await readonly.expectReadonlyVisible(table.searchArea(), '列表检索区');
+  await readonly.expectReadonlyVisible(
+    table.searchInput(ENTITY_TYPE_SEARCH_PLACEHOLDER),
+    '「类型名」查询输入框',
+  );
+  await expectEntityTypePaginationVisible(page);
+}
+
+/** 只读：检索目标类型并等待其行可见（只读查询能力） */
+async function searchEntityTypeAndExpectRowReadonly(page, typeName) {
+  await searchEntityType(page, typeName);
+  await expectEntityTypeVisible(page, typeName);
+}
+
+/** 只读：行内「编辑」「删除」仍渲染但被 v-has 隐藏（EM-T-RO-02 预期 1、2） */
+async function expectEntityTypeRowWriteActionsHiddenReadonly(page, typeName) {
+  for (const label of ENTITY_TYPE_ROW_WRITE_LABELS) {
+    await readonly.expectVHasHidden(
+      entityTypeRowWriteBtn(page, typeName, label),
+      `行内「${label}」`,
+    );
+  }
+}
+
+/** 复刻 EntityTypeList.formatTime（EntityTypeList.vue:170）；create_time 为秒级时间戳 */
+function formatEntityTypeCreateTime(timestamp) {
+  if (!timestamp) {
+    return '-';
+  }
+  return new Date(timestamp * 1000).toLocaleString('zh-CN');
+}
+
+/** 列表每页条数（pageTable 默认 pageSize=20，前端分页） */
+async function getEntityTypeListPageSize(page) {
+  const pagination = entityTypeTable(page).pagination();
+  if ((await pagination.count()) > 0) {
+    const text = (await pagination.innerText().catch(() => '')) || '';
+    const matched = text.match(/(\d+)\s*条\s*\/\s*页/);
+    if (matched) {
+      return Number(matched[1]);
+    }
+  }
+  return 20;
+}
+
+/**
+ * 单行「类型名 / 描述 / 级别 / 创建时间」与 `GET /entity-types` 返回一致
+ * （EM-T-RO-02 预期 3 / EM-T-RO-03 预期 1、3）。
+ */
+async function expectEntityTypeRowFieldsMatchApiReadonly(
+  page,
+  typeName,
+  apiData,
+) {
+  const table = entityTypeTable(page);
+  const row = table.rowByText(typeName);
+  await expect(row, `列表行应展示类型名「${typeName}」`).toContainText(typeName);
+  if (apiData?.description) {
+    await expect(row, '列表行应展示接口返回的描述').toContainText(
+      apiData.description,
+    );
+  }
+  if (apiData?.level !== undefined && apiData?.level !== null) {
+    await expect(row, '列表行应展示接口返回的级别').toContainText(
+      String(apiData.level),
+    );
+  }
+  const createTimeCell = row
+    .locator('td')
+    .nth(await getTableColumnIndex(table, '创建时间'));
+  const expectedTime = formatEntityTypeCreateTime(apiData?.create_time);
+  if (expectedTime === '-') {
+    await expect(
+      createTimeCell,
+      '列表行创建时间列应正常展示（接口无 create_time 时为 -）',
+    ).toHaveText('-');
+  } else {
+    // 日期部分复刻产品 formatTime 输出；时间部分只断言格式，避免 Node 与浏览器
+    // toLocaleString 细节差异造成假失败
+    await expect(
+      createTimeCell,
+      '列表行创建时间应与接口 create_time 一致',
+    ).toContainText(expectedTime.split(' ')[0]);
+    await expect(createTimeCell, '列表行创建时间应含时间部分').toHaveText(
+      /\d{1,2}:\d{2}/,
+    );
+  }
+}
+
+/**
+ * 只读：分页可用（EM-T-RO-03 步骤 3「切换分页」/ 预期 2）。
+ * 前端分页（pageTable 默认 20 条/页）：环境数据不足一页时退化为断言分页器存在
+ * 且当前页为 1，不为本用例造数（见 docs/entity-type 02-只读视角.md「测试数据」策略）。
+ * @returns {boolean} 是否实际发生了翻页
+ */
+async function expectEntityTypePaginationUsableReadonly(page) {
+  const table = entityTypeTable(page);
+  await table.waitForLoaded();
+  await expectEntityTypePaginationVisible(page);
+  const multiPage = await table.hasMultiplePages();
+  if (multiPage) {
+    await table.clickPageNumber(2);
+    await table.expectActivePage(2);
+    await table.clickPageNumber(1);
+  }
+  await table.expectActivePage(1);
+  return multiPage;
+}
+
+/**
+ * 只读：列表整体与 `GET /entity-types` 返回一致（EM-T-RO-03 步骤 4 / 预期 3）。
+ * - 第 1 页行数 = min(每页条数, 接口条数)
+ * - 接口首条类型经检索命中的行，字段与接口一致
+ * 只读接口调用走页面 localStorage 的只读会话，不做会话自愈。
+ * @returns {{apiCount:number,rowCount:number,pageSize:number,targetType:string}} 断言通过的数据快照
+ */
+async function expectEntityTypeListConsistentWithApiReadonly(page) {
+  const apiTypes = await fetchAllEntityTypesViaApi(page);
+  expect(
+    apiTypes.length,
+    '环境应已存在 ≥1 条 Entity 类型（GET /entity-types）',
+  ).toBeGreaterThan(0);
+
+  const table = entityTypeTable(page);
+  await table.waitForLoaded();
+  const pageSize = await getEntityTypeListPageSize(page);
+  const expectedRowCount = Math.min(pageSize, apiTypes.length);
+  await expect(
+    table.dataRows(),
+    `只读视角列表第 1 页应有 ${expectedRowCount} 行（每页 ${pageSize} 条，接口 ${apiTypes.length} 条）`,
+  ).toHaveCount(expectedRowCount, { timeout: 15000 });
+
+  const target = apiTypes[0];
+  await searchEntityTypeAndExpectRowReadonly(page, target.type_name);
+  await expectEntityTypeRowFieldsMatchApiReadonly(
+    page,
+    target.type_name,
+    target,
+  );
+  await clearEntityTypeSearch(page);
+  return {
+    apiCount: apiTypes.length,
+    rowCount: expectedRowCount,
+    pageSize,
+    targetType: target.type_name,
+  };
+}
+
 module.exports = {
   entityTypeForm,
   openCreateEntityTypeDrawer,
@@ -1331,4 +1605,22 @@ module.exports = {
   cancelEditEntityTypeForm,
   expectEditEntityTypeFormFieldValue,
   expectEntityTypeNameInputMaxLength,
+  fetchAllEntityTypesViaApi,
+  // 只读管理员视角（docs/entity-type/02-功能测试用例/02-只读视角.md）
+  gotoEntityTypeManagementPageReadonly,
+  expectEntityTypePageReadyReadonly,
+  switchToEntityTypeTabReadonly,
+  entityTypeCreateBtn,
+  entityTypeCreateDrawer,
+  entityTypeRowByText,
+  entityTypeRowWriteBtn,
+  expectEntityTypeCreateEntryHiddenReadonly,
+  expectEntityTypeReadonlyCapabilitiesVisible,
+  expectEntityTypeRowWriteActionsHiddenReadonly,
+  searchEntityTypeAndExpectRowReadonly,
+  expectEntityTypeRowFieldsMatchApiReadonly,
+  expectEntityTypePaginationUsableReadonly,
+  expectEntityTypeListConsistentWithApiReadonly,
+  formatEntityTypeCreateTime,
+  getEntityTypeListPageSize,
 };

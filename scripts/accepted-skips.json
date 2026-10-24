@@ -1,0 +1,29 @@
+{
+  "_note": "受跟踪的「跳过签核」清单：只有在此登记的跳过才计入「100% 跑通」（判定升为 ✅）。出现未登记的新跳过时，regression-reports/ 下本次全量回归归档报告的判定会自动降级为 ⚠️ 并在第 5 节标为『待确认』。新增条目必须写明依据证据与确认人/日期，禁止为了好看而登记。生成器：scripts/aggregate-report.js（npm run report:tracked）。",
+  "accepted": [
+    {
+      "spec": "tests/batch-tasks/test_03_batch_task_cancel.spec.js",
+      "caseId": "BT-C-02",
+      "reason": "本机降级环境无出网：取消成功流转要求 provider 可达，实测取消接口返回 502（ErrUpstreamUnreachable），按用例既有守卫跳过；502 分支本身由 BT-C-05 打桩覆盖，非功能缺陷。",
+      "evidence": "ai-gateway-api/model/ibatch/errors.go 允许 502 语义；本轮全量回归实测 502；BT-C-05 已通过",
+      "confirmedBy": "主 agent",
+      "confirmedAt": "2026-10-17"
+    },
+    {
+      "spec": "tests/entity-management/test_04_entity_org_search_edit_delete.spec.js",
+      "caseId": "EM-E-21",
+      "reason": "产品行为偏差（非用例缺陷）：删除「挂载 API-Key 的 Entity」时产品返回 ErrNum=422，用例按接口契约期望 409，故守卫跳过并保留正确预期。属产品侧待确认项，已随跳过原因留痕。",
+      "evidence": "用例自带守卫文案记录实测 ErrNum=422；预期 409 见 docs/entity-management/02-功能测试用例/01-列表与CRUD.md",
+      "confirmedBy": "主 agent",
+      "confirmedAt": "2026-10-17"
+    },
+    {
+      "spec": "tests/providers/test_01_provider_list.spec.js",
+      "caseId": "PR-L-09",
+      "reason": "用例自带设计的前置依赖：该用例标题即写明「环境依赖，非空则跳过」——需要「系统无服务商」才能验证空态，而共享环境已有百余个服务商（含其他模块造数），无法构造空列表。",
+      "evidence": "用例标题与守卫文案；共享环境服务商数量（本轮 >160）",
+      "confirmedBy": "主 agent",
+      "confirmedAt": "2026-10-17"
+    }
+  ]
+}

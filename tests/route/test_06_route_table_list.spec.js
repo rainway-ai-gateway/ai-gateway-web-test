@@ -346,9 +346,18 @@ const STATUS_LABELS = {
   false: '停用',
 };
 
+/**
+ * mock 数据行的 type 取值 = **接口返回值**：后端 `RouteTableTypeAPIKey = 'api_key'`
+ * （自 2026-08-31 起），不是 UI 下拉的 value `apikey`。
+ * 列表「类型」列显示的是 `TYPE_MAP[row.type]`（`RouteTable/index.vue:53-58,96`），
+ * 故此处的 type 取值直接决定单元格是否命中 `api_key → API-Key` 映射 —— 用 `apikey`
+ * 会绕开产品 792bb73 补的那条映射，让 mock 用例覆盖不到该修复。
+ */
+const API_TYPE = { global: 'global', entity: 'entity', apikey: 'api_key' };
+
 function makeRouteTableItem(type, index, enabled) {
   const owner = type === 'global' ? 'global' : `${type}-${index}`;
-  return { type, owner, enabled };
+  return { type: API_TYPE[type] || type, owner, enabled };
 }
 
 function buildMockList(counts) {
@@ -362,10 +371,20 @@ function buildMockList(counts) {
   return list;
 }
 
+/**
+ * 列表「类型」筛选的「查询值 → 数据行 type」映射。
+ *
+ * 查询值取 UI 下拉的 value（`RouteTable/index.vue:91-95`：global / entity / **apikey**），
+ * 数据行 type 取接口原值（`api_key`）。两种查询写法都接受并映射到同一数据取值 ——
+ * 原实现只登记了 `api_key` 键，而 UI 实际发的是 `apikey`，于是「按 API-Key 类型筛选」
+ * 在 mock 里静默不过滤（`TYPE_MAP[typeVal]` 为 undefined → 整表返回），
+ * 任何基于该筛选的断言都会退化成恒真。
+ */
 const TYPE_MAP = {
   global: 'global',
   entity: 'entity',
-  api_key: 'apikey',
+  apikey: 'api_key',
+  api_key: 'api_key',
 };
 
 async function mockRouteTablesList(page, fullList) {

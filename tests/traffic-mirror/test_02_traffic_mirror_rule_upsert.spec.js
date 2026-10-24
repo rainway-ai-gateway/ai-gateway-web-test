@@ -554,16 +554,35 @@ test.describe('流量镜像规则 - 新增与编辑', () => {
 
   test('TM-C-20 提交体剥离只读字段', async ({ page }) => {
     let rule;
+    let clusterName;
 
     await test.step('前置：API 造数规则（GET 回填 created_at/updated_at）', async () => {
       await utils.ensureAppSession(page);
       await cleanup.saveOriginalState(page);
-      ({ rule } = await seedRule(page));
+      ({ rule, clusterName } = await seedRule(page));
       const apiRules = await utils.fetchTrafficMirrorRulesViaApi(page);
       const current = apiRules.find((item) => item.name === rule.name);
       expect(current && current.created_at, '服务端回填创建时间').toBeTruthy();
       await utils.gotoTrafficMirrorPageAndWaitForRules(page);
       await utils.enterEditMode(page);
+    });
+
+    await test.step('前置：本地新增一条规则制造改动，解除「提交并生效」置灰', async () => {
+      // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，index.vue:47），
+      // 无本地改动时点击无效，本用例的 payload 断言根本进不去。
+      // 改动刻意用「本地新增」而非「编辑造数规则」：造数规则必须原样留在本地集合里，
+      // 它的 created_at/updated_at 来自 GET 回填，只有它带时间戳进入 buildPayload
+      // （index.vue:499-505 的 delete），断言才具备可证伪性。
+      await utils.openAddRuleDrawer(page);
+      await fillMinimalRule(
+        page,
+        utils.generateTestRuleName('tm_c20_local_'),
+        clusterName,
+        'req_path_prefix_in("/v1/tm_c20", true)',
+      );
+      await utils.submitRuleFormExpectMessage(page, F.addSuccessMsg);
+      await utils.expectRuleFormDrawerHidden(page);
+      await utils.expectSubmitAndEffectDisabled(page, false);
     });
 
     await test.step('提交并生效：PUT 请求体不含 created_at/updated_at', async () => {

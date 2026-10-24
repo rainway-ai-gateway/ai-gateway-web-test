@@ -19,6 +19,7 @@
  * 页面结构（src/modules/AIContext/index.vue）：
  * - 根节点 .ai-context，内含 Tabs：压缩规则(rules) / 全局设置(settings)
  * - 压缩规则 Tab：.route-editor-header（副标题 + 操作按钮）+ pageTable（5 列）
+ *   编辑模式下 pageTable 传 `:draggable`，表格下渲染 .drag-tip（文案 aiContext.dragToChangeOrder）
  * - 全局设置 Tab：.route-editor-header + Card.form-card（查看态 .settings-view / 编辑态 Form.settings-form）
  * - 两个抽屉在 .ai-context 根下（不在 TabPane 内）：查看抽屉（.rule-view）/ 表单抽屉（.rule-form）
  *
@@ -29,6 +30,7 @@
  * - token 两列格式化：null/undefined/0 → '模型默认（0）'，其余 '{value} tokens'
  * - 提交体零值不写入（RuleForm 仅 >0 才写 max_context_tokens/reserve_tokens）
  * - 设置表单 formData 拍平 rewrite_strength / protected_survival_rate
+ * - 模式字段为 `rulesMode`、脏标记为 `isRulesDirty`（基于 {rules} 与 originalRows 快照的全量比较）
  *
  * 数据造数/备份/恢复统一在 api/ai-context-api-utils.js 中实现，本文件不直连网络。
  * 本文件内部禁用裸选择器于 spec —— 所有定位集中于此；spec 只调用本模块导出函数。
@@ -37,9 +39,13 @@ const { expect, test } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const common = require('../../utils/common');
+const readonly = require('../../utils/readonly');
 const umUtils = require('../user/UserPage');
 const apiUtils = require('../../api/ai-context-api-utils');
-const { PageTableComponent } = require('../../components/layout');
+const {
+  PageTableComponent,
+  AppSidebarComponent,
+} = require('../../components/layout');
 const { IVU_DRAWER_VISIBLE } = require('../../components/iview/constants');
 const {
   IvuMessageComponent,
@@ -96,6 +102,8 @@ const DOC_AI_CONTEXT_RULES = {
   tokensModelDefault: '模型默认（0）',
   tokensText: '{value} tokens',
   emptyPlaceholder: '-',
+  // 编辑模式提示条（`v-if="rulesMode === 'edit'"`）
+  dragToChangeOrderTip: '拖动表格可修改生效次序',
   // mode 列搜索筛选项为裸枚举值
   modeFilterOptions: ['off', 'conservative', 'balanced', 'aggressive'],
 };
@@ -218,6 +226,13 @@ const AI_CONTEXT_RULES_URL_PATTERN = '**/open-api/v1/ai-context-rules';
 const AI_CONTEXT_SETTINGS_URL_PATTERN =
   '**/open-api/v1/ai-context-settings';
 const EXPRESSION_VERIFY_URL_PATTERN = '**/open-api/v1/expression/verify';
+
+/**
+ * 数据接口路径（与 `AI_CONTEXT_RULES_URL_PATTERN` 同一个端点，这里按 path 片段匹配）。
+ * 摊开写是因为「前端路由 `/ai-context-rules`」与「数据接口 `/open-api/v1/ai-context-rules`」
+ * 共用同一段字符串，用 `url.includes('/ai-context-rules')` 做等待谓词会连**文档请求**一起命中。
+ */
+const AI_CONTEXT_RULES_API_PATH = '/open-api/v1/ai-context-rules';
 
 let confInfo = {};
 try {
@@ -505,6 +520,53 @@ async function gotoAiContextPageAndWaitForRules(page) {
   );
   await page.waitForTimeout(1500);
   await umUtils.handleUrlInvalidAlert(page);
+}
+
+/**
+ * 「压缩规则集合」**数据接口**响应判定：排除文档请求。
+ *
+ * 为什么必须排除：前端路由与数据接口共用 `/ai-context-rules` 这段字符串，SPA 文档请求
+ * （`GET http://host/ai-context-rules`，200）会满足「URL 含 /ai-context-rules + GET + 200」这类宽谓词，
+ * 使等待在 Vue 挂载**之前**就返回；此后若只靠固定沉降时间再断言 `.ai-context`，就可能撞上
+ * 首次编译 / 热重编译的空白窗口（2026-10-16 验证中 AX-DR-03 前置即发生过一次）。
+ * 本判定要求 `resourceType() !== 'document'`，只认真正的 XHR。
+ */
+function isRulesDataGetResponse(res) {
+  return (
+    res.url().includes(AI_CONTEXT_RULES_API_PATH) &&
+    res.request().method() === 'GET' &&
+    res.request().resourceType() !== 'document'
+  );
+}
+
+/**
+ * 等待「压缩规则集合」数据接口 GET 响应返回（配合 mock 使用时即受控集合已注入）。
+ * 与 `waitForAiContextRulesGetResponse` 的区别：谓词更严（排除文档请求），**不做**超时降级重跑
+ * （降级重跑等价于隐式重试，会掩盖加载瞬态）；超时只记日志并返回 null，由调用方的就绪断言报错。
+ */
+async function waitForRulesDataGetResponse(page, action, timeout = 30000) {
+  try {
+    const [response] = await Promise.all([
+      page.waitForResponse(isRulesDataGetResponse, { timeout }),
+      action(),
+    ]);
+    return response;
+  } catch (e) {
+    common.log('等待压缩规则数据接口响应超时: ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * 页面已挂载：`.ai-context` 根可见。
+ * 用在导航之后、业务断言之前，替代「固定沉降时间」作为就绪判定；超时给足挂载/热重编译余量，
+ * 不涉及任何业务断言的轮询或重试。
+ */
+async function expectAiContextPageMounted(page, timeout = 30000) {
+  await expect(
+    pageRoot(page),
+    'AI 上下文压缩页未挂载（.ai-context 根不可见：可能是页面未渲染 / 会话失效跳登录）',
+  ).toBeVisible({ timeout });
 }
 
 async function reloadAiContextPage(page) {
@@ -1365,6 +1427,252 @@ async function deleteAllRules(page, maxIterations = 50) {
 }
 
 // ---------------------------------------------------------------------------
+// 生效次序：拖拽排序 / 列排序 / 列搜索（AX-DR-01 ~ AX-DR-03）
+//
+// 产品依据 src/modules/AIContext/index.vue：
+// - `:draggable="rulesMode === 'edit'"` + `@dragDrop="onRuleDragDrop"`：拖拽只在编辑模式内改
+//   本地数组（splice 取出 + 按目标**原下标**插入），退出编辑模式时放弃，不写后端；
+// - `.drag-tip` 由 `v-if="rulesMode === 'edit'"` 控制，文案 `aiContext.dragToChangeOrder`；
+// - pageTable 的 `onDragDrop` 用 `pageSrcIndex` 把**可视下标**换算成**原始数组下标**再派发，
+//   故列排序 / 列搜索激活时移动的仍是源下标对应的行（期望值须用 `baseline.indexOf(...)` 换算）。
+//
+// 行定位统一收敛到主表格 body（`.show-iView-Table .ivu-table-body tbody tr`），
+// 避开列搜索行与固定列在页面上渲染出的重复行。
+// ---------------------------------------------------------------------------
+
+function ruleTableMainRows(page) {
+  return ruleTable(page)
+    .rootLocator()
+    .locator('.show-iView-Table .ivu-table-body tbody tr');
+}
+
+/** 复刻 AIContext.onRuleDragDrop 的移动语义：拖拽行落到目标行的原下标处 */
+function moveRuleToIndex(conds, fromIndex, toIndex) {
+  const next = conds.slice();
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+/**
+ * 断言生效次序**完全**等于期望（含行数）。
+ *
+ * 与既有 `expectRuleRowOrder` 的区别：后者按 `conds.length` 截断实际值，多出的行不会报错；
+ * 拖拽类断言要钉住行数（多一行即说明移动语义出错），故单列本函数。
+ */
+async function expectRuleCondsInOrder(page, expectedConds) {
+  expect(
+    await getRuleCondsInOrder(page),
+    '压缩规则生效次序不符',
+  ).toEqual(expectedConds);
+}
+
+/** 真实拖拽：把 fromIndex 行拖到 toIndex 行上（Playwright 原生 dragTo，走 iView Table 的 HTML5 拖拽） */
+async function dragRuleRow(page, fromIndex, toIndex) {
+  const rows = ruleTableMainRows(page);
+  const from = rows.nth(fromIndex);
+  const to = rows.nth(toIndex);
+  await expect(from).toBeVisible();
+  await expect(to).toBeVisible();
+  await from.dragTo(to);
+  await page.waitForTimeout(800);
+}
+
+/** 编辑模式提示条随模式切换：编辑模式可见，视图 / 只读模式不渲染（`v-if`） */
+async function expectRulesDragTipVisible(page, visible = true) {
+  if (visible) {
+    await expect(rulesDragTip(page)).toBeVisible();
+    await expect(rulesDragTip(page)).toHaveText(
+      DOC_AI_CONTEXT_RULES.dragToChangeOrderTip,
+    );
+  } else {
+    await expect(rulesDragTip(page)).toHaveCount(0);
+  }
+}
+
+/**
+ * 断言所有数据行的 `draggable` 属性：编辑模式为 `"true"`；
+ * 视图 / 只读模式 iView table-tr 走 `v-else` 分支，不渲染该属性（`getAttribute` 为 null）。
+ */
+async function expectRuleRowsDraggable(page, draggable = true) {
+  const rows = ruleTableMainRows(page);
+  const count = await rows.count();
+  expect(count, '规则表格无数据行，无法校验拖拽属性').toBeGreaterThan(0);
+  for (let i = 0; i < count; i += 1) {
+    expect(
+      await rows.nth(i).getAttribute('draggable'),
+      `第 ${i + 1} 行 draggable 属性不符`,
+    ).toBe(draggable ? 'true' : null);
+  }
+}
+
+/** 可拖拽行的鼠标指针：编辑模式 grab，视图模式不应出现；expected 传 null 断言「不是 grab」 */
+async function expectRuleRowsCursorStyle(page, expected = 'grab') {
+  const rows = ruleTableMainRows(page);
+  const count = await rows.count();
+  expect(count, '规则表格无数据行，无法校验拖拽光标').toBeGreaterThan(0);
+  const cursors = await rows.evaluateAll((els) =>
+    els.map((el) => window.getComputedStyle(el).cursor),
+  );
+  cursors.forEach((cursor, i) => {
+    if (expected) {
+      expect(cursor, `第 ${i + 1} 行鼠标指针应为 ${expected}`).toBe(expected);
+    } else {
+      expect(cursor, `第 ${i + 1} 行不应显示拖拽光标`).not.toBe('grab');
+    }
+  });
+}
+
+/** 「提交并生效」仅在本地存在改动时可用（`:disabled="!isRulesDirty"`） */
+async function expectSubmitAndEffectDisabled(page, disabled = true) {
+  if (disabled) {
+    await expect(ruleHeaderSubmitAndEffectBtn(page)).toBeDisabled();
+  } else {
+    await expect(ruleHeaderSubmitAndEffectBtn(page)).toBeEnabled();
+  }
+}
+
+/** 按列标题排序（点击表头排序图标）；order: asc / desc */
+async function sortRuleTableByColumn(page, columnTitle, order = 'desc') {
+  const th = ruleTable(page)
+    .rootLocator()
+    .locator('.show-iView-Table th')
+    .filter({ hasText: columnTitle })
+    .first();
+  const icon = th.locator(
+    order === 'asc'
+      ? '.ivu-icon-md-arrow-dropup'
+      : '.ivu-icon-md-arrow-dropdown',
+  );
+  await expect(icon).toBeVisible();
+  await icon.click();
+  await page.waitForTimeout(500);
+}
+
+/** 按列标题做表格内本地搜索（pageTable 前端筛选，不触发列表请求） */
+async function searchRuleTableByColumn(page, columnTitle, keyword) {
+  await ruleTable(page).filterByColumn(columnTitle, keyword);
+}
+
+// ---------------------------------------------------------------------------
+// 离开页面拦截（beforeRouteLeave，AX-DR-04）
+//
+// 产品依据 src/modules/AIContext/index.vue `beforeRouteLeave`：
+//   `rulesMode === 'edit' && isRulesDirty` 时弹 $Modal.confirm（标题 com.informationTips，
+//   正文 aiContext.exitConfirm，`onOk: () => next()`、`onCancel: () => next(false)`）。
+//
+// 触发方式必须是**应用内路由切换**（点侧栏其它模块菜单）：整页 `page.goto` 不经过 vue-router，
+// 不会触发 beforeRouteLeave，用直连 URL 兜底会得到假通过——故本函数只做侧栏点击，找不到就抛错。
+// ---------------------------------------------------------------------------
+
+/** 侧栏可用作「离开拦截」目标的菜单文案（首项为用户管理，已在当前环境验证存在） */
+const LEAVE_TARGET_MENU_LABELS = [
+  '用户管理',
+  'API Key 管理',
+  'User Manage',
+  'API Key Manage',
+];
+
+/** 侧栏封装（components/layout/AppSidebar.js，定位集中于此，spec 不写裸选择器） */
+function sidebar(page) {
+  return new AppSidebarComponent(page);
+}
+
+/**
+ * 候选菜单是否可用：只认**叶子菜单项**（`.ivu-menu-item`）。
+ *
+ * 不含子菜单标题（`.ivu-menu-submenu-title`）——点标题只展开/收起分组，不触发路由切换，
+ * 也就不会触发 beforeRouteLeave；把它算作可用会让用例在一个「什么都没发生」的页面上失败。
+ */
+async function isSidebarMenuAvailable(page, label) {
+  return (await sidebar(page).menuItem(label).count()) > 0;
+}
+
+/**
+ * 在应用内点击侧栏「其它模块」菜单，触发 vue-router 路由切换 → 本组件 beforeRouteLeave。
+ * 依次尝试候选文案，都不存在时退化为「侧栏第一个非激活的叶子菜单」；仍找不到则抛错。
+ * 返回实际点击的菜单文案。
+ */
+async function clickSidebarMenuToLeave(page, labels = LEAVE_TARGET_MENU_LABELS) {
+  // 侧栏菜单由登录后拉取的 meta.nav 渲染，先等它出现，避免把「还没渲染」误判成「候选不存在」
+  await expect(
+    sidebar(page).menu().locator('.ivu-menu-item').first(),
+    '侧栏菜单未渲染，无法执行应用内导航（离开拦截必须由路由切换触发）',
+  ).toBeVisible({ timeout: 10000 });
+
+  for (const label of labels) {
+    if (await isSidebarMenuAvailable(page, label)) {
+      common.log('离开拦截：点击侧栏菜单「' + label + '」');
+      await sidebar(page).navigate(label);
+      return label;
+    }
+  }
+
+  const fallback = sidebar(page)
+    .menu()
+    .locator('.ivu-menu-item:not(.ivu-menu-item-active)')
+    .first();
+  if ((await fallback.count()) > 0) {
+    const text = (await fallback.innerText()).trim();
+    common.log('离开拦截：候选菜单文案均不存在，改用侧栏菜单「' + text + '」');
+    await fallback.click();
+    await page.waitForTimeout(1500);
+    return text;
+  }
+
+  throw new Error(
+    '侧栏未找到可用于离开拦截的其它模块菜单（候选：' +
+      labels.join(' / ') +
+      '）。离开拦截必须由应用内路由切换触发，不能用直连 URL 代替。',
+  );
+}
+
+function currentUrl(page) {
+  return page.url();
+}
+
+/** 取消离开拦截后：URL 与点击菜单前完全一致（仍停留在本页） */
+function expectUrlUnchanged(page, expectedUrl, label = '取消离开拦截') {
+  expect(page.url(), `${label}后 URL 应保持不变`).toBe(expectedUrl);
+}
+
+/** 确认离开拦截后：已跳离 AI 上下文压缩页 */
+function expectNavigatedAwayFromAiContext(page) {
+  expect(
+    page.url(),
+    '确认离开后应跳离 AI 上下文压缩页',
+  ).not.toContain(AI_CONTEXT_PATH);
+}
+
+/** 离开拦截确认框正文（iView `$Modal.confirm` 渲染的 `.ivu-modal-confirm-body`） */
+function leaveConfirmBody(page) {
+  return modal(page).visible().locator('.ivu-modal-confirm-body');
+}
+
+/**
+ * 离开拦截的二次确认框：标题「信息提示」+ 正文**完全等于**统一退出确认文案。
+ * 与 `expectExitConfirmModal`（退出编辑模式按钮触发的同文案）分开：
+ * 本函数用 CSS 锚点 `.ivu-modal-confirm-body` 钉住正文，供 beforeRouteLeave 拦截断言使用。
+ */
+async function expectLeaveConfirmModal(page) {
+  await modal(page).expectOpen(DOC_AI_CONTEXT_PAGE.informationTips);
+  await expect(
+    leaveConfirmBody(page),
+    '离开拦截确认框正文应为统一退出确认文案',
+  ).toHaveText(DOC_AI_CONTEXT_PAGE.exitConfirm);
+}
+
+async function confirmLeaveModal(page) {
+  await modal(page).confirm();
+  await page.waitForTimeout(1500);
+}
+
+async function cancelLeaveModal(page) {
+  await modal(page).cancel();
+  await page.waitForTimeout(800);
+}
+
+// ---------------------------------------------------------------------------
 // 网络请求监听（断言「本地保存 / 删除」不发变更请求）
 // ---------------------------------------------------------------------------
 
@@ -1917,6 +2225,91 @@ async function expectAiContextMessageDuringAction(
   );
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/ai-context/02-功能测试用例/06-只读视角.md AX-RO-01~03）
+// ---------------------------------------------------------------------------
+
+/**
+ * 压缩规则 Tab 页头写入口容器（源码挂 v-has：视图模式下为「进入编辑模式」，
+ * 编辑模式下为「退出编辑模式 + 提交并生效」）。
+ */
+function ruleHeaderSubmit(page) {
+  return ruleHeader(page).locator('.route-header-submit');
+}
+
+/**
+ * 「添加压缩规则」按钮。源码同时受 `v-show="rulesMode === 'edit'"` 与 `v-has`
+ * 约束：管理员视图模式下 DOM 存在但隐藏，进入编辑模式后可见。
+ */
+function ruleHeaderAddRuleBtn(page) {
+  return ruleHeader(page)
+    .locator('.route-header-actions button')
+    .filter({ hasText: DOC_AI_CONTEXT_PAGE.addRule });
+}
+
+/** 页头「进入编辑模式」按钮（视图模式分支） */
+function ruleHeaderEnterEditBtn(page) {
+  return ruleHeaderSubmit(page).getByRole('button', {
+    name: DOC_AI_CONTEXT_PAGE.enterEditMode,
+    exact: true,
+  });
+}
+
+/** 页头「提交并生效」按钮（编辑模式分支） */
+function ruleHeaderSubmitAndEffectBtn(page) {
+  return ruleHeaderSubmit(page).getByRole('button', {
+    name: DOC_AI_CONTEXT_PAGE.submitAndEffect,
+    exact: true,
+  });
+}
+
+/** 编辑模式提示条（`v-if="rulesMode === 'edit'"`，只读视角不渲染 → 恒停留视图模式） */
+function rulesDragTip(page) {
+  return rulePane(page).locator('.drag-tip');
+}
+
+/** 全局设置 Tab 页头写入口容器（源码挂 v-has：查看态「编辑」/ 编辑态「取消 + 保存」） */
+function settingsHeaderSubmit(page) {
+  return settingsHeader(page).locator('.route-header-submit');
+}
+
+/** 全局设置页头「编辑」按钮 */
+function settingsHeaderEditBtn(page) {
+  return settingsHeaderSubmit(page).getByRole('button', {
+    name: DOC_AI_CONTEXT_SETTINGS.editButton,
+    exact: true,
+  });
+}
+
+/**
+ * 只读视角直连 URL 进入 AI 上下文压缩页。
+ * 不走 `ensureAppSession` / `umUtils.handleUrlInvalidAlert`——它们会以 admin 凭证重登并
+ * 回写 auth.json，把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoAiContextPageReadonly(page, options = {}) {
+  await readonly.gotoAsReadonly(page, AI_CONTEXT_PATH, {
+    ready: pageRoot(page),
+    ...options,
+  });
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 只读视角就绪判定：页面在 + 页头只读锚点（rulesSubtitle）可见 + 写入口已隐藏。
+ * 不能用 `expectAiContextPageReady` 之外的视图态断言：`expectViewMode` 会断言
+ * 「进入编辑模式」可见（只读视角恰好隐藏它）。
+ */
+async function expectAiContextPageReadyReadonly(page) {
+  await expect(pageRoot(page)).toBeVisible();
+  await expect(
+    pageRoot(page)
+      .locator('.route-owner-label')
+      .filter({ hasText: DOC_AI_CONTEXT_PAGE.pageTitle })
+      .first(),
+  ).toBeVisible();
+  await readonly.expectVHasHidden(ruleHeaderSubmit(page), '规则页头写入口区');
+}
+
 module.exports = {
   // 常量
   DOC_AI_CONTEXT_PAGE,
@@ -1927,6 +2320,7 @@ module.exports = {
   DOC_AI_CONTEXT_SETTINGS_VIEW,
   AI_CONTEXT_PATH,
   AI_CONTEXT_RULES_URL_PATTERN,
+  AI_CONTEXT_RULES_API_PATH,
   AI_CONTEXT_SETTINGS_URL_PATTERN,
   EXPRESSION_VERIFY_URL_PATTERN,
   // 文案格式化
@@ -1937,6 +2331,16 @@ module.exports = {
   ensureChineseLang,
   ensureAuthenticatedShell,
   ensureAppSession,
+  // 只读管理员视角（docs/ai-context/02-功能测试用例/06-只读视角.md）
+  gotoAiContextPageReadonly,
+  expectAiContextPageReadyReadonly,
+  ruleHeaderSubmit,
+  ruleHeaderAddRuleBtn,
+  ruleHeaderEnterEditBtn,
+  ruleHeaderSubmitAndEffectBtn,
+  rulesDragTip,
+  settingsHeaderSubmit,
+  settingsHeaderEditBtn,
   // 作用域
   pageRoot,
   ruleTable,
@@ -1961,6 +2365,9 @@ module.exports = {
   // 导航与就绪
   isOnAiContextPage,
   expectAiContextPageReady,
+  expectAiContextPageMounted,
+  isRulesDataGetResponse,
+  waitForRulesDataGetResponse,
   gotoAiContextPage,
   gotoAiContextPageAndWaitForRules,
   reloadAiContextPage,
@@ -1980,6 +2387,7 @@ module.exports = {
   getRuleCondsInOrder,
   getRuleRowCount,
   expectRuleRowOrder,
+  expectRuleCondsInOrder,
   expectRuleCellText,
   expectRuleCellContains,
   expectRuleModeTag,
@@ -2034,6 +2442,26 @@ module.exports = {
   expectRuleFormDrawerStillOpen,
   injectRuleFormMode,
   injectRuleFormCondErrmsg,
+  // 生效次序：拖拽排序 / 列排序 / 列搜索（AX-DR-01 ~ AX-DR-03）
+  ruleTableMainRows,
+  moveRuleToIndex,
+  dragRuleRow,
+  expectRulesDragTipVisible,
+  expectRuleRowsDraggable,
+  expectRuleRowsCursorStyle,
+  expectSubmitAndEffectDisabled,
+  sortRuleTableByColumn,
+  searchRuleTableByColumn,
+  // 离开页面拦截（AX-DR-04）
+  LEAVE_TARGET_MENU_LABELS,
+  sidebar,
+  clickSidebarMenuToLeave,
+  currentUrl,
+  expectUrlUnchanged,
+  expectNavigatedAwayFromAiContext,
+  expectLeaveConfirmModal,
+  confirmLeaveModal,
+  cancelLeaveModal,
   // 提交并生效
   waitForAiContextRulesGetResponse,
   waitForAiContextRulesPutResponse,

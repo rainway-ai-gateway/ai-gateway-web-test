@@ -19,6 +19,8 @@ const { IvuStepsComponent } = require('../../components/iview/IvuSteps');
 const { IvuMessageComponent } = require('../../components/iview/IvuMessage');
 const { ElSelectComponent } = require('../../components/element');
 const common = require('../../utils/common');
+const readonly = require('../../utils/readonly');
+const resourceApi = require('../../api/resource-api-utils');
 const {
   DRAWER_TITLE,
   BUSINESS_CLUSTER_SEARCH_PLACEHOLDER,
@@ -2492,6 +2494,299 @@ function watchClusterCreateRequests(page) {
   return state;
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/business-cluster/02-功能测试用例/02f-只读视角.md RM-BC-RO-01）
+// ---------------------------------------------------------------------------
+
+/** 只读视角相关文案（对齐 src/modules/Clusters/* 实际 UI 文案） */
+const RO_CLUSTER_LABEL = {
+  addCluster: '添加集群',
+  detail: '详情',
+  edit: '编辑',
+  del: '删除',
+  submit: '提交',
+  nextStep: '下一步',
+  lastStep: '上一步',
+  basicConfigPanel: '基础配置',
+};
+
+/** 前端路由（src/router/router.js `path: 'cluster'`） */
+const BUSINESS_CLUSTER_PATH = '/cluster';
+
+/**
+ * 只读角色写操作的后端拒绝语义（ai-gateway-api `lib/xerror/resolve.go`
+ * etAuthorizateFail → 402 + `Feature Access Deny`；02f 文档写的 403 与实现不符）。
+ */
+const RO_WRITE_DENIED = { status: 402, message: 'Feature Access Deny' };
+
+/** 列表页根节点（src/modules/Clusters/index.vue 根 div.clusters） */
+function clusterPageRoot(page) {
+  return page.locator('.clusters');
+}
+
+/**
+ * 列表页「添加集群」按钮：`v-has`（src/modules/Clusters/index.vue:33）。
+ * 用 CSS 定位——role 定位不匹配 display:none 元素，无法断言 `.v-has-hidden`。
+ */
+function clusterListAddBtn(page) {
+  return page
+    .locator('.clusters > button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.addCluster });
+}
+
+/** 列表行内操作按钮集合（render 内 `directives: [{ name: 'has' }]`，index.vue:161/180） */
+function clusterRowActionButtons(page, clusterName) {
+  return businessClusterTable(page)
+    .rowByText(clusterName)
+    .locator('button.ivu-btn');
+}
+
+/** 列表行内写按钮（编辑 / 删除）：CSS 定位，用于 `.v-has-hidden` 断言 */
+function clusterRowWriteBtn(page, clusterName, label) {
+  return clusterRowActionButtons(page, clusterName).filter({ hasText: label });
+}
+
+/** 列表行内按钮（role 定位，只匹配可见按钮）：管理员对照与只读「详情」保留断言用 */
+function clusterRowAction(page, clusterName, label) {
+  return businessClusterTable(page).rowAction(clusterName, label);
+}
+
+/** 列表搜索行「名称」列筛选框（占位符「请输入名称查询」） */
+function clusterSearchInput(page) {
+  return businessClusterTable(page).searchInput(
+    BUSINESS_CLUSTER_SEARCH_PLACEHOLDER,
+  );
+}
+
+/** 创建向导抽屉 */
+function clusterCreateWizardDrawer(page) {
+  return ivuDrawer(page).withTitle(DRAWER_TITLE.createBusinessCluster);
+}
+
+/** 编辑向导抽屉（行内「编辑」入口对应） */
+function clusterEditWizardDrawer(page) {
+  return ivuDrawer(page).withTitle(DRAWER_TITLE.editBusinessCluster);
+}
+
+/**
+ * 向导抽屉底部按钮区（src/modules/Clusters/components/index.vue
+ * `.com-btn-box.drawer-footer`）
+ */
+function clusterWizardFooter(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return ivuDrawer(page)
+    .withTitle(drawerTitle)
+    .locator('.com-btn-box.drawer-footer');
+}
+
+/**
+ * 向导「提交」按钮：`v-has` + `v-show="currentStepIndex === reviewStepIndex"`
+ * （components/index.vue:89-90），只读态由 v-has 额外加 `.v-has-hidden`。
+ */
+function clusterWizardSubmitBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return clusterWizardFooter(page, drawerTitle)
+    .locator('button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.submit });
+}
+
+/** 向导「下一步」按钮（只读态保留的步骤推进入口） */
+function clusterWizardNextBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return clusterWizardFooter(page, drawerTitle)
+    .locator('button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.nextStep });
+}
+
+/** 向导「上一步」按钮 */
+function clusterWizardPrevBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return clusterWizardFooter(page, drawerTitle)
+    .locator('button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.lastStep });
+}
+
+/**
+ * 向导抽屉右上关闭入口（iView Drawer `<a class="ivu-drawer-close">`）。
+ * 02f 文档「保留下一步 / 取消」中的「取消」在产品 5 步向导内无对应按钮，
+ * 退出向导由该关闭入口承担。
+ */
+function clusterWizardCloseBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return ivuDrawer(page).withTitle(drawerTitle).locator('.ivu-drawer-close');
+}
+
+/** 「详情」抽屉 */
+function clusterDetailDrawer(page) {
+  return ivuDrawer(page).withTitle(DRAWER_TITLE.businessClusterDetail);
+}
+
+/** 详情抽屉内写按钮（Review 无 footer 且 showFooter=false，只读态应为 0） */
+function clusterDetailActionButtons(page) {
+  return clusterDetailDrawer(page).locator('button.ivu-btn');
+}
+
+/** 详情抽屉「基础配置」面板内「集群名称」值行（Review 第 1 个 ul > li.value） */
+function clusterDetailNameValue(page) {
+  return clusterDetailDrawer(page)
+    .locator('.panel')
+    .filter({ hasText: RO_CLUSTER_LABEL.basicConfigPanel })
+    .first()
+    .locator('li.value')
+    .first();
+}
+
+/**
+ * 只读视角直连 URL 进入 AI 业务集群列表页。
+ * 不复用 `gotoBusinessClusterManagementPage`：它经 `ensureAppSession` 调用
+ * `ensureSessionHealthy`，会话异常时会以 admin 凭证重登并回写 auth.json，
+ * 把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）；
+ * 就绪判定也不用「添加集群」（只读态被 v-has 隐藏）。
+ */
+async function gotoBusinessClusterPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, BUSINESS_CLUSTER_PATH, {
+    ready: clusterPageRoot(page),
+  });
+  await expectBusinessClusterPageReadyReadonly(page);
+}
+
+/** 只读视角就绪判定：列表页在、筛选行与表头可见（只读也存在的锚点），写入口已隐藏 */
+async function expectBusinessClusterPageReadyReadonly(page) {
+  await expect(clusterPageRoot(page)).toBeVisible();
+  await expect(clusterSearchInput(page)).toBeVisible({ timeout: 15000 });
+  await expect(
+    businessClusterTable(page).headers().filter({ hasText: '名称' }).first(),
+  ).toBeVisible({ timeout: 15000 });
+  await readonly.expectVHasHidden(clusterListAddBtn(page), '添加集群');
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 按「名称」列本地筛选并断言行可见（与分页解耦：目标集群可能不在第 1 页）。
+ * 不触发列表请求（pageTable 前端筛选），管理员/只读两组通用。
+ */
+async function ensureBusinessClusterRowVisibleByFilter(page, clusterName) {
+  await businessClusterTable(page).filterByColumn('名称', clusterName);
+  await expect(
+    businessClusterTable(page).rowByText(clusterName),
+  ).toBeVisible({ timeout: 15000 });
+  return true;
+}
+
+/**
+ * 只读视角强制展开「添加集群」向导（等价于点开被 v-has 隐藏的「添加集群」）。
+ * 只读态写入口已隐藏、抽屉不渲染，而文档预期 2/5 要求在真实渲染的向导内验收
+ * 「提交」的 `.v-has-hidden`（与 v-show 共存），故按仓库既有 `__vue__` 手法直接
+ * 驱动组件状态——只改 UI 状态，不发起任何写请求。
+ */
+async function openCreateBusinessClusterDrawerByModel(page) {
+  const opened = await page.evaluate(() => {
+    const root = document.querySelector('.clusters');
+    if (!root) {
+      return false;
+    }
+    let vue = root.__vue__;
+    for (let i = 0; i < 10 && vue && vue.upsertVisible === undefined; i += 1) {
+      vue = vue.$parent;
+    }
+    if (!vue || vue.upsertVisible === undefined) {
+      return false;
+    }
+    vue.currentCluster = {};
+    vue.isAdd = true;
+    vue.upsertVisible = true;
+    return true;
+  });
+  if (!opened) {
+    throw new Error('强制展开「添加集群」向导失败：未取到 .clusters 组件实例');
+  }
+  await ivuDrawer(page).expectOpen(DRAWER_TITLE.createBusinessCluster);
+  await waitAfterResourceMutation(page, 300);
+}
+
+/**
+ * 把向导步骤置位到「复查&检查」（reviewStepIndex）。
+ * 管理员与只读两组用同一手法，唯一差异是角色：用于把「提交」从 v-show 隐藏态取出，
+ * 从而区分只读态的隐藏来自 v-has（`.v-has-hidden`）而非 v-show。
+ */
+async function jumpClusterWizardToReviewStepByModel(page) {
+  const jumped = await page.evaluate(() => {
+    const el = document.querySelector('.newClusters');
+    if (!el) {
+      return false;
+    }
+    let vue = el.__vue__;
+    for (let i = 0; i < 10 && vue && typeof vue.reviewStepIndex !== 'number'; i += 1) {
+      vue = vue.$parent;
+    }
+    if (!vue || typeof vue.reviewStepIndex !== 'number') {
+      return false;
+    }
+    if (vue.currentStepIndex !== vue.reviewStepIndex) {
+      vue.currentStepIndex = vue.reviewStepIndex;
+    }
+    return true;
+  });
+  if (!jumped) {
+    throw new Error('向导步骤置位失败：未取到 .newClusters 组件实例');
+  }
+  await waitAfterResourceMutation(page, 300);
+}
+
+/**
+ * 只读视角详情验收：「详情」可打开、只读查看内容在、无写按钮残留（预期 3）。
+ * 调用方负责 `closeBusinessClusterDetail`。
+ */
+async function expectBusinessClusterDetailReadonly(page, clusterName) {
+  await openBusinessClusterDetail(page, clusterName);
+  await expect(
+    clusterDetailDrawer(page)
+      .locator('.panel')
+      .filter({ hasText: RO_CLUSTER_LABEL.basicConfigPanel })
+      .first(),
+  ).toBeVisible();
+  await expect(clusterDetailNameValue(page)).toHaveText(clusterName);
+  await readonly.expectAbsent(
+    clusterDetailActionButtons(page),
+    '详情抽屉内写按钮',
+  );
+}
+
+/**
+ * 只读态下以只读会话直接调用集群删除接口（探针：目标集群名不存在，任何结果都不产生数据变更），
+ * 用于文档预期 5「写操作在接口层由后端按角色强制拒绝」。
+ * 返回 `{ status, body }`，期望值为 `RO_WRITE_DENIED`。
+ */
+async function probeClusterDeleteAsReadonly(page, clusterName) {
+  const userData = await resourceApi.getUserData(page);
+  const response = await page.request.delete(
+    resourceApi.getOpenApiBaseUrl() +
+      '/clusters/' +
+      encodeURIComponent(clusterName),
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Session ' + userData.sessionKey,
+      },
+    },
+  );
+  const body = await response.json().catch(() => ({}));
+  common.log(
+    '只读态 DELETE cluster 探针响应: ' +
+      response.status() +
+      ' ' +
+      JSON.stringify(body),
+  );
+  return { status: response.status(), body };
+}
+
 module.exports = {
   openCreateBusinessClusterDrawer,
   openEditBusinessClusterDrawer,
@@ -2609,4 +2904,31 @@ module.exports = {
   expectReviewEppRuntimeUnset,
   expectEppRuntimeToast,
   watchClusterCreateRequests,
+  // 只读管理员视角（docs/business-cluster/…/02f-只读视角.md）
+  BUSINESS_CLUSTER_PATH,
+  RO_CLUSTER_LABEL,
+  RO_WRITE_DENIED,
+  clusterPageRoot,
+  clusterListAddBtn,
+  clusterRowActionButtons,
+  clusterRowWriteBtn,
+  clusterRowAction,
+  clusterSearchInput,
+  clusterCreateWizardDrawer,
+  clusterEditWizardDrawer,
+  clusterWizardFooter,
+  clusterWizardSubmitBtn,
+  clusterWizardNextBtn,
+  clusterWizardPrevBtn,
+  clusterWizardCloseBtn,
+  clusterDetailDrawer,
+  clusterDetailActionButtons,
+  clusterDetailNameValue,
+  gotoBusinessClusterPageReadonly,
+  expectBusinessClusterPageReadyReadonly,
+  ensureBusinessClusterRowVisibleByFilter,
+  openCreateBusinessClusterDrawerByModel,
+  jumpClusterWizardToReviewStepByModel,
+  expectBusinessClusterDetailReadonly,
+  probeClusterDeleteAsReadonly,
 };

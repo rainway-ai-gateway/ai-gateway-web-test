@@ -22,6 +22,9 @@
  *   走真实 GET /traffic-mirror-rules 逐列核对；
  * - 镜像集群引用须为控制面已存在集群（经 GET /clusters 取集群名）；
  * - 提交查重拦截/失败/防重用 mockRulesGetResponse/mockRulesPutResponse 构造；
+ * - 「提交并生效」自 2026-10-15 起带 `:disabled="!isDirty"`（无未提交改动时置灰，见
+ *   design-docs/modifications/2026-10-15-rule-modules-drag-guard-copy/ui-code-changes.md §5），
+ *   TM-L-17/18/19/20 提交前均先制造一次本地改动（拖拽重排 / 改采样比例）；
  * - P2 用例（L-07 排序、L-08 空集合、L-09 加载失败）本期不实现。
  */
 const { test, expect } = require('@playwright/test');
@@ -488,6 +491,16 @@ test.describe('流量镜像规则 - 列表与双模式', () => {
         await utils.enterEditMode(page);
       });
 
+      await test.step('前置：拖拽重排制造本地改动，解除「提交并生效」置灰', async () => {
+        // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，index.vue:47），
+        // 无本地改动时点击无效、等不到查重提示，故先制造一次改动。
+        // 拖拽只重排数组、不动 name/cond，两条同名规则仍在集合内，
+        // submitRules 的 Set 去重（index.vue:461-465）照旧命中名称重复。
+        // 两行名称相同、无法按名称断言新次序，故以按钮解禁作为改动已生效的判据。
+        await utils.dragRuleRow(page, 0, 1);
+        await utils.expectSubmitAndEffectDisabled(page, false);
+      });
+
       await test.step('提交被拦截：提示名称重复，不发起 PUT', async () => {
         await utils.submitRulesExpectMessage(page, P.tipNameDuplicate);
         await utils.expectEditMode(page);
@@ -515,6 +528,20 @@ test.describe('流量镜像规则 - 列表与双模式', () => {
         await utils.enterEditMode(page);
       });
 
+      await test.step('前置：拖拽重排制造本地改动，解除「提交并生效」置灰', async () => {
+        // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，index.vue:47），
+        // 无本地改动时点击无效、等不到查重提示，故先制造一次改动。
+        // 拖拽只重排数组、不动 name/cond，两条同 cond 规则仍在集合内，
+        // submitRules 的 Set 去重（index.vue:468-472）照旧命中条件重复。
+        const names = await utils.getRuleNamesInOrder(page);
+        await utils.dragRuleRow(page, 0, 1);
+        await utils.expectRuleNamesInOrder(
+          page,
+          utils.moveRuleToIndex(names, 0, 1),
+        );
+        await utils.expectSubmitAndEffectDisabled(page, false);
+      });
+
       await test.step('提交被拦截：提示条件重复，不发起 PUT', async () => {
         await utils.submitRulesExpectMessage(page, P.tipCondDuplicate);
         await utils.expectEditMode(page);
@@ -527,16 +554,27 @@ test.describe('流量镜像规则 - 列表与双模式', () => {
 
   test('TM-L-19 提交接口失败提示', async ({ page }) => {
     const tracker = utils.trackTrafficMirrorRuleRequests(page);
+    let rule;
 
     try {
       await test.step('前置：mock 一条规则 + PUT 失败，进入编辑模式', async () => {
         await utils.ensureAppSession(page);
         await cleanup.saveOriginalState(page);
-        const { rule } = await seedRule(page);
+        ({ rule } = await seedRule(page));
         await utils.mockRulesGetResponse(page, { rules: [rule] });
         await utils.mockRulesPutResponse(page, { status: 500 });
         await utils.gotoTrafficMirrorPageAndWaitForRules(page);
         await utils.enterEditMode(page);
+      });
+
+      await test.step('前置：改采样比例制造本地改动，解除「提交并生效」置灰', async () => {
+        // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，index.vue:47），
+        // 无本地改动时点击无效、等不到失败提示；改采样比例不影响本用例的断言目标。
+        await utils.openEditRuleDrawer(page, rule.name);
+        await utils.fillRulePercentage(page, 60);
+        await utils.submitRuleFormExpectMessage(page, F.saveSuccessMsg);
+        await utils.expectRuleFormDrawerHidden(page);
+        await utils.expectSubmitAndEffectDisabled(page, false);
       });
 
       await test.step('提交失败：提示「提交失败!」，停留编辑模式', async () => {
@@ -550,16 +588,27 @@ test.describe('流量镜像规则 - 列表与双模式', () => {
 
   test('TM-L-20 提交并生效按钮防重', async ({ page }) => {
     const tracker = utils.trackTrafficMirrorRuleRequests(page);
+    let rule;
 
     try {
       await test.step('前置：mock 一条规则 + PUT 延迟 2s，进入编辑模式', async () => {
         await utils.ensureAppSession(page);
         await cleanup.saveOriginalState(page);
-        const { rule } = await seedRule(page);
+        ({ rule } = await seedRule(page));
         await utils.mockRulesGetResponse(page, { rules: [rule] });
         await utils.mockRulesPutResponse(page, { delayMs: 2000 });
         await utils.gotoTrafficMirrorPageAndWaitForRules(page);
         await utils.enterEditMode(page);
+      });
+
+      await test.step('前置：改采样比例制造本地改动，解除「提交并生效」置灰', async () => {
+        // 「提交并生效」带 :disabled="!isDirty"（2026-10-15 变更，index.vue:47），
+        // 无本地改动时点击无效，防重链路根本进不去；改采样比例不影响防重断言。
+        await utils.openEditRuleDrawer(page, rule.name);
+        await utils.fillRulePercentage(page, 60);
+        await utils.submitRuleFormExpectMessage(page, F.saveSuccessMsg);
+        await utils.expectRuleFormDrawerHidden(page);
+        await utils.expectSubmitAndEffectDisabled(page, false);
       });
 
       await test.step('提交返回前连续点击，仅发起一次 PUT', async () => {

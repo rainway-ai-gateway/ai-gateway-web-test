@@ -483,7 +483,7 @@ test.describe('数据报表 - 时序与缓存 Token', () => {
     await test.step('控件位于过滤栏行尾（状态码之后、查询按钮之前）', async () => {
       const sequence = await rp.getFilterBarControlSequence(page);
       expect(sequence).toEqual([
-        '模型',
+        rp.DOC.filterLabels.model,
         'API Key',
         '服务商',
         'Host',

@@ -356,9 +356,18 @@ test.describe('AI 上下文压缩 - 查看与删除', () => {
   test('AX-DEL-03 清空全部规则：PUT 体为 {"rules": []}，提交后回填空集合', async ({
     page,
   }) => {
-    await test.step('前置：备份原始集合并进入编辑模式', async () => {
+    await test.step('前置：备份集合并确保集合非空（清空全部规则才有本地净变更）', async () => {
       await utils.ensureAppSession(page);
       await cleanup.saveOriginalState(page);
+      // 「提交并生效」带 :disabled="!isRulesDirty"（2026-10-15 变更，AIContext/index.vue:49）：
+      // 集合本就为空时 deleteAllRules 不产生本地净变更，提交按钮置灰、本用例无从验证；
+      // 先经 API 确保至少一条规则，使「清空全部规则」成为确定的净变更（cleanup 结束还原）。
+      await utils.ensureAiContextRuleExistsViaApi(
+        page,
+        utils.buildTestRule({
+          cond: 'req_path_in("/test/ax_del03_seed", false)',
+        }),
+      );
       await utils.reloadAiContextPage(page);
       await utils.enterEditMode(page);
       await utils.expectEditMode(page);
