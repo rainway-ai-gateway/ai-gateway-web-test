@@ -113,7 +113,9 @@ test.describe('路由管理 - RT-S-03 创建 API-Key 后路由表新增', () => 
       await utils.ensureRouteTableModuleAvailable(page);
       await utils.reloadRouteTableListPage(page);
       const rows = await utils.getRouteTablesViaApi(page);
-      const beforeCount = rows.filter((row) => row.type === 'apikey').length;
+      const beforeCount = rows.filter((row) =>
+        utils.routeTableTypeMatches(row.type, 'apikey'),
+      ).length;
       common.log('创建 API-Key 前 API-Key 路由表行数: ' + beforeCount);
     });
 

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-const { test } = require('@playwright/test');
+const { expect, test } = require('@playwright/test');
 const utils = require('../../pages/entity/EntityPage');
 
 const DOC = utils.DOC_ENTITY_ORG;
@@ -274,3 +274,62 @@ entityOrgDescribe('Entity组织管理 - EM-E-08 创建Entity-多层级', (cleanu
     });
   });
 });
+
+entityOrgDescribe(
+  'Entity组织管理 - EM-E-62 仅配置批量限流可创建',
+  (cleanup) => {
+    let entityName;
+    let typeName;
+
+    test('验证最大并发「不限制」且仅填批量限流时可创建成功（issue #124）', async ({
+      page,
+    }) => {
+      entityName = await utils.generateTestEntityName();
+      typeName = await utils.generateTestEntityTypeName();
+      cleanup.trackEntityName(entityName);
+      cleanup.trackTypeName(typeName);
+
+      await test.step('前置：在页面上创建Entity类型', async () => {
+        await utils.gotoEntityTypeManagementPage(page);
+        await utils.createEntityTypeViaUI(page, typeName, '批量限流校验类型', 1);
+        await utils.gotoEntityOrgManagementPage(page);
+      });
+
+      await test.step('1. 填写基本信息并启用限流', async () => {
+        await utils.openCreateEntityDrawer(page);
+        await utils.fillEntityFormBasic(page, { name: entityName, typeName });
+        await utils.selectEntityEnableRateLimit(page, '是');
+        await utils.selectEntityMaxConcurrencyOption(page, '不限制');
+      });
+
+      await test.step('2. 仅填写批量限流四维度', async () => {
+        await utils.fillEntityBatchLimits(page, {
+          max_create_rpm: 1,
+          max_active_batches: 1,
+          max_file_bytes: 1048576,
+          max_file_lines: 10,
+        });
+      });
+
+      await test.step('3. 提交成功，请求体保留 batch_limits 且无 TPM/RPM', async () => {
+        const createRequestPromise = page.waitForRequest(
+          (req) =>
+            req.method() === 'POST' && req.url().includes('/entities'),
+        );
+        await utils.submitEntityFormAndWaitForSuccess(page);
+        const payload = (await createRequestPromise).postDataJSON();
+
+        expect(payload.rate_limit_policy.enabled).toBe(true);
+        expect(payload.rate_limit_policy.rules.tpm).toEqual([]);
+        expect(payload.rate_limit_policy.rules.rpm).toEqual([]);
+        expect(payload.rate_limit_policy.rules.max_concurrency).toBe(-1);
+        expect(payload.rate_limit_policy.rules.batch_limits).toEqual({
+          max_create_rpm: 1,
+          max_active_batches: 1,
+          max_file_bytes: 1048576,
+          max_file_lines: 10,
+        });
+      });
+    });
+  },
+);

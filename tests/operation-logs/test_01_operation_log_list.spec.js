@@ -216,24 +216,29 @@ test.describe('操作日志 - OL-L-05 资源类型筛选', () => {
 
   test('验证资源类型 entity 筛选', async ({ page }) => {
     const options = await olp.getResourceTypeFilterOptions(page);
+    // 下拉渲染的是 i18n 标签（product OperationLogs/index.vue:320-323 用
+    // resourceTypeLabel(r) 作 label、r 作 value），故此处比对「13 项中文标签」；
+    // 枚举值本身由下方 resource_type 查询参数断言覆盖。
     expect(options).toEqual([
-      'entity',
-      'entity_type',
-      'api_key',
-      'provider',
-      'cluster',
-      'route',
-      'certificate',
-      'quota_plan',
-      'model_price',
-      'user',
-      'token',
+      'Entity',
+      'Entity 类型',
+      'API Key',
+      '服务商',
+      '集群',
+      '路由',
+      '证书',
+      '配额计划',
+      '模型定价',
+      '批量任务',
+      '批量文件',
+      '用户',
+      'Token',
     ]);
     expect(options).not.toEqual(
       expect.arrayContaining(['domain', 'rate_limit_policy']),
     );
 
-    const response = await olp.filterByResourceType(page, 'entity');
+    const response = await olp.filterByResourceType(page, 'Entity');
     const query = parseQuery(response.url());
     expect(query.resource_type).toBe('entity');
     await olp.operationLogTable(page).expectRowVisible(entityName);
@@ -323,7 +328,8 @@ test.describe('操作日志 - OL-L-08 组合筛选', () => {
 
   test('验证时间范围与列筛选组合查询', async ({ page }) => {
     await olp.filterByAction(page, 'create');
-    await olp.filterByResourceType(page, 'entity');
+    // 下拉项文案是标签（'Entity'），枚举值 'entity' 只体现在 resource_type 查询参数上
+    await olp.filterByResourceType(page, 'Entity');
 
     const now = new Date();
     const start = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -354,6 +360,27 @@ test.describe('操作日志 - OL-L-09 服务端分页', () => {
   const typeName = 'type_' + Date.now() + '_l9';
   const entityIds = [];
   let seeded = false;
+
+  // 本用例的清理动作（删除 Entity / Entity 类型）会异步落库成新的操作日志，
+  // total 在 1~2s 内自增；跨步骤比对绝对 total 必然随机失败。
+  // 改为「与同期基线同量级」：翻页响应必须带回非零 total（#95 的回归点正是 total 丢失），
+  // 且与此刻重新取到的基线相差不超过 TOTAL_TOLERANCE。
+  const TOTAL_TOLERANCE = 5;
+
+  async function expectTotalConsistentWithBaseline(page, pagedTotal, step) {
+    expect(
+      pagedTotal,
+      `${step}：翻页响应必须带回 pagination.total（#95：total 丢失会导致页码消失）`,
+    ).toBeGreaterThan(20);
+    const { total: baseline } = await logApi.fetchOperationLogsViaApi(page, {
+      page: 1,
+      page_size: 20,
+    });
+    expect(
+      Math.abs(pagedTotal - baseline),
+      `${step}：total 应稳定在同期基线 ${baseline} 附近（容差 ${TOTAL_TOLERANCE}，允许清理日志异步落库造成的自增）`,
+    ).toBeLessThanOrEqual(TOTAL_TOLERANCE);
+  }
 
   test.afterEach(async ({ page }) => {
     if (!seeded) {
@@ -421,16 +448,13 @@ test.describe('操作日志 - OL-L-09 服务端分页', () => {
       await olp.expectActivePaginationPage(page, 1);
     });
 
-    await test.step('点击页码 2：page=2、total 不变、页码不消失', async () => {
+    await test.step('点击页码 2：page=2、total 保持一致、页码不消失', async () => {
       const response = await olp.clickPageNumber(page, 2);
       const query = parseQuery(response.url());
       expect(Number(query.page)).toBe(2);
 
       const paged = logApi.normalizeListResponse((await response.json()).Data);
-      expect(
-        paged.total,
-        '翻页后 pagination.total 应与首页一致（#95：total 丢失会导致页码消失）',
-      ).toBe(total);
+      await expectTotalConsistentWithBaseline(page, paged.total, '翻页到第 2 页');
       expect(paged.page).toBe(2);
       expect(paged.list.length).toBeGreaterThan(0);
 
@@ -447,7 +471,7 @@ test.describe('操作日志 - OL-L-09 服务端分页', () => {
       const query = parseQuery(response.url());
       expect(Number(query.page)).toBe(1);
       const paged = logApi.normalizeListResponse((await response.json()).Data);
-      expect(paged.total).toBe(total);
+      await expectTotalConsistentWithBaseline(page, paged.total, '回到第 1 页');
       await olp.operationLogTable(page).waitForLoaded();
       await olp.expectPaginationPageNumbersVisible(page, 1, 2);
       await olp.expectActivePaginationPage(page, 1);
@@ -548,6 +572,12 @@ test.describe('操作日志 - OL-L-11 操作动作 Tag 颜色', () => {
           continue;
         }
         const log = list[0];
+        // 环境中 action=reset 的日志 resource_name 为空串（如全局路由启停），
+        // 只判 list.length 会让 searchByResourceName('') 搜到任意行、Tag 颜色必然对不上；
+        // 缺少可定位资源名的样本直接跳过，不弱化断言。
+        if (!log.resource_name) {
+          continue;
+        }
         await olp.reloadOperationLogPage(page);
         await olp.searchByResourceName(page, log.resource_name);
         await olp.expectActionTagColor(

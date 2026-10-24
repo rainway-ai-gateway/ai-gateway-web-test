@@ -15,6 +15,7 @@
  */
 const { test, expect } = require('@playwright/test');
 const utils = require('../../pages/user/UserPage');
+const sessionUtils = require('../../utils/session');
 
 test.describe('用户管理 - UM-35 注销-取消', () => {
   test('验证取消注销保持登录状态', async ({ page }) => {
@@ -69,6 +70,13 @@ test.describe('用户管理 - UM-34 注销-成功', () => {
 
     await test.step('验证跳转到登录页', async () => {
       expect(page.url()).toContain('/login');
+    });
+
+    await test.step('重建共享登录态（auth.json）', async () => {
+      // 后端每个用户只保留 1 个 Session Key：本用例的登录已作废 auth.json 里的旧 Key，
+      // 随后的注销又作废了本次的 Key。若不重建，后续用例会拿着失效 Key 请求而 401
+      //（表现为「Session Key 错误」遮罩拦截点击），形成整模块级联假失败。
+      await sessionUtils.restoreSharedSession(page);
     });
   });
 });

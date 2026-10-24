@@ -58,7 +58,11 @@ test.describe('用户管理 - UM-37 用户名保留名', () => {
     for (const username of ['admin', 'root', 'system', 'Admin']) {
       await utils.fillAddUserForm(page, username, utils.getDocPassword());
       await utils.submitAddUserForm(page);
-      await utils.expectAddUserFormFieldError(page, '用户名', DOC.tipNameRule);
+      await utils.expectAddUserFormFieldError(
+        page,
+        '用户名',
+        utils.DOC_USER.tipReservedUserName,
+      );
     }
 
     await utils.closeAddUserDrawer(page);

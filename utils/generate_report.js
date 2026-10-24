@@ -38,15 +38,37 @@ function collectSpecs(suite, fileTitle, groups) {
   }
 }
 
+/**
+ * 模块显示名：以 spec 路径里的 `tests/<目录>/` 段为准（不再靠零散关键词猜）。
+ * 与 `docs/<模块>/` 的目录命名对齐；未登记的目录直接用目录名兜底。
+ */
+const MODULE_LABELS = {
+  'ai-cache': 'AI 缓存规则',
+  'ai-context': 'AI 上下文压缩',
+  'api-key': 'API-Key 管理',
+  'batch-tasks': '批量任务',
+  cert: '证书管理（回归外）',
+  cluster: 'AI 业务集群',
+  'entity-management': 'Entity 组织管理',
+  'entity-type': 'Entity 类型管理',
+  'epp-pool': 'EPP 实例池与调度',
+  'intent-config': '意图配置',
+  'model-prices': '模型定价',
+  'operation-logs': '操作日志',
+  providers: '模型服务商',
+  'reencrypt-sweep': '密钥收敛',
+  report: '数据报表',
+  route: '路由管理',
+  'traffic-mirror': '流量镜像规则',
+  user: '用户管理',
+};
+
 function inferModule(filePath) {
   if (!filePath) return '其他';
-  if (filePath.includes('/entity/') || filePath.includes('\\entity\\')) {
-    return 'Entity 管理';
-  }
-  if (filePath.includes('/user/') || filePath.includes('\\user\\')) {
-    return '用户管理';
-  }
-  return '其他';
+  const normalized = String(filePath).replace(/\\/g, '/');
+  const matched = normalized.match(/(?:^|\/)tests\/([^/]+)\//);
+  if (!matched) return '其他';
+  return MODULE_LABELS[matched[1]] || matched[1];
 }
 
 function getHtmlReportDir(report) {
@@ -335,7 +357,7 @@ function generateReport(jsonPath, outputPath, options = {}) {
   return { total, passed, failed, skipped, outputPath, timestampedPath };
 }
 
-module.exports = { generateReport };
+module.exports = { generateReport, inferModule };
 
 if (require.main === module) {
   const args = process.argv.slice(2);

@@ -346,9 +346,18 @@ const STATUS_LABELS = {
   false: '停用',
 };
 
+/**
+ * mock 数据行的 type 取值 = **接口返回值**：后端 `RouteTableTypeAPIKey = 'api_key'`
+ * （自 2026-08-31 起），不是 UI 下拉的 value `apikey`。
+ * 列表「类型」列显示的是 `TYPE_MAP[row.type]`（`RouteTable/index.vue:53-58,96`），
+ * 故此处的 type 取值直接决定单元格是否命中 `api_key → API-Key` 映射 —— 用 `apikey`
+ * 会绕开产品 792bb73 补的那条映射，让 mock 用例覆盖不到该修复。
+ */
+const API_TYPE = { global: 'global', entity: 'entity', apikey: 'api_key' };
+
 function makeRouteTableItem(type, index, enabled) {
   const owner = type === 'global' ? 'global' : `${type}-${index}`;
-  return { type, owner, enabled };
+  return { type: API_TYPE[type] || type, owner, enabled };
 }
 
 function buildMockList(counts) {
@@ -362,10 +371,20 @@ function buildMockList(counts) {
   return list;
 }
 
+/**
+ * 列表「类型」筛选的「查询值 → 数据行 type」映射。
+ *
+ * 查询值取 UI 下拉的 value（`RouteTable/index.vue:91-95`：global / entity / **apikey**），
+ * 数据行 type 取接口原值（`api_key`）。两种查询写法都接受并映射到同一数据取值 ——
+ * 原实现只登记了 `api_key` 键，而 UI 实际发的是 `apikey`，于是「按 API-Key 类型筛选」
+ * 在 mock 里静默不过滤（`TYPE_MAP[typeVal]` 为 undefined → 整表返回），
+ * 任何基于该筛选的断言都会退化成恒真。
+ */
 const TYPE_MAP = {
   global: 'global',
   entity: 'entity',
-  api_key: 'apikey',
+  apikey: 'api_key',
+  api_key: 'api_key',
 };
 
 async function mockRouteTablesList(page, fullList) {
@@ -455,7 +474,16 @@ test.describe('路由管理 - RT-L-01 进入路由表列表页', () => {
     await expect(
       table.searchArea().getByPlaceholder('请输入路由表属主查询'),
     ).toBeVisible();
-    await expect(table.searchArea().getByText('请选择状态')).toBeVisible();
+    // 状态列搜索控件默认取「启用」，placeholder「请选择状态」不渲染，
+    // 布局断言改为「控件可见 + 默认值正确」（默认值行为详见 RT-L-17）
+    await expect(
+      utils.routeTableSearchSelect(page, utils.ROUTE_TABLE_SEARCH_COLUMN.status),
+    ).toBeVisible();
+    await utils.expectRouteTableSearchFilterValue(
+      page,
+      utils.ROUTE_TABLE_SEARCH_COLUMN.status,
+      '启用',
+    );
   });
 });
 
@@ -469,6 +497,9 @@ test.describe('路由管理 - RT-L-02 按路由表类型筛选 Entity', () => {
       page,
       buildMockList({ global: 2, entity: 3, apikey: 2 }),
     );
+    // 状态列默认「启用」会先滤掉停用行，按类型筛选前显式清空，
+    // 保证断言的是「类型」筛选本身的完整结果集
+    await utils.clearRouteTableStatusFilter(page);
     await utils.selectRouteTableTypeFilter(page, 'Entity');
     await expect(table.dataRows().filter({ hasText: 'Entity' })).toHaveCount(3);
     await expect(table.dataRows().filter({ hasText: 'Global' })).toHaveCount(0);
@@ -513,7 +544,15 @@ test.describe('路由管理 - RT-L-04 按启用状态筛选', () => {
       page,
       buildMockList({ global: 2, entity: 2, apikey: 2 }),
     );
-    await utils.selectRouteTableStatusFilter(page, '启用');
+    // 状态列默认已是「启用」，先清空拿到全量 6 行，
+    // 再显式选「启用」，证明列表条数确实由该筛选驱动
+    await utils.clearRouteTableStatusFilter(page);
+    await expect(table.dataRows()).toHaveCount(6);
+    await utils.selectRouteTableSearchFilter(
+      page,
+      utils.ROUTE_TABLE_SEARCH_COLUMN.status,
+      '启用',
+    );
     await expect(table.dataRowsByStatus('启用')).toHaveCount(3);
     await expect(table.dataRowsByStatus('停用')).toHaveCount(0);
   });
@@ -531,6 +570,7 @@ test.describe('路由管理 - RT-L-05 组合筛选 global + 停用', () => {
       { type: 'entity', owner: 'entity-1', enabled: false },
     ]);
     await utils.selectRouteTableTypeFilter(page, 'Global');
+    // 状态默认「启用」，这里要选「停用」，显式覆盖默认值
     await utils.selectRouteTableStatusFilter(page, '停用');
     await expect(table.dataRows()).toHaveCount(1);
     await expect(
@@ -550,6 +590,9 @@ test.describe('路由管理 - RT-L-06 分页切换', () => {
   test('RT-L-06 分页切换', async ({ page }) => {
     const list = buildMockList({ global: 25 });
     const table = await gotoListPageWithMock(page, list);
+    // 状态默认「启用」会把 25 行砍成 13 行，分页断言前先清空筛选拿全量
+    await utils.clearRouteTableStatusFilter(page);
+    await expect(table.dataRows()).toHaveCount(20);
     await table.clickPageNumber(2);
     await expect(
       table.pagination().getByRole('listitem').filter({ hasText: '2' }).first(),
@@ -566,6 +609,8 @@ test.describe('路由管理 - RT-L-07 每页条数切换为 30', () => {
   test('RT-L-07 每页条数切换为 30', async ({ page }) => {
     const list = buildMockList({ global: 35 });
     const table = await gotoListPageWithMock(page, list);
+    // 同上：先清空默认「启用」筛选，保证 35 行全量参与分页
+    await utils.clearRouteTableStatusFilter(page);
     await table.changePageSize('30条/页');
     await expect(table.dataRows()).toHaveCount(30);
   });
@@ -610,6 +655,9 @@ test.describe('路由管理 - RT-L-16 启用/停用按钮状态正确', () => {
       { type: 'global', owner: 'global', enabled: true },
       { type: 'entity', owner: 'entity-1', enabled: false },
     ]);
+    // 本用例要同时校验启用行与停用行的按钮态，必须先清空默认「启用」筛选
+    await utils.clearRouteTableStatusFilter(page);
+    await expect(table.dataRows()).toHaveCount(2);
     const enabledRow = table
       .dataRows()
       .filter({ hasText: 'Global' })

@@ -27,6 +27,8 @@ const GLOBAL_RULES_PUT_URL = '**/open-api/v1/global-route-rules';
 test.describe('路由管理 - RT-D-17 详情页加载失败提示错误', () => {
   test.afterEach(async ({ page }) => {
     await page.unroute(GLOBAL_RULES_GET_URL);
+    // 还原 initRouteTestData 的播种结果（保留环境原有 Global 规则）
+    await resourceApi.restoreRouteTestData(page);
   });
 
   test('RT-D-17 详情页加载失败提示错误', async ({ page }) => {
@@ -46,6 +48,8 @@ test.describe('路由管理 - RT-D-17 详情页加载失败提示错误', () => 
       });
     });
     const table = utils.routeTableList(page);
+    // 列表状态列默认「启用」，Global 停用时该行不在列表中；本用例要点击它的「查看」
+    await utils.clearRouteTableStatusFilter(page);
     const row = table.dataRows().filter({ hasText: 'Global' }).first();
     await row.getByRole('button', { name: '查看' }).click();
     await page.waitForTimeout(1000);
@@ -87,6 +91,8 @@ test.describe('路由管理 - RT-D-20 Global 路由表不存在时进入详情',
 test.describe('路由管理 - RT-D-16 提交接口失败时提示错误并停留编辑模式', () => {
   test.afterEach(async ({ page }) => {
     await page.unroute(GLOBAL_RULES_PUT_URL);
+    // 先解除 PUT 打桩再还原，避免还原请求被 500 桩拦截
+    await resourceApi.restoreRouteTestData(page);
   });
 
   test('RT-D-16 提交接口失败时提示错误并停留编辑模式', async ({ page }) => {
@@ -148,8 +154,13 @@ test.describe('路由管理 - RT-D-19 快速点击启用按钮仅发送一次请
 
     let putCount = 0;
     await page.route(GLOBAL_RULES_PUT_URL, async (route) => {
+      // 产品防抖靠 loading 期间把按钮置为 disabled（RouteTable/index.vue:146 的
+      // disabled: enabled || isLoading + :364 的 onToggleEnabled 早退）。
+      // stub 若瞬时返回，禁用窗口只有毫秒级，断言 5s 内 14 次轮询会全部错过；
+      // 这里给 PUT 加 800ms 延迟，让「禁用窗口」可被稳定观测（时序脆弱点修复，非弱化断言）。
       if (route.request().method() === 'PUT') {
         putCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 800));
       }
       await route.fulfill({
         status: 200,
@@ -167,6 +178,6 @@ test.describe('路由管理 - RT-D-19 快速点击启用按钮仅发送一次请
     // 尝试再次点击（应该被忽略）
     await enableBtn.click({ force: true });
     await page.waitForTimeout(2000);
-    expect(putCount).toBeLessThanOrEqual(1);
+    expect(putCount).toBe(1);
   });
 });

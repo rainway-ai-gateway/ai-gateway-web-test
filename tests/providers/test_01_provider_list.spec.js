@@ -50,6 +50,12 @@
  * 6. models 必填化偏差（2026-09-17 起后端要求 models 至少 1 个元素）：原依赖「空 models」
  *    的「模型列占位 `-`」场景已不可构造，按产品结论下线该断言（PR-L-01 第 7 步、
  *    PR-L-08 第 3 步），文档 01-服务商列表.md 同步更新。
+ * 7. 前端分页适配（2026-10-15）：产品 pageTable 只渲染当前页（默认 20 条/页），环境内
+ *    服务商 50+ 条 → 造数后的新行常落在第 2/3 页，原「造数后直接断言行可见」必然超时。
+ *    断言内容不变，改为先按名称本地筛选再做行断言（封装 pp.expectProviderRowVisibleByName）；
+ *    涉及多行可见性的 PR-L-02~PR-L-06 先按造数前缀筛选出本用例行集合，「清空关键词 →
+ *    恢复全部记录」改为断言搜索框为空（条件已移除），另以分页多页（PR-L-02）或小集合
+ *    行可见性（PR-L-03/05/06）验证记录仍在列表中。
  *
  * 运行：npx playwright test tests/providers/test_01_provider_list.spec.js
  */
@@ -79,13 +85,14 @@ async function createProviderViaApiAndTrack(page, cleanup, payload) {
 test.describe('模型服务商 - PR-L-01 列表加载与全量拉取', () => {
   let cleanup;
   let created;
+  let base;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
     await pp.gotoProvidersPage(page);
 
     // API 造数 3 个服务商：覆盖多模型(3个)/双协议/单模型
-    const base = 'provider_' + Date.now().toString(36);
+    base = 'provider_' + Date.now().toString(36);
     created = [];
     const payloads = [
       {
@@ -151,7 +158,9 @@ test.describe('模型服务商 - PR-L-01 列表加载与全量拉取', () => {
     await pp.expectTableHeaders(page);
 
     // 4. 造数的 3 个服务商行可见
+    //    （前端分页 20 条/页且只渲染当前页：先按造数前缀本地筛选，3 行必在第 1 页）
     const table = pp.providerTable(page);
+    await pp.filterListByName(page, base);
     await table.expectRowVisible(pa.name);
     await table.expectRowVisible(pb.name);
     await table.expectRowVisible(pc.name);
@@ -192,10 +201,11 @@ async function clearListSearchBlur(page, title) {
 test.describe('模型服务商 - PR-L-02 名称筛选（本地，不触发请求）', () => {
   let cleanup;
   let names;
+  let base;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
-    const base = 'provider_' + Date.now().toString(36);
+    base = 'provider_' + Date.now().toString(36);
     names = [];
     const payloads = [
       { name: base + 'a', description: '自动化测试-名称筛选-甲' },
@@ -214,6 +224,8 @@ test.describe('模型服务商 - PR-L-02 名称筛选（本地，不触发请求
       );
     }
     await pp.gotoProvidersPage(page);
+    // 前端分页 20 条/页：先按造数前缀本地筛选，3 行必在第 1 页（断言存在性）
+    await pp.filterListByName(page, base);
     await pp.providerTable(page).expectRowVisible(names[0]);
   });
 
@@ -234,9 +246,16 @@ test.describe('模型服务商 - PR-L-02 名称筛选（本地，不触发请求
       await pp.providerTable(page).expectRowHidden(n3);
     });
 
-    // 2. 清空关键词 → 恢复全部记录
+    // 2. 清空关键词 → 筛选条件移除（搜索框为空、分页恢复全量多页）
     await pp.expectNoListRequestDuring(page, async () => {
       await clearListSearchBlur(page, '名称');
+      await pp.expectListFilterCleared(page, '名称');
+    });
+
+    // 3. 清空后 3 条记录仍在「全部记录」列表中
+    //    （前端分页 20 条/页，全量 50+ 条不会同时渲染：按造数前缀本地筛选断言可见性）
+    await pp.expectNoListRequestDuring(page, async () => {
+      await pp.filterListByName(page, base);
       await pp.providerTable(page).expectRowVisible(n1);
       await pp.providerTable(page).expectRowVisible(n2);
       await pp.providerTable(page).expectRowVisible(n3);
@@ -249,10 +268,11 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
   let p1;
   let p2;
   let p3;
+  let base;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
-    const base = 'provider_' + Date.now().toString(36);
+    base = 'provider_' + Date.now().toString(36);
     p1 = (
       await createProviderViaApiAndTrack(page, cleanup, {
         name: base + 'a',
@@ -278,6 +298,9 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
       })
     ).name;
     await pp.gotoProvidersPage(page);
+    // 前端分页 20 条/页：先按造数前缀本地筛选，3 行必在第 1 页
+    //（后续「描述筛选」断言需在含 p1/p2/p3 的小集合上进行，与全量分页解耦）
+    await pp.filterListByName(page, base);
     await pp.providerTable(page).expectRowVisible(p1);
   });
 
@@ -296,9 +319,10 @@ test.describe('模型服务商 - PR-L-03 描述筛选（本地，空描述不匹
       await pp.providerTable(page).expectRowHidden(p3);
     });
 
-    // 2. 清空描述关键词 → 恢复全部记录
+    // 2. 清空描述关键词 → 描述条件移除（搜索框为空），3 行恢复命中
     await pp.expectNoListRequestDuring(page, async () => {
       await clearListSearchBlur(page, '描述');
+      await expect(pp.providerTable(page).searchInput('请输入描述查询')).toHaveValue('');
       await pp.providerTable(page).expectRowVisible(p1);
       await pp.providerTable(page).expectRowVisible(p2);
       await pp.providerTable(page).expectRowVisible(p3);
@@ -312,10 +336,11 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anth
   let pAnthropic;
   let pGemini;
   let pBoth;
+  let base;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
-    const base = 'provider_' + Date.now().toString(36);
+    base = 'provider_' + Date.now().toString(36);
     pOpenai = (
       await createProviderViaApiAndTrack(page, cleanup, {
         name: base + 'oa',
@@ -349,6 +374,9 @@ test.describe('模型服务商 - PR-L-04 协议筛选（下拉选项 openai/anth
       })
     ).name;
     await pp.gotoProvidersPage(page);
+    // 前端分页 20 条/页：先按造数前缀本地筛选，4 行（含双协议行）必在第 1 页，
+    // 后续协议筛选断言即在小集合上进行（全环境 53 条 openai 记录会跨页）
+    await pp.filterListByName(page, base);
     await pp.providerTable(page).expectRowVisible(pBoth);
   });
 
@@ -411,10 +439,11 @@ test.describe('模型服务商 - PR-L-05 模型筛选（models join 本地筛选
   let p1;
   let p2;
   let p3;
+  let base;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
-    const base = 'provider_' + Date.now().toString(36);
+    base = 'provider_' + Date.now().toString(36);
     p1 = (
       await createProviderViaApiAndTrack(page, cleanup, {
         name: base + 'a',
@@ -440,6 +469,8 @@ test.describe('模型服务商 - PR-L-05 模型筛选（models join 本地筛选
       })
     ).name;
     await pp.gotoProvidersPage(page);
+    // 前端分页 20 条/页：先按造数前缀本地筛选，3 行必在第 1 页
+    await pp.filterListByName(page, base);
     await pp.providerTable(page).expectRowVisible(p1);
   });
 
@@ -458,9 +489,10 @@ test.describe('模型服务商 - PR-L-05 模型筛选（models join 本地筛选
       await pp.providerTable(page).expectRowHidden(p3);
     });
 
-    // 2. 清空模型关键词 → 恢复全部记录
+    // 2. 清空模型关键词 → 模型条件移除（搜索框为空），3 行恢复命中
     await pp.expectNoListRequestDuring(page, async () => {
       await clearListSearchBlur(page, '模型');
+      await expect(pp.providerTable(page).searchInput('请输入模型查询')).toHaveValue('');
       await pp.providerTable(page).expectRowVisible(p1);
       await pp.providerTable(page).expectRowVisible(p2);
       await pp.providerTable(page).expectRowVisible(p3);
@@ -503,6 +535,8 @@ test.describe('模型服务商 - PR-L-06 组合筛选（名称+协议+模型 与
       })
     ).name;
     await pp.gotoProvidersPage(page);
+    // 前端分页 20 条/页：先按造数前缀本地筛选，3 行必在第 1 页
+    await pp.filterListByName(page, base);
     await pp.providerTable(page).expectRowVisible(p1);
   });
 
@@ -545,11 +579,16 @@ test.describe('模型服务商 - PR-L-06 组合筛选（名称+协议+模型 与
       await pp.providerTable(page).expectRowHidden(p2);
     });
 
-    // 5. 清空名称 → 名称条件失效，协议条件仍生效：openai 行可见
+    // 5. 清空名称 → 名称条件失效（搜索框清空），协议条件仍生效：
+    //    p1/p3（openai）可见、p2（纯 anthropic）仍隐藏
+    //    （前端分页下清空名称后 openai 记录 50+ 条会跨页，故按造数前缀本地筛选后再看协议结果）
     await pp.expectNoListRequestDuring(page, async () => {
       await clearListSearchBlur(page, '名称');
+      await expect(pp.providerTable(page).searchInput('请输入名称查询')).toHaveValue('');
+      await pp.filterListByName(page, base);
       await pp.providerTable(page).expectRowVisible(p1);
       await pp.providerTable(page).expectRowVisible(p3);
+      await pp.providerTable(page).expectRowHidden(p2);
     });
   });
 });
@@ -628,10 +667,10 @@ test.describe('模型服务商 - PR-L-08 模型列 2 Tag + `+N` 悬停 Tooltip',
       })
     ).name;
     await pp.gotoProvidersPage(page);
-    // 偏差 5：先按唯一名称前缀本地筛选，表格仅剩本用例行（其他 `+N` 行 Tooltip 随行卸载，
-    // 规避 expectModelsTooltip 未限定作用域导致的 strict mode 冲突；同时保证行必然可见）
-    await filterListSearchBlur(page, '名称', base);
-    await pp.providerTable(page).expectRowVisible(pMulti);
+    // 偏差 5/7：先按唯一名称前缀本地筛选，表格仅剩本用例行（其他 `+N` 行 Tooltip 随行卸载，
+    // 规避 expectModelsTooltip 未限定作用域导致的 strict mode 冲突；前端分页 20 条/页下
+    // 行也可能不在第 1 页，筛选后行必然可见）
+    await pp.expectProviderRowVisibleByName(page, pMulti);
   });
 
   test.afterEach(async ({ page }) => {
@@ -702,10 +741,9 @@ test.describe('模型服务商 - PR-L-10 操作列 5 个按钮', () => {
       models: ['qa-l10-model'],
     });
     await pp.gotoProvidersPage(page);
-    // 按唯一名称前缀本地筛选：表格仅剩本用例行，行必然可见且点击精确（与 fullyParallel 下
-    // 其他用例并发造数（如 PR-L-07 的 21 条）互不干扰，避免行落到第 2 页导致 expectRowVisible 超时）
-    await filterListSearchBlur(page, '名称', providerName);
-    await pp.providerTable(page).expectRowVisible(providerName);
+    // 按唯一名称本地筛选：表格仅剩本用例行，行必然可见且点击精确（前端分页 20 条/页，
+    // 行可能落在第 2/3 页；与并行用例的造数互不干扰）
+    await pp.expectProviderRowVisibleByName(page, providerName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -755,10 +793,9 @@ test.describe('模型服务商 - PR-L-11 查询模型价格跳转并按服务商
       models: [MODEL],
     });
     await pp.gotoProvidersPage(page);
-    // 按唯一名称前缀本地筛选：表格仅剩本用例行，行必然可见且点击精确（与 fullyParallel 下
-    // 其他用例并发造数互不干扰）
-    await filterListSearchBlur(page, '名称', providerName);
-    await pp.providerTable(page).expectRowVisible(providerName);
+    // 按唯一名称本地筛选：表格仅剩本用例行，行必然可见且点击精确（前端分页下
+    // 行可能落在第 2/3 页；与并行用例的造数互不干扰）
+    await pp.expectProviderRowVisibleByName(page, providerName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -797,7 +834,7 @@ test.describe('模型服务商 - PR-L-11 查询模型价格跳转并按服务商
     });
     expect(created).not.toBeNull();
     mpCleanup.trackCombo(providerName, MODEL, 'chat');
-    await pp.providerTable(page).expectRowVisible(providerName);
+    await pp.expectProviderRowVisibleByName(page, providerName);
 
     const urlPromise = page.waitForURL(
       (url) =>

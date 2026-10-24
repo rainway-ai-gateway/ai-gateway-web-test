@@ -16,6 +16,7 @@
 const { expect, test } = require('@playwright/test');
 const moment = require('moment');
 const common = require('../../utils/common');
+const sessionUtils = require('../../utils/session');
 const umUtils = require('../user/UserPage');
 const apiUtils = require('../../api/resource-api-utils');
 const {
@@ -63,8 +64,9 @@ const DOC_BUSINESS_CLUSTER = {
   healthHostFormatMsg: '格式错误',
   hashHeaderRequiredMsg: '哈希头部不能为空',
   timeoutRequiredMsg: '输入不能为空',
-  // 2026-08-27 集群描述长度校验（i18n cluster.descriptionLengthError）
-  descriptionLengthErrorMsg: '集群描述不能超过256个字符',
+  // 2026-08-27 集群描述长度校验（i18n cluster.descriptionLengthError，2026-10-22 改为 UTF-8 字节口径）
+  descriptionLengthErrorMsg: '集群描述不能超过256字节（按 UTF-8 字节计）',
+  descriptionControlCharsErrorMsg: '集群描述不能包含控制字符',
   // 2026-08-27 大模型配置新文案（对齐 i18n gatewayConfig.*）
   matchPrefixRequiredMsg: '开启裁剪前缀时，匹配前缀必填',
   matchPrefixMustEndWithSlashMsg: '匹配前缀必须以 / 结尾',
@@ -105,23 +107,33 @@ const DOC_BUSINESS_CLUSTER = {
   keyAffinityTtlInvalidMsg: '须为大于 0 的整数',
   keyAffinityRedisPrefixRequiredMsg: 'Redis Key 前缀不能为空',
   defaultRedisPrefix: 'bfe:ai:key_affinity',
+  // 2026-10-10 上游错误归一（新增 Card，渲染在「Key 亲和性」与「均衡模式配置」之间，
+  // WRR/EPP 两种均衡模式下均展示；文案对齐 i18n gatewayConfig.normalizeUpstreamError）
+  normalizeUpstreamErrorCard: '上游错误归一',
   // 2026-09-09 均衡模式配置（RM-BC-93~103）
+  // 2026-10-09 EPP 调度参数破坏性重构对齐 v0.6：
+  // scheduling_profile/cache_affinity 重命名为 load_profile/affinity（枚举变更），
+  // 新增 waiting_queue_max/running_requests_max/fallback_on_empty/metrics_staleness_threshold_ms（RM-BC-104~109）
   balanceModeConfigCard: '均衡模式配置',
   balanceModeLabel: '负载均衡模式',
   balanceModeWrr: 'WRR',
   balanceModeEpp: 'EPP',
-  schedulingProfileLabel: '调度策略',
-  schedulingProfileOptions: ['latency-first', 'balanced', 'throughput-first'],
-  cacheAffinityLabel: '缓存亲和性',
-  cacheAffinityOptions: ['low', 'medium', 'high'],
+  schedulingProfileLabel: '实例负载画像',
+  schedulingProfileOptions: ['queue-first', 'balanced', 'kv-first'],
+  cacheAffinityLabel: '亲和强度',
+  cacheAffinityOptions: ['off', 'low', 'medium', 'high'],
   prefixCacheAffinityLabel: '前缀缓存亲和性',
   sessionAffinityEnabledLabel: '会话亲和性',
   sessionAffinityHeaderLabel: '会话亲和性 Header',
   kvCacheUtilizationMaxLabel: 'KV 缓存利用率上限',
+  waitingQueueMaxLabel: '排队长度过滤阈值',
+  runningRequestsMaxLabel: '在飞请求数过滤阈值',
+  fallbackOnEmptyLabel: '无端点时回退派发',
+  metricsStalenessThresholdMsLabel: '指标失效剔除阈值（ms）',
   flowControlCard: '流控',
   maxRequestsLabel: '最大请求数',
-  queueTtlLabel: '队列超时(ms)',
-  noEndpointQueueTtlLabel: '无端点队列超时(ms)',
+  queueTtlLabel: '队列 TTL（秒）',
+  noEndpointQueueTtlLabel: '无端点队列 TTL（秒）',
   enableEvictionLabel: '启用驱逐',
   defaultBalanceMode: 'WRR',
   defaultSchedulingProfile: 'balanced',
@@ -129,7 +141,55 @@ const DOC_BUSINESS_CLUSTER = {
   defaultPrefixCacheAffinity: true,
   defaultSessionAffinityEnabled: false,
   defaultKvCacheUtilizationMax: 0.9,
-  defaultFlowControl: { max_requests: 1000, queue_ttl: 5000, no_endpoint_queue_ttl: 5000, enable_eviction: true },
+  defaultWaitingQueueMax: 0,
+  defaultRunningRequestsMax: 0,
+  defaultFallbackOnEmpty: false,
+  defaultMetricsStalenessThresholdMs: 200,
+  waitingQueueMaxInvalidMsg: '排队长度过滤阈值须为 >= 0 的数',
+  runningRequestsMaxInvalidMsg: '在飞请求数过滤阈值须为 >= 0 的数',
+  metricsStalenessThresholdMsInvalidMsg: '指标失效剔除阈值须为 > 0 的整数（ms）',
+  enableEvictionDisabledHint: '当前不支持开启，保持关闭',
+  defaultFlowControl: { max_requests: -1, queue_ttl: 60, no_endpoint_queue_ttl: 60, enable_eviction: false },
+  // 2026-10-13 EPP 运行时参数（RM-BC-115~122）
+  // 分组子字段：关闭健康检查（switch）、健康检查间隔/冷却时长/连接超时/调用超时（duration
+  // 复合控件：数字框 + 单位下拉 ms/s/m）、失败次数阈值/成功次数阈值（InputNumber，min=1）；
+  // ? 提示图标仅 3 个字段保留；未配置集群展示「未配置（BFE 补默认）」
+  eppRuntimeCard: 'EPP 运行时参数',
+  eppCheckDisabledLabel: '关闭后台健康检查',
+  eppCheckIntervalLabel: '健康检查间隔',
+  eppFailThresholdLabel: '失败次数阈值',
+  eppCooldownLabel: '冷却时长',
+  eppSuccessThresholdLabel: '成功次数阈值',
+  eppConnectTimeoutLabel: '连接超时',
+  eppCallTimeoutLabel: '调用超时',
+  eppDurationUnits: ['ms', 's', 'm'],
+  eppRuntimeReviewTitle: 'EPP 运行时参数:',
+  eppRuntimeUnsetHint: '未配置（BFE 补默认）',
+  eppSwitchOnText: '启用',
+  eppSwitchOffText: '停用',
+  defaultEppRuntime: {
+    check: {
+      disabled: false,
+      check_interval: '2s',
+      fail_threshold: 3,
+      cooldown: '45s',
+      success_threshold: 2,
+    },
+    timeout: { connect: '500ms', call: '3s' },
+  },
+  // duration 字段默认单位：间隔/冷却/调用超时 s，连接超时 ms
+  defaultEppRuntimeUnits: {
+    checkInterval: 's',
+    cooldown: 's',
+    connectTimeout: 'ms',
+    callTimeout: 's',
+  },
+  eppCheckIntervalInvalidMsg: '健康检查间隔须为合法的 Go duration 且 > 0（如 2s）',
+  eppCooldownInvalidMsg: '冷却时长须为合法的 Go duration 且 > 0（如 45s）',
+  eppConnectTimeoutInvalidMsg: '连接超时须为合法的 Go duration 且 > 0（如 500ms）',
+  eppCallTimeoutInvalidMsg: '调用超时须为合法的 Go duration 且 > 0（如 3s）',
+  eppFailThresholdInvalidMsg: '失败次数阈值须为 >= 1 的整数',
+  eppSuccessThresholdInvalidMsg: '成功次数阈值须为 >= 1 的整数',
 };
 
 const BUSINESS_CLUSTER_STEPS = [
@@ -238,8 +298,12 @@ async function ensureAppSession(page) {
 
   try {
     await ensureChineseLang(page);
+    // 导航入口统一会话守卫：Session Key 失效时先自愈（重新登录 + 回写 auth.json），
+    // 避免带失效 Key 加载页面后 401 弹「Session Key 错误」遮罩拦截所有点击。
+    await sessionUtils.ensureSessionHealthy(page, {
+      retryUrl: getAppBaseUrl() + '/',
+    });
     await umUtils.handleUrlInvalidAlert(page);
-    await umUtils.ensureLoggedIn(page);
     await ensureAuthenticatedShell(page);
   } catch (e) {
     if (isConnectionError(e)) {

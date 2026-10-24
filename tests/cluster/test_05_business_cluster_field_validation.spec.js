@@ -100,7 +100,7 @@ test.describe('AI业务集群管理 - RM-BC-39~41、65~68 字段校验', () => {
   });
 
   // RM-BC-39: 集群描述长度校验
-  test('RM-BC-39 集群描述长度校验', async ({ page }) => {
+  test('RM-BC-39 集群描述长度与字符校验（0-256 UTF-8 字节）', async ({ page }) => {
     const clusterName = utils.generateTestBusinessClusterName();
     cleanup.trackBusinessCluster(clusterName);
 
@@ -118,6 +118,27 @@ test.describe('AI业务集群管理 - RM-BC-39~41、65~68 字段校验', () => {
       DOC.descriptionLengthErrorMsg,
     );
 
+    // 200 个汉字 = 600 字节：字符数未超 256、字节数超限，验证按 UTF-8 字节判定
+    await utils.fillBasicStep(page, { description: '测'.repeat(200) });
+    await utils.clickWizardNext(page);
+    await utils.expectWizardStep(page, '基础配置');
+    await utils.expectWizardFormFieldError(
+      page,
+      '集群说明',
+      DOC.descriptionLengthErrorMsg,
+    );
+
+    // 控制字符拦截
+    await utils.fillBasicStep(page, { description: 'a\tb' });
+    await utils.clickWizardNext(page);
+    await utils.expectWizardStep(page, '基础配置');
+    await utils.expectWizardFormFieldError(
+      page,
+      '集群说明',
+      DOC.descriptionControlCharsErrorMsg,
+    );
+
+    // 256 字节 ASCII 上界通过
     await utils.fillBasicStep(page, {
       description: 'a'.repeat(256),
     });

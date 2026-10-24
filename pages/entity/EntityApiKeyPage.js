@@ -90,6 +90,105 @@ async function expectAddApiKeyButtonVisible(page) {
   await expect(page.getByRole('button', { name: '创建' })).toBeVisible();
 }
 
+// ── 只读管理员视角（v-has 隐藏写操作）断言 ───────────────────────────
+
+const HAS_HIDDEN_CLASS = 'v-has-hidden';
+
+/** 匹配被 v-has 隐藏且文本包含 text 的按钮（元素仍在 DOM） */
+function hasHiddenButtons(page, text) {
+  return page.locator(`button.${HAS_HIDDEN_CLASS}`).filter({ hasText: text });
+}
+
+/** 只读：工具栏「创建」写按钮仍在 DOM 中，但被 v-has 隐藏 */
+async function expectAddApiKeyButtonHidden(page) {
+  const btn = hasHiddenButtons(page, '创建');
+  await expect(btn).toHaveCount(1, { timeout: 15000 });
+  await expect(btn.first()).toBeHidden();
+}
+
+/** 只读：行内「编辑」「删除」写按钮被 v-has 隐藏 */
+async function expectApiKeyRowWriteActionsHidden(page, description) {
+  await expectApiKeyVisibleByDescription(page, description);
+  const row = apiKeyTable(page)
+    .dataRows()
+    .filter({ hasText: description })
+    .first();
+  for (const label of ['编辑', '删除']) {
+    const btn = row
+      .locator(`button.${HAS_HIDDEN_CLASS}`)
+      .filter({ hasText: label });
+    await expect(btn).toHaveCount(1);
+    await expect(btn.first()).toBeHidden();
+  }
+}
+
+/** 只读：行内只读入口「管理路由规则」保持可见 */
+async function expectApiKeyRowManageRouteRulesVisible(page, description) {
+  await expectApiKeyVisibleByDescription(page, description);
+  await expect(
+    apiKeyTable(page).rowAction(description, '管理路由规则'),
+  ).toBeVisible({ timeout: 15000 });
+}
+
+/** 只读：详情抽屉「重置配额」写按钮被 v-has 隐藏 */
+async function expectResetApiKeyQuotaBtnHidden(page) {
+  const drawer = apiKeyDetailDrawer(page);
+  const btn = drawer
+    .locator(`button.${HAS_HIDDEN_CLASS}`)
+    .filter({ hasText: '重置配额' });
+  await expect(btn).toHaveCount(1, { timeout: 15000 });
+  await expect(btn.first()).toBeHidden();
+}
+
+/** 只读：检索区（只读控件）保持可见 */
+async function expectApiKeySearchAreaVisible(page) {
+  await expect(apiKeyTable(page).searchArea()).toBeVisible({ timeout: 15000 });
+}
+
+/** 管理员对照：行内「编辑」「删除」写按钮可见 */
+async function expectApiKeyRowWriteActionsVisible(page, description) {
+  await expectApiKeyVisibleByDescription(page, description);
+  const row = apiKeyTable(page)
+    .dataRows()
+    .filter({ hasText: description })
+    .first();
+  for (const label of ['编辑', '删除']) {
+    await expect(row.getByRole('button', { name: label })).toBeVisible({
+      timeout: 15000,
+    });
+  }
+}
+
+/** 管理员对照：详情抽屉「重置配额」按钮可见（仅有限配额渲染） */
+async function expectResetApiKeyQuotaBtnVisible(page) {
+  const drawer = apiKeyDetailDrawer(page);
+  await expect(
+    drawer.getByRole('button', { name: '重置配额' }),
+  ).toBeVisible({ timeout: 15000 });
+}
+
+/**
+ * 读取详情抽屉「Key 值」行展示的值（排除「复制」按钮文案）。
+ * 用于验证只读视角下后端返回的掩码值被前端原样展示。
+ */
+async function readApiKeyDetailKeyValue(page) {
+  const drawer = apiKeyDetailDrawer(page);
+  const row = drawer
+    .locator('.info-row')
+    .filter({ hasText: 'Key 值' })
+    .first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  const value = row.locator('.info-value');
+  return value.evaluate((el) => {
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+        return node.textContent.trim();
+      }
+    }
+    return el.textContent.replace(/复制/g, '').trim();
+  });
+}
+
 async function expectApiKeyTableVisible(page) {
   const table = apiKeyTable(page);
   await expect(table.rootLocator()).toBeVisible();
@@ -137,7 +236,8 @@ async function openApiKeyDetail(page, description) {
   const table = apiKeyTable(page);
   let row = table.dataRows().filter({ hasText: description });
   if ((await row.count()) === 0) {
-    await searchApiKeyByDescription(page, description);
+    // 未命中：按描述筛选（自愈版）——筛选可能被列表刷新清空，须重试到行可见
+    await expectApiKeyVisibleByDescription(page, description);
     row = table.dataRows().filter({ hasText: description });
   }
   const targetRow = row.first();
@@ -693,6 +793,65 @@ async function setApiKeyRateLimitRuleFieldModel(
   return result;
 }
 
+const API_KEY_BATCH_LIMIT_LABELS = {
+  max_create_rpm: '批量任务创建RPM',
+  max_active_batches: '在途批量任务上限',
+  max_file_bytes: '单文件字节上限',
+  max_file_lines: '单文件行数上限',
+};
+
+/**
+ * 填写批量限流维度（batch_limits），并确认已写入表单模型
+ */
+async function fillApiKeyBatchLimitField(
+  page,
+  key,
+  value,
+  drawerTitle = DRAWER_TITLE.addApiKey,
+) {
+  const label = API_KEY_BATCH_LIMIT_LABELS[key];
+  if (!label) {
+    throw new Error(`未知的批量限流维度: ${key}`);
+  }
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  await expect(drawer).toBeVisible({ timeout: 15000 });
+  await new IvuFormComponent(drawer).fillInput(label, String(value));
+  await page.waitForTimeout(300);
+
+  const actual = await drawer.evaluate((drawerEl, fieldKey) => {
+    const formEl = drawerEl.querySelector('.ivu-form');
+    if (!formEl || !formEl.__vue__) return { ok: false };
+    let vm = formEl.__vue__;
+    while (vm && !vm.formData) {
+      vm = vm.$parent;
+    }
+    const batch =
+      vm &&
+      vm.formData &&
+      vm.formData.rate_limit_policy &&
+      vm.formData.rate_limit_policy.rules &&
+      vm.formData.rate_limit_policy.rules.batch_limits;
+    return { ok: !!batch, value: batch ? batch[fieldKey] : undefined };
+  }, key);
+  if (!actual.ok || Number(actual.value) !== Number(value)) {
+    throw new Error(
+      `批量限流字段 ${label} 未写入表单模型: ${JSON.stringify(actual)}`,
+    );
+  }
+}
+
+async function fillApiKeyBatchLimits(
+  page,
+  limits,
+  drawerTitle = DRAWER_TITLE.addApiKey,
+) {
+  for (const [key, value] of Object.entries(limits || {})) {
+    if (value !== undefined && value !== null) {
+      await fillApiKeyBatchLimitField(page, key, value, drawerTitle);
+    }
+  }
+}
+
 async function setupApiKeyCreateWithRateLimit(page, description) {
   await fillApiKeyDescription(page, description);
   await selectApiKeyEnableRateLimit(page, '是');
@@ -1196,6 +1355,22 @@ async function expectApiKeyVisible(page, description, timeout) {
   await apiKeyTable(page).expectRowVisible(description, timeout);
 }
 
+/**
+ * 按描述筛选后断言行可见（自愈版，EM-K-RO-02 偶发 not found 的修法）
+ *
+ * 「先筛选、再断言可见」在列表首屏请求晚于筛选输入返回时会失败：pageTable 在
+ * tableData 刷新时清空所有列筛选（输入框也会被清空），表格退回未筛选的第 1 页，
+ * 目标行若不在第 1 页即 15s 超时。这里把「筛选 + 断言行可见」交给 PageTable 重试，
+ * 筛选被清空时会重新筛选；断言强度不变（仍要求 timeout 内行可见）。
+ */
+async function expectApiKeyVisibleByDescription(page, description, timeout) {
+  await apiKeyTable(page).expectRowVisibleByPlaceholder(
+    API_KEY_SEARCH_PLACEHOLDER,
+    description,
+    timeout,
+  );
+}
+
 async function expectApiKeyNotVisible(page, description, timeout) {
   await apiKeyTable(page).expectRowHidden(description, timeout);
 }
@@ -1542,6 +1717,14 @@ module.exports = {
   gotoApiKeyManagementPage,
   expectApiKeyManagementPageTitle,
   expectAddApiKeyButtonVisible,
+  expectAddApiKeyButtonHidden,
+  expectApiKeyRowWriteActionsHidden,
+  expectApiKeyRowManageRouteRulesVisible,
+  expectResetApiKeyQuotaBtnHidden,
+  expectApiKeySearchAreaVisible,
+  expectApiKeyRowWriteActionsVisible,
+  expectResetApiKeyQuotaBtnVisible,
+  readApiKeyDetailKeyValue,
   expectApiKeyTableVisible,
   expectApiKeyPageLayout,
   openAddApiKeyDrawer,
@@ -1573,6 +1756,8 @@ module.exports = {
   fillApiKeyRateLimitRuleFieldRaw,
   clearApiKeyRateLimitRuleField,
   setApiKeyRateLimitRuleFieldModel,
+  fillApiKeyBatchLimitField,
+  fillApiKeyBatchLimits,
   setupApiKeyCreateWithRateLimit,
   submitApiKeyFormExpectRateLimitError,
   selectApiKeyMaxConcurrencyOption,
@@ -1609,6 +1794,7 @@ module.exports = {
   selectApiKeyEntityFilter,
   selectApiKeyQuotaTypeFilter,
   expectApiKeyVisible,
+  expectApiKeyVisibleByDescription,
   expectApiKeyNotVisible,
   expectApiKeyVisibleInAllPages,
   clickDeleteApiKeyBtn,

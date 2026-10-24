@@ -324,17 +324,18 @@ test.describe('路由管理 - RT-D-26 URL查询参数自动打开路由规则详
   test('RT-D-26 URL查询参数自动打开路由规则详情', async ({ page }) => {
     // 前置：获取一个 Entity 路由表的 owner id
     const cleanup = utils.createRouteLinkedTestCleanup();
-    let entityId;
     try {
       await utils.ensureRouteTableModuleAvailable(page);
       const resolved = await utils.resolveEntityRouteTableOwner(page, cleanup);
-      entityId = resolved.ownerId;
-      // 直接访问带 query 参数的 URL
-      await page.goto(
-        page.url().split('#')[0] +
-          '#/route-tables?type=entity&owner=' +
-          entityId,
-      );
+      const entityId = resolved.ownerId;
+      // 前端为 **history 模式**（`ai-gateway-web/src/router/instance.js:23` → `mode: 'history'`），
+      // deep link 必须用「路径 + 查询串」；产品侧由 `RouteTable/index.vue` 的 `openFromQuery()`
+      // 读 `this.$route.query` 打开详情，参数名为 `type` / `owner` / `rule`。
+      // ⚠️ 旧写法用 hash 形式 `#/route-tables?type=…&owner=…`：history 模式下浏览器只请求 `#` 之前
+      // 的路径（即首页），`$route.query` 为空、`openFromQuery()` 直接 return，`.route-rules` 永不出现；
+      // 而断言又被 `catch + test.skip` 吞掉，于是把**已实现**的功能长期伪装成「功能未生效」而被跳过。
+      const origin = new URL(page.url()).origin;
+      await page.goto(`${origin}/route-tables?type=entity&owner=${entityId}`);
       await page.waitForTimeout(2000);
       // 验证路由规则详情页自动打开
       await expect(page.locator('.route-rules')).toBeVisible({
@@ -344,12 +345,6 @@ test.describe('路由管理 - RT-D-26 URL查询参数自动打开路由规则详
       await expect(
         page.locator('.bfe-breadcrumb').getByText('Entity'),
       ).toBeVisible({ timeout: 15000 });
-    } catch (e) {
-      // 前端尚未实现 URL 查询参数自动打开详情功能时跳过
-      test.skip(
-        true,
-        'URL查询参数自动打开详情功能未生效: ' + (e.message || ''),
-      );
     } finally {
       await cleanup.cleanup(page);
     }

@@ -35,6 +35,11 @@
  *    未走 deleteFailed i18n「删除失败，该服务商可能仍被集群引用」），且 $Modal.remove()
  *    会关闭确认框 → 实际 UI 展示英文原文、确认框关闭。因沙箱环境 localStorage
  *    SecurityError 导致 UI 导航不可用，本 spec 改为纯 API 测试，验证 409 + 服务商仍存在。
+ * 3. 前端分页适配（2026-10-15）：列表前端分页默认 20 条/页且只渲染当前页，API 造数后
+ *    新行可能落在第 2/3 页，原「造数后直接断言行可见」必然超时；统一改用
+ *    pp.expectProviderRowVisibleByName（先按名称本地筛选再断言行可见），断言内容不变。
+ *    删除后的「行消失」断言用 expectProviderRowHiddenByName（先筛选再断言计数 0），
+ *    避免「行不在当前页」被误判为「已删除」造成假通过。
  *
  * 运行：npx playwright test tests/providers/test_05_provider_delete.spec.js
  */
@@ -66,7 +71,7 @@ test.describe('模型服务商 - PR-DEL-01 删除服务商-成功（未被引用
     cleanup.trackName(providerName);
 
     await pp.gotoProvidersPage(page);
-    await pp.providerTable(page).expectRowVisible(providerName);
+    await pp.expectProviderRowVisibleByName(page, providerName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -89,7 +94,7 @@ test.describe('模型服务商 - PR-DEL-01 删除服务商-成功（未被引用
     }
 
     // 3. 列表全量刷新后服务商消失
-    await pp.providerTable(page).expectRowHidden(providerName, 15000);
+    await pp.expectProviderRowHiddenByName(page, providerName, 15000);
   });
 });
 
@@ -193,7 +198,7 @@ test.describe('模型服务商 - PR-DEL-03 删除服务商-取消', () => {
     cleanup.trackName(providerName);
 
     await pp.gotoProvidersPage(page);
-    await pp.providerTable(page).expectRowVisible(providerName);
+    await pp.expectProviderRowVisibleByName(page, providerName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -230,7 +235,7 @@ test.describe('模型服务商 - PR-DEL-03 删除服务商-取消', () => {
     expect(deleteRequests, '点「取消」不应发起 DELETE 请求').toEqual([]);
 
     // 6. 列表数据不变：服务商行仍可见
-    await pp.providerTable(page).expectRowVisible(providerName);
+    await pp.expectProviderRowVisibleByName(page, providerName);
   });
 });
 
@@ -271,7 +276,7 @@ test.describe('模型服务商 - PR-DEL-04 删除服务商-有 model-prices 记�
     mpCleanup.trackCombo(providerName, MODEL, MODE);
 
     await pp.gotoProvidersPage(page);
-    await pp.providerTable(page).expectRowVisible(providerName);
+    await pp.expectProviderRowVisibleByName(page, providerName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -289,7 +294,7 @@ test.describe('模型服务商 - PR-DEL-04 删除服务商-有 model-prices 记�
     expect((await response.json()).ErrNum).toBe(200);
 
     // 2. 列表刷新后服务商消失
-    await pp.providerTable(page).expectRowHidden(providerName, 15000);
+    await pp.expectProviderRowHiddenByName(page, providerName, 15000);
 
     // 3. model-prices 同名 provider 记录仍保留（价格归集标识不受影响）
     const stillExists = await modelPriceApi.findModelPriceByComboViaApi(
