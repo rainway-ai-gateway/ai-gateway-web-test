@@ -306,6 +306,23 @@ async function getProductInstancePool(
   return parseApiResponse(response, 'GET instance-pool');
 }
 
+/**
+ * 拉取 InnerAPI cluster_table 导出（BFE 集群表）。
+ * OpenAPI v1 的 product instance-pool 读接口已整体下线（optimization plan v1.2），
+ * 引用集群派生实例池的同步效果经 cluster_table 中该集群的 RS 后端条目间接观测。
+ * Data 结构：{Config: {clusterName: {subClusterName: [{Name, Addr, Port, Weight}]}}}
+ * —— PR-LINK-05 后端同步断言。
+ */
+async function getClusterTableViaApi(page) {
+  const userData = await getUserData(page);
+  const innerBase = getOpenApiBaseUrl().replace('/open-api/v1', '/inner-api/v1');
+  const response = await page.request.get(
+    innerBase + '/configs/gslb_data/cluster_table',
+    { headers: authHeaders(userData.sessionKey) },
+  );
+  return parseApiResponse(response, 'GET cluster_table');
+}
+
 async function deleteProductInstancePool(
   page,
   shortPoolName,
@@ -426,6 +443,26 @@ async function createCluster(page, clusterData) {
     common.log('POST cluster 异常: ' + error.message);
     return false;
   }
+}
+
+// 创建集群并返回原始 HTTP 状态与响应体（RM-BC-108/109 校验 422 拒绝场景）
+async function createClusterWithResponse(page, clusterData) {
+  const userData = await getUserData(page);
+  const response = await page.request.post(
+    getOpenApiBaseUrl() + '/clusters',
+    {
+      data: clusterData,
+      headers: authHeaders(userData.sessionKey),
+    },
+  );
+  const body = await response.json().catch(() => ({}));
+  common.log(
+    'POST cluster(带状态) 响应: ' +
+      response.status() +
+      ' ' +
+      JSON.stringify(body).substring(0, 300),
+  );
+  return { status: response.status(), body };
 }
 
 async function updateGlobalRouteRules(page, ruleData) {
@@ -572,28 +609,112 @@ async function ensureTestClusters(
 }
 
 /**
+ * 读取当前 Global 路由规则（与 updateGlobalRouteRules 对称）
+ */
+async function getGlobalRouteRules(page) {
+  try {
+    const userData = await getUserData(page);
+    const response = await page.request.get(
+      getOpenApiBaseUrl() + '/global-route-rules',
+      { headers: authHeaders(userData.sessionKey) },
+    );
+    return await parseApiResponse(response, 'GET global-route-rules');
+  } catch (error) {
+    common.log('GET global-route-rules 异常: ' + error.message);
+    return null;
+  }
+}
+
+/**
+ * initRouteTestData 播种前后的 Global 规则快照（每次播种前保存，恢复后置空）
+ */
+let routeTestDataGlobalRulesSnapshot = null;
+
+/**
  * 初始化测试数据：确保集群和 Global 路由规则存在
  * 必须在页面已导航到应用后调用（确保有 sessionKey）
+ *
+ * 播种方式为「快照 + 追加」：
+ * - 首次调用先快照环境现有 Global 规则，交由 restoreRouteTestData 还原；
+ * - 仅在缺少 global-default-rule 时补齐该规则，不再把整个规则列表替换掉
+ *   （旧实现直接 PUT 单条规则，会删掉用户环境里原有的规则）；
+ * - Global 已停用且目标规则已存在时不发起任何写入。
  */
 async function initRouteTestData(page) {
   // 确保集群存在
   await ensureTestClusters(page, ['test121', 'test122', 'test123']);
 
-  // 确保 Global 路由规则存在
-  const ruleData = {
-    enabled: false,
-    rules: [
-      {
-        name: 'global-default-rule',
-        cond: 'default_t()',
-        targets: [{ cluster_name: 'test121', model: '', weight: 100 }],
-        fallbacks: [],
-      },
-    ],
+  const seededRule = {
+    name: 'global-default-rule',
+    cond: 'default_t()',
+    targets: [{ cluster_name: 'test121', model: '', weight: 100 }],
+    fallbacks: [],
   };
-  await updateGlobalRouteRules(page, ruleData);
+
+  const current = await getGlobalRouteRules(page);
+  if (!current) {
+    // 读取失败时绝不写入：旧实现会直接 PUT 单条规则覆盖全量，
+    // 一旦读失败就会把用户环境的规则全部删掉，这里改为放弃播种
+    common.log('未能读取 Global 路由规则，跳过播种以避免覆盖环境数据');
+    return;
+  }
+  if (!routeTestDataGlobalRulesSnapshot) {
+    routeTestDataGlobalRulesSnapshot = current;
+  }
+
+  const currentRules = Array.isArray(current.rules) ? current.rules : [];
+  const hasSeededRule = currentRules.some(
+    (rule) => rule && rule.name === seededRule.name,
+  );
+  const needDisable = current.enabled !== false;
+
+  if (hasSeededRule && !needDisable) {
+    common.log('Global 路由规则已满足前置（保留环境原有规则，未写入）');
+    return;
+  }
+
+  const rules = hasSeededRule ? currentRules : [...currentRules, seededRule];
+  const ok = await updateGlobalRouteRules(page, { enabled: false, rules });
+  common.log(
+    ok
+      ? `Global 路由规则已初始化（保留 ${currentRules.length} 条原有规则）`
+      : 'Global 路由规则初始化失败',
+  );
 
   await page.waitForTimeout(500);
+}
+
+/**
+ * 还原 initRouteTestData 播种前的 Global 路由规则（含 enabled 与 rules 全量）
+ * 供依赖用例在 afterEach 中调用；无快照时为空操作
+ */
+async function restoreRouteTestData(page) {
+  const snapshot = routeTestDataGlobalRulesSnapshot;
+  if (!snapshot) {
+    return false;
+  }
+  routeTestDataGlobalRulesSnapshot = null;
+
+  const current = await getGlobalRouteRules(page);
+  if (
+    current &&
+    JSON.stringify(current) === JSON.stringify(snapshot)
+  ) {
+    common.log('Global 路由规则与播种前快照一致，无需还原');
+    return true;
+  }
+
+  const ok = await updateGlobalRouteRules(page, {
+    enabled: snapshot.enabled === true,
+    rules: Array.isArray(snapshot.rules) ? snapshot.rules : [],
+  });
+  common.log(
+    ok
+      ? '已还原 initRouteTestData 前的 Global 路由规则'
+      : '还原 Global 路由规则失败',
+  );
+  await page.waitForTimeout(500);
+  return ok;
 }
 
 module.exports = {
@@ -612,6 +733,7 @@ module.exports = {
   getSubCluster,
   createSubCluster,
   deleteSubCluster,
+  getClusterTableViaApi,
   getProductInstancePoolList,
   getProductInstancePool,
   deleteProductInstancePool,
@@ -621,8 +743,11 @@ module.exports = {
   getCluster,
   deleteCluster,
   createCluster,
+  createClusterWithResponse,
   createClusterWithProvider,
   updateGlobalRouteRules,
+  getGlobalRouteRules,
   ensureTestClusters,
   initRouteTestData,
+  restoreRouteTestData,
 };

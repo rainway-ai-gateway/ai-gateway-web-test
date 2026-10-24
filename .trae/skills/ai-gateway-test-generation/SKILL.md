@@ -84,7 +84,7 @@ description: >-
 | 模型定价 | `docs/model-prices/`（MP-xx） | `tests/model-prices/` |
 | 路由管理 | `docs/route-management/`（RT-xx） | `tests/route/` |
 
-Entity 顺序：类型 → 组织 → API-Key。资源配置顺序：模型服务商（Providers，实例池/模型/Keys）→ AI 业务集群（`llm_config.provider` 引用）→ 路由（见各模块 01 配置顺序）。网关实例池（`docs/gateway-pool/`）不含独立用例，实例池用例归 Providers。单条用例须对齐 02 步骤/预期、01 场景 ID、动态数据+清理、spec 只调 pages/utils。异常用例写清：输入值、拦截方式、提示文案（design/02）。写计划/补覆盖时再对照模块 01/02 的横切能力，不必在此展开。
+Entity 顺序：类型 → 组织 → API-Key。资源配置顺序：模型服务商（Providers，实例池/模型/Keys）→ AI 业务集群（`llm_config.provider` 引用）→ 路由（见各模块 01 配置顺序）。网关实例池不含独立用例（原 `docs/gateway-pool/` + `tests/gateway-pool/` 随 `/alb-pool` 下线已于 2026-10-15 清理），实例池用例归 Providers。单条用例须对齐 02 步骤/预期、01 场景 ID、动态数据+清理、spec 只调 pages/utils。异常用例写清：输入值、拦截方式、提示文案（design/02）。写计划/补覆盖时再对照模块 01/02 的横切能力，不必在此展开。
 
 ---
 

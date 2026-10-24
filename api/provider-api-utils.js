@@ -237,6 +237,27 @@ async function updateProviderViaApi(page, name, payload) {
 }
 
 /**
+ * 更新服务商并返回原始响应体（供 409 引用保护断言，
+ * 如重命名/移除被集群引用的 Key、变更被引用模型——PR-LINK-05 联动校验）
+ * @returns {Promise<{ok: boolean, body: object|null}>}
+ */
+async function updateProviderRawViaApi(page, name, payload) {
+  try {
+    const userData = await getUserData(page);
+    const response = await page.request.patch(
+      getOpenApiBaseUrl() + '/providers/' + encodeURIComponent(name),
+      { data: payload, headers: authHeaders(userData) },
+    );
+    const body = await response.json();
+    common.log('接口更新服务商(原始)响应: ' + JSON.stringify(body).slice(0, 300));
+    return { ok: body.ErrNum === 200, body };
+  } catch (error) {
+    common.log('接口更新服务商(原始)异常: ' + error.message);
+    return { ok: false, body: null };
+  }
+}
+
+/**
  * 获取服务商名称列表 GET /providers/actions/get-provider-names
  * @returns {Promise<string[]>} Data.names
  */
@@ -300,6 +321,7 @@ module.exports = {
   findProviderByNameViaApi,
   createProviderViaApi,
   updateProviderViaApi,
+  updateProviderRawViaApi,
   getProviderNamesViaApi,
   deleteProviderViaApi,
   createProviderTestCleanup,

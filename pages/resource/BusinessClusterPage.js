@@ -16,8 +16,11 @@
 const { expect } = require('@playwright/test');
 const { PageTableComponent } = require('../../components/layout');
 const { IvuStepsComponent } = require('../../components/iview/IvuSteps');
+const { IvuMessageComponent } = require('../../components/iview/IvuMessage');
 const { ElSelectComponent } = require('../../components/element');
 const common = require('../../utils/common');
+const readonly = require('../../utils/readonly');
+const resourceApi = require('../../api/resource-api-utils');
 const {
   DRAWER_TITLE,
   BUSINESS_CLUSTER_SEARCH_PLACEHOLDER,
@@ -417,6 +420,18 @@ async function waitForClusterCreateRequest(page, action) {
   return request;
 }
 
+// 等待编辑集群的 PATCH 请求（RM-BC-109 编辑场景）
+async function waitForClusterPatchRequest(page, action) {
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.method() === 'PATCH' && req.url().includes('/clusters/'),
+      { timeout: 30000 },
+    ),
+    action(),
+  ]);
+  return request;
+}
+
 async function navigateToHealthStep(
   page,
   clusterName,
@@ -703,8 +718,16 @@ async function selectAllForwardModels(
     body,
     DOC_BUSINESS_CLUSTER.forwardModelsLabel,
   );
-  await select.open();
-  await select.dropdownItems().filter({ hasText: '全选' }).first().click();
+  // 若下拉已处于打开状态（如刚完成子集选择，multiple 选中后下拉保持打开），
+  // 再触发 open() 的 toggle 会把下拉关掉，导致后续点击超时；仅在下拉未打开时才打开。
+  if ((await select.dropdownItems().count()) === 0) {
+    await select.open();
+  }
+  await select
+    .dropdownItems()
+    .filter({ hasText: '全选' })
+    .first()
+    .click({ force: true, timeout: 10000 });
   await page.waitForTimeout(300);
 }
 
@@ -1165,7 +1188,7 @@ async function expectKeyPolicyStrategyOptions(
   expect(normalized).toEqual(options);
 }
 
-// 大模型配置步骤 Card 分组展示（RM-BC-56：5 张 Card）
+// 大模型配置步骤 Card 分组展示（RM-BC-56：WRR 下 7 张 Card；EPP 下追加流控配置与 EPP 运行时参数共 9 张）
 async function expectModelCardGrouping(
   page,
   cardTitles,
@@ -1720,6 +1743,15 @@ async function ensureBusinessClusterRowVisible(page, clusterName) {
   await expectBusinessClusterVisibleInAllPages(page, clusterName);
 }
 
+// API 造数后刷新列表（UI 列表仅在页面加载时拉取 GET /clusters）
+async function refreshBusinessClusterList(page) {
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: '添加集群' })).toBeVisible({
+    timeout: 15000,
+  });
+  await waitAfterResourceMutation(page, 500);
+}
+
 async function confirmDeleteBusinessCluster(page) {
   const modal = page.locator('.ivu-modal-wrap').filter({ hasText: '是否删除' });
   await expect(modal).toBeVisible();
@@ -1786,27 +1818,21 @@ async function setBalanceMode(page, mode, drawerTitle = DRAWER_TITLE.createBusin
   await waitAfterResourceMutation(page, 300);
 }
 
-// iView Select 显示中文标签，需映射回英文值
-const SCHEDULING_PROFILE_LABEL_MAP = {
-  '延迟优先': 'latency-first',
-  '平衡': 'balanced',
-  '吞吐优先': 'throughput-first',
-};
-const CACHE_AFFINITY_LABEL_MAP = {
-  '低': 'low',
-  '中': 'medium',
-  '高': 'high',
-};
-const SCHEDULING_PROFILE_VALUE_MAP = {
-  'latency-first': '延迟优先',
-  'balanced': '平衡',
-  'throughput-first': '吞吐优先',
-};
-const CACHE_AFFINITY_VALUE_MAP = {
-  'low': '低',
-  'medium': '中',
-  'high': '高',
-};
+// iView Select 选项文案为「英文值（中文注释）」，如下拉项 "balanced（均衡，默认）"。
+// 2026-10-09 v0.6 破坏性重构：load_profile 枚举 queue-first/balanced/kv-first；
+// affinity 枚举 off/low/medium/high（旧 latency-first 等枚举已移除）。
+// 剥离选项中文注释，取英文值："balanced（均衡，默认）" -> "balanced"
+function stripOptionComment(text) {
+  const raw = (text || '').trim();
+  const parenIndex = raw.indexOf('（');
+  return (parenIndex > 0 ? raw.substring(0, parenIndex) : raw).trim();
+}
+
+// 在均衡模式 Card 内按 label 定位表单控件（新字段按 label 精确定位，
+// 避免 flow_control 嵌套卡片内 InputNumber 干扰 nth 序号）
+function eppFormItem(card, label) {
+  return card.locator('.ivu-form-item').filter({ hasText: label }).first();
+}
 
 // 获取 epp_config 当前值
 async function getEppConfigValues(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
@@ -1831,32 +1857,81 @@ async function getEppConfigValues(page, drawerTitle = DRAWER_TITLE.createBusines
     .nth(1)
     .evaluate((el) => el.classList.contains('ivu-switch-checked'))
     .catch(() => false);
+  const fallbackOnEmpty = await eppFormItem(card, DOC_BUSINESS_CLUSTER.fallbackOnEmptyLabel)
+    .locator('.ivu-switch')
+    .first()
+    .evaluate((el) => el.classList.contains('ivu-switch-checked'))
+    .catch(() => false);
   const kvCacheUtilizationMax = await card
     .locator('.ivu-input-number-input')
     .first()
     .inputValue()
     .catch(() => '');
+  const waitingQueueMax = await eppFormItem(
+    card,
+    DOC_BUSINESS_CLUSTER.waitingQueueMaxLabel,
+  )
+    .locator('.ivu-input-number-input')
+    .inputValue()
+    .catch(() => '');
+  const runningRequestsMax = await eppFormItem(
+    card,
+    DOC_BUSINESS_CLUSTER.runningRequestsMaxLabel,
+  )
+    .locator('.ivu-input-number-input')
+    .inputValue()
+    .catch(() => '');
+  const metricsStalenessThresholdMs = await eppFormItem(
+    card,
+    DOC_BUSINESS_CLUSTER.metricsStalenessThresholdMsLabel,
+  )
+    .locator('.ivu-input-number-input')
+    .inputValue()
+    .catch(() => '');
   return {
-    schedulingProfile: SCHEDULING_PROFILE_LABEL_MAP[(schedulingProfile || '').trim()] || (schedulingProfile || '').trim(),
-    cacheAffinity: CACHE_AFFINITY_LABEL_MAP[(cacheAffinity || '').trim()] || (cacheAffinity || '').trim(),
+    schedulingProfile: stripOptionComment(schedulingProfile),
+    cacheAffinity: stripOptionComment(cacheAffinity),
     prefixCacheAffinity,
     sessionAffinityEnabled,
+    fallbackOnEmpty,
     kvCacheUtilizationMax,
+    waitingQueueMax,
+    runningRequestsMax,
+    metricsStalenessThresholdMs,
   };
+}
+
+// 按 label 定位 Card 内 InputNumber 输入框并填值（先清空，失焦触发 min/precision 约束）
+async function fillEppNumberInput(card, label, value) {
+  const input = eppFormItem(card, label).locator('.ivu-input-number-input').first();
+  await input.fill('');
+  await input.fill(String(value));
+  await input.blur();
+}
+
+// 按 label 定位 Card 内 switch 并切换到目标状态
+async function setEppSwitchByLabel(card, label, target) {
+  const switchEl = eppFormItem(card, label).locator('.ivu-switch').first();
+  const isChecked = await switchEl.evaluate((el) =>
+    el.classList.contains('ivu-switch-checked'),
+  );
+  if (target !== isChecked) {
+    await switchEl.click();
+  }
 }
 
 // 设置 epp_config 各字段值
 async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
   const card = balanceModeCard(page, drawerTitle);
-  
+
   if (values.schedulingProfile !== undefined) {
-    // 第2个 Select（第1个是 balance_mode）；使用中文标签匹配下拉选项
+    // 第2个 Select（第1个是 balance_mode）；选项文案以英文值开头，直接按英文值匹配
     const selects = card.locator('.ivu-select-selection');
     await selects.nth(1).click();
     await page.waitForTimeout(200);
     await page
       .locator('.ivu-select-dropdown:visible .ivu-select-item')
-      .filter({ hasText: SCHEDULING_PROFILE_VALUE_MAP[values.schedulingProfile] || values.schedulingProfile })
+      .filter({ hasText: values.schedulingProfile })
       .first()
       .click();
     await page.keyboard.press('Escape');
@@ -1869,7 +1944,7 @@ async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusi
     await page.waitForTimeout(200);
     await page
       .locator('.ivu-select-dropdown:visible .ivu-select-item')
-      .filter({ hasText: CACHE_AFFINITY_VALUE_MAP[values.cacheAffinity] || values.cacheAffinity })
+      .filter({ hasText: values.cacheAffinity })
       .first()
       .click();
     await page.keyboard.press('Escape');
@@ -1911,6 +1986,39 @@ async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusi
     await inputs.first().blur();
     await waitAfterResourceMutation(page, 200);
   }
+  // ===== RM-BC-104~107 新增 EPP 调度参数字段 =====
+  if (values.waitingQueueMax !== undefined) {
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.waitingQueueMaxLabel,
+      values.waitingQueueMax,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.runningRequestsMax !== undefined) {
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.runningRequestsMaxLabel,
+      values.runningRequestsMax,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.fallbackOnEmpty !== undefined) {
+    await setEppSwitchByLabel(
+      card,
+      DOC_BUSINESS_CLUSTER.fallbackOnEmptyLabel,
+      values.fallbackOnEmpty,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (values.metricsStalenessThresholdMs !== undefined) {
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.metricsStalenessThresholdMsLabel,
+      values.metricsStalenessThresholdMs,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
 }
 
 // 等待编辑集群的 GET 请求完成
@@ -1938,6 +2046,745 @@ async function waitForClusterReviewRequest(page, action) {
     action(),
   ]);
   return request;
+}
+
+// ===== 2026-10-13 EPP 运行时参数（RM-BC-115~122）=====
+// 「EPP 运行时参数」是 EPP 配置区内第 2 层 Card（外层「均衡模式配置」Card 的 body 内），
+// 外层 Card 的 hasText 也包含该标题，故按「自有 card-head 标题」过滤，避免 hasText 命中两层。
+// 分组子字段（7 个）：关闭健康检查（switch）、健康检查间隔/冷却时长/连接超时/调用超时
+// （DurationInput：数字框 + 单位下拉 ms/s/m）、失败次数阈值/成功次数阈值（InputNumber min=1）；
+// 组合写法（如 1m30s）无法拆分时该字段回退为纯文本输入（无 .ivu-input-group / 单位下拉）。
+
+function eppRuntimeCard(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.llm-section-card')
+    .filter({
+      has: page.locator(
+        ':scope > .ivu-card-head:has-text("' +
+          DOC_BUSINESS_CLUSTER.eppRuntimeCard +
+          '")',
+      ),
+    });
+}
+
+function eppRuntimeCardHead(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return eppRuntimeCard(page, drawerTitle).locator(':scope > .ivu-card-head');
+}
+
+function eppRuntimeDurationLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckIntervalLabel,
+    DOC_BUSINESS_CLUSTER.eppCooldownLabel,
+    DOC_BUSINESS_CLUSTER.eppConnectTimeoutLabel,
+    DOC_BUSINESS_CLUSTER.eppCallTimeoutLabel,
+  ];
+}
+
+function eppRuntimeThresholdLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppFailThresholdLabel,
+    DOC_BUSINESS_CLUSTER.eppSuccessThresholdLabel,
+  ];
+}
+
+function eppRuntimeLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+    ...eppRuntimeDurationLabels(),
+    ...eppRuntimeThresholdLabels(),
+  ];
+}
+
+// 2026-10-13 精简后仅 3 个字段保留 ? 提示图标
+function eppRuntimeHelpIconLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+    DOC_BUSINESS_CLUSTER.eppCooldownLabel,
+    DOC_BUSINESS_CLUSTER.eppCallTimeoutLabel,
+  ];
+}
+
+function eppRuntimeWithoutHelpIconLabels() {
+  return [
+    DOC_BUSINESS_CLUSTER.eppCheckIntervalLabel,
+    ...eppRuntimeThresholdLabels(),
+    DOC_BUSINESS_CLUSTER.eppConnectTimeoutLabel,
+  ];
+}
+
+async function expectEppRuntimeCardVisible(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  await expect(eppRuntimeCard(page, drawerTitle)).toHaveCount(1);
+  await expect(eppRuntimeCard(page, drawerTitle)).toBeVisible();
+}
+
+async function expectEppRuntimeCardHidden(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  await expect(eppRuntimeCard(page, drawerTitle)).toHaveCount(0);
+}
+
+// 分组构成：7 子字段 + 4 复合 duration（数字框 + 单位下拉）+ 2 整数阈值
+async function expectEppRuntimeFieldComposition(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  await expect(card).toBeVisible();
+  await expect(card.locator('.ivu-form-item')).toHaveCount(7);
+  for (const label of eppRuntimeLabels()) {
+    await expect(eppFormItem(card, label), `子字段「${label}」应展示`).toBeVisible();
+  }
+  await expect(
+    eppFormItem(card, DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel).locator(
+      '.ivu-switch',
+    ),
+    '「关闭后台健康检查」应为 switch 开关',
+  ).toHaveCount(1);
+  for (const label of eppRuntimeDurationLabels()) {
+    const item = eppFormItem(card, label);
+    await expect(
+      item.locator('.ivu-input-group'),
+      `duration 字段「${label}」应为「数字框 + 单位下拉」复合控件`,
+    ).toHaveCount(1);
+    await expect(item.locator('input.ivu-input')).toHaveCount(1);
+    await expect(item.locator('.ivu-select-selected-value')).toHaveCount(1);
+  }
+  for (const label of eppRuntimeThresholdLabels()) {
+    await expect(
+      eppFormItem(card, label).locator('.ivu-input-number'),
+      `阈值字段「${label}」应为整数数字框（InputNumber）`,
+    ).toHaveCount(1);
+  }
+}
+
+async function expectEppRuntimeHelpIcons(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  await expect(
+    card.locator('.provider-help-icon'),
+    '? 提示图标应仅保留 3 个字段',
+  ).toHaveCount(3);
+  for (const label of eppRuntimeHelpIconLabels()) {
+    await expect(
+      eppFormItem(card, label).locator('.provider-help-icon'),
+      `字段「${label}」应保留 ? 提示图标`,
+    ).toHaveCount(1);
+  }
+  for (const label of eppRuntimeWithoutHelpIconLabels()) {
+    await expect(
+      eppFormItem(card, label).locator('.provider-help-icon'),
+      `字段「${label}」不应有 ? 提示图标`,
+    ).toHaveCount(0);
+  }
+}
+
+// 读取单个 duration 字段：{ value, unit, raw }
+// raw=true 表示组合写法（如 1m30s）回退为纯文本输入，无单位下拉
+async function getEppRuntimeDurationValue(card, label) {
+  const item = eppFormItem(card, label);
+  const isCombo = (await item.locator('.ivu-input-group').count()) > 0;
+  const value = await item.locator('input.ivu-input').first().inputValue();
+  const unit = isCombo
+    ? (await item.locator('.ivu-select-selected-value').first().innerText()).trim()
+    : null;
+  return { value, unit, raw: !isCombo };
+}
+
+async function getEppRuntimeValues(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  const readNumber = (label) =>
+    eppFormItem(card, label).locator('.ivu-input-number-input').first().inputValue();
+  return {
+    disabled: await eppFormItem(card, DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel)
+      .locator('.ivu-switch')
+      .first()
+      .evaluate((el) => el.classList.contains('ivu-switch-checked')),
+    checkInterval: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppCheckIntervalLabel,
+    ),
+    failThreshold: await readNumber(DOC_BUSINESS_CLUSTER.eppFailThresholdLabel),
+    cooldown: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppCooldownLabel,
+    ),
+    successThreshold: await readNumber(
+      DOC_BUSINESS_CLUSTER.eppSuccessThresholdLabel,
+    ),
+    connectTimeout: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppConnectTimeoutLabel,
+    ),
+    callTimeout: await getEppRuntimeDurationValue(
+      card,
+      DOC_BUSINESS_CLUSTER.eppCallTimeoutLabel,
+    ),
+  };
+}
+
+// 默认值：disabled=false、间隔 2+s、失败阈值 3、冷却 45+s、成功阈值 2、连接超时 500+ms、调用超时 3+s
+async function expectEppRuntimeDefaultValues(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const values = await getEppRuntimeValues(page, drawerTitle);
+  const dft = DOC_BUSINESS_CLUSTER.defaultEppRuntime;
+  expect(values.disabled, '关闭后台健康检查默认关闭').toBe(dft.check.disabled);
+  expect(values.checkInterval, '健康检查间隔默认 2 + s').toEqual({
+    value: '2',
+    unit: 's',
+    raw: false,
+  });
+  expect(values.failThreshold, '失败次数阈值默认 3').toBe(
+    String(dft.check.fail_threshold),
+  );
+  expect(values.cooldown, '冷却时长默认 45 + s').toEqual({
+    value: '45',
+    unit: 's',
+    raw: false,
+  });
+  expect(values.successThreshold, '成功次数阈值默认 2').toBe(
+    String(dft.check.success_threshold),
+  );
+  expect(values.connectTimeout, '连接超时默认 500 + ms').toEqual({
+    value: '500',
+    unit: 'ms',
+    raw: false,
+  });
+  expect(values.callTimeout, '调用超时默认 3 + s').toEqual({
+    value: '3',
+    unit: 's',
+    raw: false,
+  });
+  return values;
+}
+
+// 单位下拉选项（ms/s/m）
+async function expectEppRuntimeUnitOptions(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await item.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+  const options = (
+    await item.locator('.ivu-select-dropdown .ivu-select-item').allInnerTexts()
+  ).map((text) => text.trim());
+  expect(options, `duration 字段「${label}」的单位选项`).toEqual(
+    DOC_BUSINESS_CLUSTER.eppDurationUnits,
+  );
+  await item.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+}
+
+async function selectEppRuntimeDurationUnit(
+  page,
+  label,
+  unit,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await item.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+  await item
+    .locator('.ivu-select-dropdown .ivu-select-item')
+    .filter({ hasText: new RegExp('^' + unit + '$') })
+    .first()
+    .click();
+  await page.waitForTimeout(200);
+  await waitAfterResourceMutation(page, 150);
+}
+
+// 填 duration 字段：先切单位再填数值（切单位会按物理时长换算数值），空串 = 未设置
+async function fillEppRuntimeDuration(
+  page,
+  label,
+  { value, unit } = {},
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = eppRuntimeCard(page, drawerTitle);
+  const item = eppFormItem(card, label);
+  if (unit) {
+    const isCombo = (await item.locator('.ivu-input-group').count()) > 0;
+    const currentUnit = isCombo
+      ? (await item.locator('.ivu-select-selected-value').first().innerText()).trim()
+      : null;
+    if (currentUnit !== unit) {
+      await selectEppRuntimeDurationUnit(page, label, unit, drawerTitle);
+    }
+  }
+  const input = item.locator('input.ivu-input').first();
+  await input.fill('');
+  if (value !== undefined && value !== null && value !== '') {
+    await input.fill(String(value));
+  }
+  await input.blur();
+  await waitAfterResourceMutation(page, 150);
+}
+
+// 逐字输入 duration 数字框（用于「仅接受数字与小数点」断言），返回输入框最终显示值
+async function typeEppRuntimeDuration(
+  page,
+  label,
+  text,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  const input = item.locator('input.ivu-input').first();
+  await input.fill('');
+  await input.pressSequentially(text, { delay: 40 });
+  await input.blur();
+  await waitAfterResourceMutation(page, 150);
+  return input.inputValue();
+}
+
+async function fillEppRuntimeThreshold(
+  page,
+  label,
+  value,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const input = eppFormItem(eppRuntimeCard(page, drawerTitle), label)
+    .locator('.ivu-input-number-input')
+    .first();
+  await input.fill('');
+  if (value !== undefined && value !== null && value !== '') {
+    await input.fill(String(value));
+  }
+  await input.blur();
+  await waitAfterResourceMutation(page, 150);
+}
+
+async function expectEppRuntimeSwitchState(
+  page,
+  expected,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const switchEl = eppFormItem(
+    eppRuntimeCard(page, drawerTitle),
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+  )
+    .locator('.ivu-switch')
+    .first();
+  const checked = await switchEl.evaluate((el) =>
+    el.classList.contains('ivu-switch-checked'),
+  );
+  expect(checked, '「关闭后台健康检查」开关状态').toBe(expected);
+  return switchEl;
+}
+
+async function toggleEppRuntimeSwitch(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const switchEl = eppFormItem(
+    eppRuntimeCard(page, drawerTitle),
+    DOC_BUSINESS_CLUSTER.eppCheckDisabledLabel,
+  )
+    .locator('.ivu-switch')
+    .first();
+  await switchEl.click();
+  await waitAfterResourceMutation(page, 200);
+}
+
+async function expectEppRuntimeFieldError(
+  page,
+  label,
+  message,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await expect(
+    item.locator('.ivu-form-item-error-tip'),
+    `字段「${label}」的表单校验提示`,
+  ).toHaveText(message);
+}
+
+async function expectEppRuntimeFieldErrorHidden(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = eppFormItem(eppRuntimeCard(page, drawerTitle), label);
+  await expect(
+    item.locator('.ivu-form-item-error-tip'),
+    `字段「${label}」不应有校验提示`,
+  ).toHaveCount(0);
+}
+
+// 复查页 / 详情页的「EPP 运行时参数」区块（li.title + li.value）
+function eppRuntimeReviewBlock(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelStepBody(page, drawerTitle)
+    .locator('ul')
+    .filter({
+      has: page.locator(
+        'li.title:has-text("' + DOC_BUSINESS_CLUSTER.eppRuntimeReviewTitle + '")',
+      ),
+    })
+    .first();
+}
+
+async function getReviewEppRuntimeValues(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const items = eppRuntimeReviewBlock(page, drawerTitle).locator('.review-item');
+  const count = await items.count();
+  const values = {};
+  for (let i = 0; i < count; i += 1) {
+    const label = (await items.nth(i).locator('.review-label').innerText())
+      .replace(/[:：]\s*$/, '')
+      .trim();
+    const value = (await items.nth(i).locator('.review-value').innerText()).trim();
+    values[label] = value;
+  }
+  return values;
+}
+
+async function expectReviewEppRuntimeValues(
+  page,
+  expected,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const values = await getReviewEppRuntimeValues(page, drawerTitle);
+  expect(
+    Object.keys(values).length,
+    '复查页 / 详情页「EPP 运行时参数」应展示 7 项',
+  ).toBe(7);
+  for (const [label, value] of Object.entries(expected)) {
+    expect(values[label], `复查页 / 详情页「${label}」`).toBe(value);
+  }
+  return values;
+}
+
+// 未配置（epp_runtime = null）时展示「未配置（BFE 补默认）」
+async function expectReviewEppRuntimeUnset(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const block = eppRuntimeReviewBlock(page, drawerTitle);
+  await expect(block).toBeVisible();
+  await expect(block.locator('.empty-text')).toHaveText(
+    DOC_BUSINESS_CLUSTER.eppRuntimeUnsetHint,
+  );
+}
+
+async function expectEppRuntimeToast(page, text) {
+  await new IvuMessageComponent(page).expectText(text);
+}
+
+// 记录本轮是否发起过 POST /clusters（用于「校验失败不发起提交」断言）
+function watchClusterCreateRequests(page) {
+  const state = { count: 0 };
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().includes('/clusters')) {
+      state.count += 1;
+    }
+  });
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/business-cluster/02-功能测试用例/02f-只读视角.md RM-BC-RO-01）
+// ---------------------------------------------------------------------------
+
+/** 只读视角相关文案（对齐 src/modules/Clusters/* 实际 UI 文案） */
+const RO_CLUSTER_LABEL = {
+  addCluster: '添加集群',
+  detail: '详情',
+  edit: '编辑',
+  del: '删除',
+  submit: '提交',
+  nextStep: '下一步',
+  lastStep: '上一步',
+  basicConfigPanel: '基础配置',
+};
+
+/** 前端路由（src/router/router.js `path: 'cluster'`） */
+const BUSINESS_CLUSTER_PATH = '/cluster';
+
+/**
+ * 只读角色写操作的后端拒绝语义（ai-gateway-api `lib/xerror/resolve.go`
+ * etAuthorizateFail → 402 + `Feature Access Deny`；02f 文档写的 403 与实现不符）。
+ */
+const RO_WRITE_DENIED = { status: 402, message: 'Feature Access Deny' };
+
+/** 列表页根节点（src/modules/Clusters/index.vue 根 div.clusters） */
+function clusterPageRoot(page) {
+  return page.locator('.clusters');
+}
+
+/**
+ * 列表页「添加集群」按钮：`v-has`（src/modules/Clusters/index.vue:33）。
+ * 用 CSS 定位——role 定位不匹配 display:none 元素，无法断言 `.v-has-hidden`。
+ */
+function clusterListAddBtn(page) {
+  return page
+    .locator('.clusters > button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.addCluster });
+}
+
+/** 列表行内操作按钮集合（render 内 `directives: [{ name: 'has' }]`，index.vue:161/180） */
+function clusterRowActionButtons(page, clusterName) {
+  return businessClusterTable(page)
+    .rowByText(clusterName)
+    .locator('button.ivu-btn');
+}
+
+/** 列表行内写按钮（编辑 / 删除）：CSS 定位，用于 `.v-has-hidden` 断言 */
+function clusterRowWriteBtn(page, clusterName, label) {
+  return clusterRowActionButtons(page, clusterName).filter({ hasText: label });
+}
+
+/** 列表行内按钮（role 定位，只匹配可见按钮）：管理员对照与只读「详情」保留断言用 */
+function clusterRowAction(page, clusterName, label) {
+  return businessClusterTable(page).rowAction(clusterName, label);
+}
+
+/** 列表搜索行「名称」列筛选框（占位符「请输入名称查询」） */
+function clusterSearchInput(page) {
+  return businessClusterTable(page).searchInput(
+    BUSINESS_CLUSTER_SEARCH_PLACEHOLDER,
+  );
+}
+
+/** 创建向导抽屉 */
+function clusterCreateWizardDrawer(page) {
+  return ivuDrawer(page).withTitle(DRAWER_TITLE.createBusinessCluster);
+}
+
+/** 编辑向导抽屉（行内「编辑」入口对应） */
+function clusterEditWizardDrawer(page) {
+  return ivuDrawer(page).withTitle(DRAWER_TITLE.editBusinessCluster);
+}
+
+/**
+ * 向导抽屉底部按钮区（src/modules/Clusters/components/index.vue
+ * `.com-btn-box.drawer-footer`）
+ */
+function clusterWizardFooter(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return ivuDrawer(page)
+    .withTitle(drawerTitle)
+    .locator('.com-btn-box.drawer-footer');
+}
+
+/**
+ * 向导「提交」按钮：`v-has` + `v-show="currentStepIndex === reviewStepIndex"`
+ * （components/index.vue:89-90），只读态由 v-has 额外加 `.v-has-hidden`。
+ */
+function clusterWizardSubmitBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return clusterWizardFooter(page, drawerTitle)
+    .locator('button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.submit });
+}
+
+/** 向导「下一步」按钮（只读态保留的步骤推进入口） */
+function clusterWizardNextBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return clusterWizardFooter(page, drawerTitle)
+    .locator('button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.nextStep });
+}
+
+/** 向导「上一步」按钮 */
+function clusterWizardPrevBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return clusterWizardFooter(page, drawerTitle)
+    .locator('button.ivu-btn')
+    .filter({ hasText: RO_CLUSTER_LABEL.lastStep });
+}
+
+/**
+ * 向导抽屉右上关闭入口（iView Drawer `<a class="ivu-drawer-close">`）。
+ * 02f 文档「保留下一步 / 取消」中的「取消」在产品 5 步向导内无对应按钮，
+ * 退出向导由该关闭入口承担。
+ */
+function clusterWizardCloseBtn(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return ivuDrawer(page).withTitle(drawerTitle).locator('.ivu-drawer-close');
+}
+
+/** 「详情」抽屉 */
+function clusterDetailDrawer(page) {
+  return ivuDrawer(page).withTitle(DRAWER_TITLE.businessClusterDetail);
+}
+
+/** 详情抽屉内写按钮（Review 无 footer 且 showFooter=false，只读态应为 0） */
+function clusterDetailActionButtons(page) {
+  return clusterDetailDrawer(page).locator('button.ivu-btn');
+}
+
+/** 详情抽屉「基础配置」面板内「集群名称」值行（Review 第 1 个 ul > li.value） */
+function clusterDetailNameValue(page) {
+  return clusterDetailDrawer(page)
+    .locator('.panel')
+    .filter({ hasText: RO_CLUSTER_LABEL.basicConfigPanel })
+    .first()
+    .locator('li.value')
+    .first();
+}
+
+/**
+ * 只读视角直连 URL 进入 AI 业务集群列表页。
+ * 不复用 `gotoBusinessClusterManagementPage`：它经 `ensureAppSession` 调用
+ * `ensureSessionHealthy`，会话异常时会以 admin 凭证重登并回写 auth.json，
+ * 把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）；
+ * 就绪判定也不用「添加集群」（只读态被 v-has 隐藏）。
+ */
+async function gotoBusinessClusterPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, BUSINESS_CLUSTER_PATH, {
+    ready: clusterPageRoot(page),
+  });
+  await expectBusinessClusterPageReadyReadonly(page);
+}
+
+/** 只读视角就绪判定：列表页在、筛选行与表头可见（只读也存在的锚点），写入口已隐藏 */
+async function expectBusinessClusterPageReadyReadonly(page) {
+  await expect(clusterPageRoot(page)).toBeVisible();
+  await expect(clusterSearchInput(page)).toBeVisible({ timeout: 15000 });
+  await expect(
+    businessClusterTable(page).headers().filter({ hasText: '名称' }).first(),
+  ).toBeVisible({ timeout: 15000 });
+  await readonly.expectVHasHidden(clusterListAddBtn(page), '添加集群');
+  await readonly.expectStillReadonly(page);
+}
+
+/**
+ * 按「名称」列本地筛选并断言行可见（与分页解耦：目标集群可能不在第 1 页）。
+ * 不触发列表请求（pageTable 前端筛选），管理员/只读两组通用。
+ */
+async function ensureBusinessClusterRowVisibleByFilter(page, clusterName) {
+  await businessClusterTable(page).filterByColumn('名称', clusterName);
+  await expect(
+    businessClusterTable(page).rowByText(clusterName),
+  ).toBeVisible({ timeout: 15000 });
+  return true;
+}
+
+/**
+ * 只读视角强制展开「添加集群」向导（等价于点开被 v-has 隐藏的「添加集群」）。
+ * 只读态写入口已隐藏、抽屉不渲染，而文档预期 2/5 要求在真实渲染的向导内验收
+ * 「提交」的 `.v-has-hidden`（与 v-show 共存），故按仓库既有 `__vue__` 手法直接
+ * 驱动组件状态——只改 UI 状态，不发起任何写请求。
+ */
+async function openCreateBusinessClusterDrawerByModel(page) {
+  const opened = await page.evaluate(() => {
+    const root = document.querySelector('.clusters');
+    if (!root) {
+      return false;
+    }
+    let vue = root.__vue__;
+    for (let i = 0; i < 10 && vue && vue.upsertVisible === undefined; i += 1) {
+      vue = vue.$parent;
+    }
+    if (!vue || vue.upsertVisible === undefined) {
+      return false;
+    }
+    vue.currentCluster = {};
+    vue.isAdd = true;
+    vue.upsertVisible = true;
+    return true;
+  });
+  if (!opened) {
+    throw new Error('强制展开「添加集群」向导失败：未取到 .clusters 组件实例');
+  }
+  await ivuDrawer(page).expectOpen(DRAWER_TITLE.createBusinessCluster);
+  await waitAfterResourceMutation(page, 300);
+}
+
+/**
+ * 把向导步骤置位到「复查&检查」（reviewStepIndex）。
+ * 管理员与只读两组用同一手法，唯一差异是角色：用于把「提交」从 v-show 隐藏态取出，
+ * 从而区分只读态的隐藏来自 v-has（`.v-has-hidden`）而非 v-show。
+ */
+async function jumpClusterWizardToReviewStepByModel(page) {
+  const jumped = await page.evaluate(() => {
+    const el = document.querySelector('.newClusters');
+    if (!el) {
+      return false;
+    }
+    let vue = el.__vue__;
+    for (let i = 0; i < 10 && vue && typeof vue.reviewStepIndex !== 'number'; i += 1) {
+      vue = vue.$parent;
+    }
+    if (!vue || typeof vue.reviewStepIndex !== 'number') {
+      return false;
+    }
+    if (vue.currentStepIndex !== vue.reviewStepIndex) {
+      vue.currentStepIndex = vue.reviewStepIndex;
+    }
+    return true;
+  });
+  if (!jumped) {
+    throw new Error('向导步骤置位失败：未取到 .newClusters 组件实例');
+  }
+  await waitAfterResourceMutation(page, 300);
+}
+
+/**
+ * 只读视角详情验收：「详情」可打开、只读查看内容在、无写按钮残留（预期 3）。
+ * 调用方负责 `closeBusinessClusterDetail`。
+ */
+async function expectBusinessClusterDetailReadonly(page, clusterName) {
+  await openBusinessClusterDetail(page, clusterName);
+  await expect(
+    clusterDetailDrawer(page)
+      .locator('.panel')
+      .filter({ hasText: RO_CLUSTER_LABEL.basicConfigPanel })
+      .first(),
+  ).toBeVisible();
+  await expect(clusterDetailNameValue(page)).toHaveText(clusterName);
+  await readonly.expectAbsent(
+    clusterDetailActionButtons(page),
+    '详情抽屉内写按钮',
+  );
+}
+
+/**
+ * 只读态下以只读会话直接调用集群删除接口（探针：目标集群名不存在，任何结果都不产生数据变更），
+ * 用于文档预期 5「写操作在接口层由后端按角色强制拒绝」。
+ * 返回 `{ status, body }`，期望值为 `RO_WRITE_DENIED`。
+ */
+async function probeClusterDeleteAsReadonly(page, clusterName) {
+  const userData = await resourceApi.getUserData(page);
+  const response = await page.request.delete(
+    resourceApi.getOpenApiBaseUrl() +
+      '/clusters/' +
+      encodeURIComponent(clusterName),
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Session ' + userData.sessionKey,
+      },
+    },
+  );
+  const body = await response.json().catch(() => ({}));
+  common.log(
+    '只读态 DELETE cluster 探针响应: ' +
+      response.status() +
+      ' ' +
+      JSON.stringify(body),
+  );
+  return { status: response.status(), body };
 }
 
 module.exports = {
@@ -2001,6 +2848,7 @@ module.exports = {
   getModelKeyRowOptions,
   expectProviderDropdownOptions,
   waitForClusterCreateRequest,
+  waitForClusterPatchRequest,
   mountSubCluster,
   unmountSubCluster,
   fillModelStep,
@@ -2020,6 +2868,7 @@ module.exports = {
   searchBusinessClusterAndWait,
   expectBusinessClusterVisibleInAllPages,
   ensureBusinessClusterRowVisible,
+  refreshBusinessClusterList,
   confirmDeleteBusinessCluster,
   expectBusinessClusterFormFieldError,
   cancelCreateBusinessCluster,
@@ -2033,4 +2882,53 @@ module.exports = {
   fillEppConfig,
   waitForClusterGetResponse,
   waitForClusterReviewRequest,
+  // 2026-10-13 EPP 运行时参数（RM-BC-115~122）
+  eppRuntimeCard,
+  expectEppRuntimeCardVisible,
+  expectEppRuntimeCardHidden,
+  expectEppRuntimeFieldComposition,
+  expectEppRuntimeHelpIcons,
+  getEppRuntimeValues,
+  expectEppRuntimeDefaultValues,
+  expectEppRuntimeUnitOptions,
+  selectEppRuntimeDurationUnit,
+  fillEppRuntimeDuration,
+  typeEppRuntimeDuration,
+  fillEppRuntimeThreshold,
+  expectEppRuntimeSwitchState,
+  toggleEppRuntimeSwitch,
+  expectEppRuntimeFieldError,
+  expectEppRuntimeFieldErrorHidden,
+  getReviewEppRuntimeValues,
+  expectReviewEppRuntimeValues,
+  expectReviewEppRuntimeUnset,
+  expectEppRuntimeToast,
+  watchClusterCreateRequests,
+  // 只读管理员视角（docs/business-cluster/…/02f-只读视角.md）
+  BUSINESS_CLUSTER_PATH,
+  RO_CLUSTER_LABEL,
+  RO_WRITE_DENIED,
+  clusterPageRoot,
+  clusterListAddBtn,
+  clusterRowActionButtons,
+  clusterRowWriteBtn,
+  clusterRowAction,
+  clusterSearchInput,
+  clusterCreateWizardDrawer,
+  clusterEditWizardDrawer,
+  clusterWizardFooter,
+  clusterWizardSubmitBtn,
+  clusterWizardNextBtn,
+  clusterWizardPrevBtn,
+  clusterWizardCloseBtn,
+  clusterDetailDrawer,
+  clusterDetailActionButtons,
+  clusterDetailNameValue,
+  gotoBusinessClusterPageReadonly,
+  expectBusinessClusterPageReadyReadonly,
+  ensureBusinessClusterRowVisibleByFilter,
+  openCreateBusinessClusterDrawerByModel,
+  jumpClusterWizardToReviewStepByModel,
+  expectBusinessClusterDetailReadonly,
+  probeClusterDeleteAsReadonly,
 };

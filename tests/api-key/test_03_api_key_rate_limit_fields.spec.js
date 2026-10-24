@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-const { test } = require('@playwright/test');
+const { expect, test } = require('@playwright/test');
 const utils = require('../../pages/entity/EntityPage');
 
 const DOC = utils.DOC_API_KEY;
@@ -402,5 +402,46 @@ test.describe('API-Key管理 - EM-K-48 RPM规则-最大请求数必填', () => {
       ruleMsg(DOC.rpmMaxRequestsRequiredMsgTemplate, 1),
     );
     await utils.cancelApiKeyForm(page);
+  });
+});
+
+// ==================== EM-K-67 仅配置批量限流可保存 ====================
+
+test.describe('API-Key管理 - EM-K-67 仅配置批量限流可保存', () => {
+  test('验证最大并发「不限制」且仅填批量限流时可创建成功（issue #124）', async ({
+    page,
+  }) => {
+    await prepareApiKeyRateLimitTest(page);
+
+    await test.step('选择「不限制」并仅填写批量限流四维度', async () => {
+      await utils.selectApiKeyMaxConcurrencyOption(page, '不限制');
+      await utils.fillApiKeyBatchLimits(page, {
+        max_create_rpm: 1,
+        max_active_batches: 1,
+        max_file_bytes: 1048576,
+        max_file_lines: 10,
+      });
+    });
+
+    await test.step('提交成功，请求体保留 batch_limits 且无 TPM/RPM', async () => {
+      const createRequestPromise = page.waitForRequest(
+        (req) =>
+          req.method() === 'POST' &&
+          req.url().includes('/open-api/v1/api-keys'),
+      );
+      await utils.submitApiKeyFormAndWaitForSuccess(page);
+      const payload = (await createRequestPromise).postDataJSON();
+
+      expect(payload.rate_limit_policy.enabled).toBe(true);
+      expect(payload.rate_limit_policy.rules.tpm).toEqual([]);
+      expect(payload.rate_limit_policy.rules.rpm).toEqual([]);
+      expect(payload.rate_limit_policy.rules.max_concurrency).toBe(-1);
+      expect(payload.rate_limit_policy.rules.batch_limits).toEqual({
+        max_create_rpm: 1,
+        max_active_batches: 1,
+        max_file_bytes: 1048576,
+        max_file_lines: 10,
+      });
+    });
   });
 });

@@ -33,29 +33,20 @@ const api = require('../../api/epp-pool-api-utils');
 const common = require('../../utils/common');
 const { getAppBaseUrl } = require('../../pages/resource/ResourcePageCommon');
 
-/** 测试实例池数据：3 组 × 2 实例 */
+/** 测试实例池数据：3 组 × 1 实例（单实例重构后每组恰好 1 个实例） */
 const TEST_POOL = {
   groups: [
     {
       name: 'g-a',
-      instances: [
-        { id: 'inst-a1', host: '10.0.201.1', port: 9002 },
-        { id: 'inst-a2', host: '10.0.201.2', port: 9002 },
-      ],
+      instances: [{ id: 'inst-a1', host: '10.0.201.1', port: 9002 }],
     },
     {
       name: 'g-b',
-      instances: [
-        { id: 'inst-b1', host: '10.0.202.1', port: 9002 },
-        { id: 'inst-b2', host: '10.0.202.2', port: 9002 },
-      ],
+      instances: [{ id: 'inst-b1', host: '10.0.202.1', port: 9002 }],
     },
     {
       name: 'g-c',
-      instances: [
-        { id: 'inst-c1', host: '10.0.203.1', port: 9002 },
-        { id: 'inst-c2', host: '10.0.203.2', port: 9002 },
-      ],
+      instances: [{ id: 'inst-c1', host: '10.0.203.1', port: 9002 }],
     },
   ],
 };
@@ -219,6 +210,20 @@ async function toggleGroupExpand(page, groupName) {
     });
     common.log(`[toggleGroupExpand] DOM 诊断: ${JSON.stringify(diag, null, 2)}`);
   }
+}
+
+/**
+ * 收起某组：直接点击展开图标。
+ * 与 toggleGroupExpand 不同——后者在「点击后展开行数为 0」时会强制展开，
+ * 故不能用于收起场景。
+ */
+async function collapseGroup(page, groupName) {
+  await groupRow(page, groupName)
+    .locator('td')
+    .first()
+    .locator('.ivu-table-cell-expand')
+    .click({ timeout: 5000 });
+  await page.waitForTimeout(600);
 }
 
 /**
@@ -528,7 +533,8 @@ async function fillGroupName(page, groupName, newName, { retries = 3, delayMs = 
  * <tr> 元素（不带 .ivu-table-row class）。因此选择器必须匹配 table tbody tr 而非 .ivu-table-row。
  */
 function expandedInstanceRows(page) {
-  return page.locator('.ivu-table-expanded-row table tbody tr');
+  // iView 展开行的 <tr> 无 class，展开内容在 <td class="ivu-table-expanded-cell"> 内
+  return page.locator('.ivu-table-expanded-cell table tbody tr');
 }
 
 test.describe('EPP实例池 - EP-POOL-01~06', () => {
@@ -560,7 +566,7 @@ test.describe('EPP实例池 - EP-POOL-01~06', () => {
       if (!ok) {
         common.log('[beforeAll] 测试实例池 PATCH 失败');
       } else {
-        common.log('[beforeAll] 测试实例池写入成功: 3 组 6 实例');
+        common.log('[beforeAll] 测试实例池写入成功: 3 组 3 实例');
       }
     } catch (e) {
       common.log('[beforeAll] 前置数据异常: ' + e.message);
@@ -658,13 +664,12 @@ test.describe('EPP实例池 - EP-POOL-01~06', () => {
       if (instCount === 0) {
         common.log('[POOL-01] 展开行数为0，跳过实例明细验证（展开图标可能未被正确触发）');
       } else {
-        expect(instCount).toBeGreaterThanOrEqual(2);
+        // 单实例重构后每组恰好 1 个实例
+        expect(instCount).toBeGreaterThanOrEqual(1);
         const instTexts = await instRows.allInnerTexts();
         const combined = instTexts.join(' ');
         expect(combined).toContain('inst-a1');
         expect(combined).toContain('10.0.201.1');
-        expect(combined).toContain('inst-a2');
-        expect(combined).toContain('10.0.201.2');
       }
     });
 
@@ -676,15 +681,26 @@ test.describe('EPP实例池 - EP-POOL-01~06', () => {
         common.log('[POOL-01] 展开行数已为0，跳过收起验证');
         return;
       }
-      await toggleGroupExpand(page, 'g-a');
+      await collapseGroup(page, 'g-a');
       await expect(instRowsBefore).toHaveCount(0, { timeout: 5000 });
     });
 
     await test.step('6. 确认顶部统计区域', async () => {
       const stats = await eppPage.getStatsText(page);
       expect(stats.length).toBeGreaterThan(0);
-      // 应包含组数 3 和实例数 6（N/2 格式）
-      expect(stats).toMatch(/3|6/);
+      // 应包含实例组数 3 与实例总数 3（单实例重构后每组恰好 1 个实例）
+      expect(stats).toMatch(/实例组数：\s*3/);
+      expect(stats).toMatch(/实例总数：\s*3/);
+    });
+
+    await test.step('7. 确认「实例数」列为 `N / 1`', async () => {
+      await eppPage.ensureOnEppPoolPage(page);
+      for (const g of TEST_POOL.groups) {
+        await expect(
+          eppPage.poolInstanceCountCell(page, g.name),
+          `「${g.name}」实例数列应显示 1 / 1`,
+        ).toHaveText(/1\s*\/\s*1/);
+      }
     });
   });
 
@@ -734,6 +750,26 @@ test.describe('EPP实例池 - EP-POOL-01~06', () => {
         common.log('[POOL-02] 实例输入框未找到，可能已自动展开');
       }
       await page.waitForTimeout(300);
+    });
+
+    await test.step('3b. 组内已有 1 个实例时「+添加实例」禁用并提示', async () => {
+      await eppPage.ensureOnEppPoolPage(page);
+      // 单实例重构：每组恰好 1 个实例，组内已有 1 个时按钮禁用并提示
+      const expandedRow = eppPage.poolGroupExpandedRow(
+        page,
+        eppPage.DOC_EPP_POOL.instanceCountMax,
+      );
+      await expect(
+        expandedRow,
+        '组内已有 1 个实例时展开行应显示「每组恰好 1 个实例」提示',
+      ).toBeVisible({ timeout: 5000 });
+      await expect(expandedRow).toContainText(
+        eppPage.DOC_EPP_POOL.instanceCountMax,
+      );
+      await expect(
+        eppPage.poolGroupAddInstanceBtn(page, eppPage.DOC_EPP_POOL.instanceCountMax),
+        '组内已有 1 个实例时「+添加实例」按钮应禁用',
+      ).toBeDisabled();
     });
 
     await test.step('4. 修改组名：g-a → g-a-modified', async () => {

@@ -60,6 +60,9 @@
  * - PR-C-13 预期 3「models 仅当『获取』回填后才存在；未获取时不传或传空」：后端自
  *   09-17 起 Provider.models 必填（空数组返回 422），前端 validateModels 同步拦截；
  *   本 spec 造数/填单统一通过「批量添加」补非空 models。
+ * - 前端分页适配（2026-10-15）：列表前端分页默认 20 条/页且只渲染当前页，API/UI 造数后
+ *   新行可能落在第 2/3 页，原「造数后直接断言行可见」必然超时；统一改用
+ *   pp.expectProviderRowVisibleByName（先按名称本地筛选再断言行可见），断言内容不变。
  *
  * 运行：npx playwright test tests/providers/test_02_provider_upsert.spec.js
  */
@@ -189,7 +192,7 @@ async function createProviderAndOpenList({ page, cleanup, overrides = {} }) {
   expect(data, 'API 造数服务商应成功').not.toBeNull();
   cleanup.trackName(name);
   await pp.gotoProvidersPage(page);
-  await pp.providerTable(page).expectRowVisible(name);
+  await pp.expectProviderRowVisibleByName(page, name);
   return name;
 }
 
@@ -254,7 +257,7 @@ test.describe('模型服务商 - PR-C-01 创建服务商-成功（IP 模式）',
 
     // 6. 提交成功后抽屉关闭，列表刷新出现新服务商
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -309,7 +312,7 @@ test.describe('模型服务商 - PR-C-02 创建服务商-成功（服务商域�
 
     // 4. 列表刷新出现新服务商
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -430,7 +433,7 @@ test.describe('模型服务商 - PR-C-04 实例池-添加/删除行', () => {
     expect(body.instance_pool.map((i) => i.port)).toEqual([IP_PORT, 82]);
 
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('仅剩一行时删除按钮禁用（至少保留一行，不可删空）', async ({ page }) => {
@@ -500,7 +503,7 @@ test.describe('模型服务商 - PR-C-05 实例 IP+端口 重复校验', () => {
     expect(body.instance_pool.map((i) => i.addr)).toEqual([IP_ADDR, IP_ADDR_2]);
 
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -542,7 +545,7 @@ test.describe('模型服务商 - PR-C-06 模型协议多选必填', () => {
     expect(body.model_protocols).toEqual(['openai', 'anthropic']);
 
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -832,9 +835,8 @@ test.describe('模型服务商 - PR-C-13 提交体结构校验', () => {
     expect(body.keys).toEqual([{ name: 'key-primary', key: 'sk-xxx' }]);
 
     cleanup.trackName(name);
-    // 搜索刚创建的服务商，避免因历史数据导致分页而找不到
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    // 前端分页 20 条/页：先按名称本地筛选再断言行可见（避免新行落到第 2/3 页）
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -912,8 +914,8 @@ test.describe('模型服务商 - PR-C-15 取消/关闭抽屉', () => {
     ).toHaveValue('');
     await pp.closeUpsertDrawer(page);
 
-    // 4. 列表数据不变：未创建任何服务商
-    await pp.providerTable(page).expectRowHidden(name);
+    // 4. 列表数据不变：未创建任何服务商（先按名称筛选再断言计数 0，避免分页假通过）
+    await pp.expectProviderRowHiddenByName(page, name);
   });
 });
 
@@ -1025,9 +1027,8 @@ test.describe('模型服务商 - PR-C-13 创建 gemini 协议服务商', () => {
     expect(body.model_endpoint.uri).toBe('/v1beta/models');
 
     cleanup.trackName(name);
-    // 使用跨页搜索查找刚创建的服务商（列表可能因历史数据过多而分页）
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    // 前端分页 20 条/页：先按名称本地筛选再断言行可见（避免新行落到第 2/3 页）
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -1108,8 +1109,7 @@ test.describe('模型服务商 - PR-C-17 协议路径映射-添加/删除映射�
     expect(body.protocol_paths).toEqual({ openai: '/v1', anthropic: '/v2' });
 
     cleanup.trackName(name);
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -1148,7 +1148,7 @@ test.describe('模型服务商 - PR-C-19 协议路径映射-清空映射须显�
 
     await test.step('打开编辑抽屉：已有映射行回显（1行）', async () => {
       await pp.gotoProvidersPage(page);
-      await pp.providerTable(page).expectRowVisible(name);
+      await pp.expectProviderRowVisibleByName(page, name);
       await pp.openEditDrawer(page, name);
       await pp.expectProtocolPathRowCount(page, 1);
       await pp.expectProtocolPathHeader(page);
@@ -1167,7 +1167,7 @@ test.describe('模型服务商 - PR-C-19 协议路径映射-清空映射须显�
     expect(firstBody.protocol_paths).toEqual({});
 
     await test.step('重新打开编辑抽屉：映射已清空且展示空态', async () => {
-      await pp.providerTable(page).expectRowVisible(name);
+      await pp.expectProviderRowVisibleByName(page, name);
       await pp.openEditDrawer(page, name);
       await pp.expectProtocolPathRowCount(page, 0);
       await pp.expectProtocolPathEmptyState(page);
@@ -1246,7 +1246,6 @@ test.describe('模型服务商 - PR-C-18 协议路径映射-路径格式校验',
     expect(body.protocol_paths).toEqual({ openai: '/v1' });
 
     cleanup.trackName(name);
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });

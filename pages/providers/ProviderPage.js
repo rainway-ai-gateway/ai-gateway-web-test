@@ -18,6 +18,8 @@ const { expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const rc = require('../resource/ResourcePageCommon');
+const sessionUtils = require('../../utils/session');
+const readonly = require('../../utils/readonly');
 const { PageTableComponent } = require('../../components/layout');
 const {
   IvuMessageComponent,
@@ -58,6 +60,17 @@ const AUTH_PATH = path.join(__dirname, '../../auth.json');
  * 10. PR-V-15 预期「time_ranges 为空拦截 / weekdays 越界拦截」：UI 至少保留 1 个时间段
  *    （timeRanges.length<=1 删除按钮 disabled）；weekdays 为固定 7 项 Checkbox 不会越界，
  *    两分支不可经 UI 复现。
+ * 11. 前端分页定位（2026-10-15）：列表 `pageTable` 只渲染当前页（默认 20 条/页），
+ *    提交 / 删除后刷新会清空列搜索条件，目标行可能回到第 2/3 页。封装由此提供
+ *    `expectProviderRowVisibleByName`（按名称筛选后断言行可见）与行操作自动定位
+ *    （`clickRowAction` 内部 `locateRowByName`：行不在当前页时先按名称筛选），
+ *    行操作与「行存在 / 消失」断言不再依赖行恰好落在第 1 页。
+ * 12. 只读视角密钥展示（2026-10-16）：08-只读视角.md PR-RO-03 预期 2 称「掩码值原样展示，
+ *    前端不做二次脱敏」，但源码 `components/ProviderView.vue:140` 对 key 追加调用前端
+ *    `maskSecretKey`（`src/utils/const.js:562`：长度 ≤12 → `****`；>12 → 前 8 + `****` + 后 4），
+ *    详情抽屉实际展示「后端 xmask 结果再经前端掩码」的二次结果。只读 spec 按源码实际行为
+ *    断言，期望值由 `displayMaskSecretKey`（前端规则）与 `utils/readonly.maskSecret`（后端规则）
+ *    组合得出；明文长度 >12 时两条规则结果一致。
  */
 
 const LABEL = {
@@ -102,6 +115,8 @@ const DOC = {
   listHeaders: COLUMN_HEADERS,
   createButton: '添加服务商',
   pricingTiersTitle: '分段计价配置',
+  // PR-LINK-01/06：行操作「查询模型价格」跳转模型定价列表（联动 ModelPrice.list）
+  viewModelPrices: '查询模型价格',
   defaultTimeZone: 'Asia/Shanghai',
   defaultRange: { weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '12:00' },
   instanceModeIp: 'IP',
@@ -175,6 +190,8 @@ async function ensureLocalStorageSession(page) {
 // ---------- 导航 ----------
 
 async function gotoProvidersPage(page) {
+  const targetUrl = rc.getAppBaseUrl() + '/providers';
+
   await rc.ensureAppSession(page);
 
   // 在导航前注入 initScript，确保页面加载时 localStorage 已就绪
@@ -193,9 +210,12 @@ async function gotoProvidersPage(page) {
     }, session);
   }
 
-  await page.goto(rc.getAppBaseUrl() + '/providers');
+  await page.goto(targetUrl);
   await page.waitForLoadState('domcontentloaded');
   await ensureLocalStorageSession(page);
+  // 导航后会话守卫：Key 在导航过程中失效（列表接口 401 弹「Session Key 错误」遮罩）
+  // 时先自愈并重新加载目标页，避免后续所有点击被遮罩拦截。
+  await sessionUtils.ensureSessionHealthy(page, { retryUrl: targetUrl });
   await expect(
     page.getByRole('button', { name: DOC.createButton }),
   ).toBeVisible({ timeout: 15000 });
@@ -234,7 +254,26 @@ function rowAction(page, rowText, action) {
   return providerTable(page).rowAction(rowText, action);
 }
 
+/**
+ * 行操作前的「定位」（列表为前端分页，默认 20 条/页）
+ *
+ * 目标行可能因列表刷新（提交 / 删除后自动清空搜索条件）或重新进入列表页而
+ * 回到第 2/3 页，「当前页可见」的假设会让行操作点击超时。此处先短暂等待行出现，
+ * 未出现则按名称本地筛选把该行带回第 1 页。
+ */
+async function locateRowByName(page, rowText) {
+  const table = providerTable(page);
+  const appeared = await table
+    .rowByText(rowText)
+    .waitFor({ state: 'visible', timeout: 3000 })
+    .then(() => true)
+    .catch(() => false);
+  if (appeared) return;
+  await table.expectRowVisibleByName(rowText);
+}
+
 async function clickRowAction(page, rowText, action) {
+  await locateRowByName(page, rowText);
   await rowAction(page, rowText, action).click();
   await page.waitForTimeout(500);
 }
@@ -564,6 +603,39 @@ async function submitUpsertAndWait(page, { expectSuccess = true } = {}) {
   return response;
 }
 
+/**
+ * 提交编辑表单并等待 PATCH /providers/{name} 响应 + 成功提示 + 抽屉关闭（PR-LINK-05）
+ * 返回 PATCH 响应
+ */
+async function submitEditAndWait(page, { expectSuccess = true } = {}) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes('/open-api/v1/providers/') &&
+        r.request().method() === 'PATCH' &&
+        r.status() === 200,
+      { timeout: 15000 },
+    ),
+    clickSubmit(page),
+  ]);
+  await response.finished().catch(() => {});
+  // 提交成功后 index.vue 关闭抽屉并 fetchList（GET /providers）
+  await page
+    .waitForResponse(
+      (r) =>
+        /\/open-api\/v1\/providers$/.test(r.url()) &&
+        r.request().method() === 'GET' &&
+        r.status() === 200,
+      { timeout: 15000 },
+    )
+    .catch(() => {});
+  if (expectSuccess) {
+    await expectMessage(page, MSG.submitSuccess);
+    await expectUpsertScopeHidden(page);
+  }
+  return response;
+}
+
 // ---------- 详情页（ProviderView） ----------
 
 function viewScope(page) {
@@ -607,6 +679,15 @@ async function openPricingTiersDrawer(page, rowText) {
     '.provider-pricing-tiers',
     DRAWER_TITLE.pricingTiers,
   );
+}
+
+/**
+ * 点击行操作「查询模型价格」（PR-LINK-01/06）：
+ * 前端 router.push 跳转模型定价列表并携带 query.provider=该服务商名，
+ * 不携带 autoView，不会打开定价详情
+ */
+async function clickViewModelPrices(page, rowText) {
+  await clickRowAction(page, rowText, DOC.viewModelPrices);
 }
 
 async function fillTimeZone(page, value) {
@@ -817,6 +898,46 @@ async function filterListSearch(page, title, keyword) {
 
 async function clearListSearch(page, title) {
   await filterListSearch(page, title, '');
+}
+
+/**
+ * 按「名称」列做本地筛选（前端筛选，不触发列表请求）
+ *
+ * 与 filterListSearch 的差别：补齐失焦（iView Input on-change 依赖 blur），
+ * 调用后筛选结果已生效，可直接断言行状态。
+ */
+async function filterListByName(page, keyword) {
+  await providerTable(page).filterByColumn('名称', keyword);
+}
+
+/**
+ * 断言某列本地筛选已清空：搜索框为空且分页恢复多页
+ *
+ * 前端分页 20 条/页，清空筛选后全量数据（数十条）必然多页；
+ * 若筛选仍生效（结果仅 1 条）则页码只有 1 个，据此区分「条件已移除」与「未移除」。
+ */
+async function expectListFilterCleared(page, title) {
+  await expect(searchInput(page, title)).toHaveValue('');
+  const pageNumbers = await providerTable(page).pageNumberCount();
+  expect(
+    pageNumbers,
+    '清空「' + title + '」筛选后应恢复全量分页（页码 > 1）',
+  ).toBeGreaterThan(1);
+}
+
+/**
+ * 断言服务商行可见（分页无关）：先按名称本地筛选再断言行可见
+ *
+ * 列表为前端分页（默认 20 条/页），造数后新行可能落在第 2/3 页，
+ * 直接断言「当前页可见」会假失败 —— 断言内容不变，仅改为先筛选定位。
+ */
+async function expectProviderRowVisibleByName(page, name, timeout = 15000) {
+  await providerTable(page).expectRowVisibleByName(name, timeout);
+}
+
+/** 断言服务商行不可见（先按名称筛选，避免「不在当前页」造成假通过） */
+async function expectProviderRowHiddenByName(page, name, timeout = 15000) {
+  await providerTable(page).expectRowHiddenByName(name, timeout);
 }
 
 async function filterListByProtocol(page, protocol) {
@@ -1361,12 +1482,131 @@ async function expectMessageContaining(page, text) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/providers/02-功能测试用例/08-只读视角.md PR-RO-01~03）
+// ---------------------------------------------------------------------------
+
+/** 服务商模块根节点（只读视角下同样存在，作为就绪锚点） */
+function providersRoot(page) {
+  return page.locator('.providers');
+}
+
+/**
+ * 列表工具栏「添加服务商」按钮（CSS / 文本定位，**不可用 `getByRole`**）。
+ *
+ * 源码 `src/modules/Providers/index.vue:18` 该 `Button` 挂 `v-has`，只读视角加
+ * `.v-has-hidden`（display:none !important）——元素仍在 DOM，但 `v-has` 的隐藏手段是
+ * `display:none`，而 Playwright 的 role 定位基于无障碍树、看不见 display:none 的元素，
+ * 只读态下 `getByRole('button', { name })` 会返回 count 0，导致 expectVHasHidden 误报
+ * （2026-10-16 实测）。
+ * 管理员态该按钮可见，同一 CSS/文本定位同样命中，故两侧对照共用本函数。
+ */
+function createProviderButton(page) {
+  return readonly.buttonByText(providersRoot(page), DOC.createButton);
+}
+
+/** 目标服务商所在数据行（CSS / 文本定位；只读态行内写按钮 display:none，不能用 getByRole） */
+function providerRow(page, providerName) {
+  return providerTable(page)
+    .body()
+    .locator('tr')
+    .filter({ hasText: providerName })
+    .first();
+}
+
+/**
+ * 行内操作按钮（CSS / 文本定位，**不可用 `getByRole`**，理由同 `createProviderButton`）。
+ * 服务商行内按钮：详情 / 查询模型价格 / 分段计价配置 / 编辑 / 删除，
+ * 后三者由 `index.vue:172/184/196` 的 `directives: [{ name: 'has' }]` 驱动隐藏。
+ *
+ * @param {string} actionText 操作列按钮文案
+ */
+function providerRowActionButton(page, providerName, actionText) {
+  return readonly.buttonByText(
+    providerRow(page, providerName),
+    actionText,
+  );
+}
+
+/**
+ * 工具栏（列表表格之外的页面级按钮区）：`.providers` 的直接子 Button。
+ * 一期该区域只有「添加服务商」一个写入口，用于断言「工具栏不含任何创建 / 新增写入口」。
+ */
+function providerToolbarButtons(page) {
+  return providersRoot(page).locator(':scope > .ivu-btn');
+}
+
+/** 工具栏内仍可见的按钮（只读视角应为 0 个） */
+function providerToolbarVisibleButtons(page) {
+  return providersRoot(page).locator(':scope > .ivu-btn:visible');
+}
+
+/** 列表「名称」列头搜索框（只读视角保留的筛选控件） */
+function providerNameSearchInput(page) {
+  return providerTable(page).searchInputByTitle(LABEL.name);
+}
+
+/** 详情抽屉「服务鉴权 Keys」卡片内 Key 值列文本（只读视角密钥展示断言用） */
+async function viewKeyValueTexts(page) {
+  const cells = viewTableRows(page, LABEL.serviceAuthKeys).locator(
+    'td:nth-child(2)',
+  );
+  await expect(cells.first()).toBeVisible({ timeout: 10000 });
+  return (await cells.allInnerTexts()).map((text) => text.trim());
+}
+
+/**
+ * 前端密钥展示掩码规则（复刻 `src/utils/const.js:562 maskSecretKey`）。
+ * 注意与后端 `lib/xmask`（utils/readonly.maskSecret）不同：
+ * 详情抽屉的 Key 值是「后端掩码后再经前端掩码」的二次结果。
+ * - 长度 ≤ 12 → `****`
+ * - 长度 > 12 → 前 8 位 + `****` + 后 4 位
+ */
+function displayMaskSecretKey(value) {
+  const key = String(value ?? '').trim();
+  if (!key) return '';
+  if (key.length <= 12) return '****';
+  return `${key.substring(0, 8)}****${key.substring(key.length - 4)}`;
+}
+
+/**
+ * 只读视角直连 URL 进入服务商列表页。
+ * 不复用 `gotoProvidersPage`：它内部调用 `rc.ensureAppSession` +
+ * `sessionUtils.ensureSessionHealthy`，会用 admin 凭证重登并回写 auth.json，
+ * 把只读态换回管理员态（见 utils/readonly.js 文件头约束 2）。
+ */
+async function gotoProvidersPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, 'providers', {
+    ready: providersRoot(page),
+  });
+  await readonly.expectStillReadonly(page);
+}
+
+/** 只读视角就绪判定：根节点 + 列头（只读也存在的锚点），不依赖「添加服务商」 */
+async function expectProvidersPageReadyReadonly(page) {
+  await expect(providersRoot(page)).toBeVisible({ timeout: 15000 });
+  await expectTableHeaders(page);
+  await readonly.expectStillReadonly(page);
+}
+
 module.exports = {
   LABEL,
   MSG,
   DRAWER_TITLE,
   COLUMN_HEADERS,
   DOC,
+  // 只读管理员视角（docs/providers/02-功能测试用例/08-只读视角.md）
+  providersRoot,
+  createProviderButton,
+  providerRow,
+  providerRowActionButton,
+  providerToolbarButtons,
+  providerToolbarVisibleButtons,
+  providerNameSearchInput,
+  viewKeyValueTexts,
+  displayMaskSecretKey,
+  gotoProvidersPageReadonly,
+  expectProvidersPageReadyReadonly,
   gotoProvidersPage,
   expectProvidersPageReady,
   providerTable,
@@ -1406,6 +1646,7 @@ module.exports = {
   clickSubmit,
   expectDrawerHidden,
   submitUpsertAndWait,
+  submitEditAndWait,
   viewScope,
   expectViewScopeVisible,
   viewInfoValue,
@@ -1413,6 +1654,7 @@ module.exports = {
   expectPricingTiersScopeVisible,
   expectPricingTiersScopeHidden,
   openPricingTiersDrawer,
+  clickViewModelPrices,
   fillTimeZone,
   getTimeZoneValue,
   expectPricingError,
@@ -1433,6 +1675,10 @@ module.exports = {
   expectDeleteConfirmHidden,
   filterListSearch,
   clearListSearch,
+  filterListByName,
+  expectListFilterCleared,
+  expectProviderRowVisibleByName,
+  expectProviderRowHiddenByName,
   filterListByProtocol,
   expectNoListRequestDuring,
   paginationScope,
