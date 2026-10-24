@@ -32,6 +32,12 @@ const config = {
     // Markdown 报告须在 json reporter 之后生成，才能读到本轮最新结果
     ['./utils/markdown-report-reporter.js'],
   ],
+  // 证书管理模块已于 2026-09-11 随菜单移除，UI 入口不复存在，tests/cert/ 的 21 条用例断言前提整体作废
+  //（2026-10-15 全量回归中 21/21 全部失败）。用例条目按 test-case-lifecycle §1.1 保留为「跳过」、不删除，
+  // 待模块重新上线时恢复；此处仅把它们排除出常规运行，避免每次回归产生 21 条噪声。
+  // 恢复方式：删除下面的 testIgnore 行（或从数组中移除 `tests/cert/**`），并同步回写
+  // docs/cert-management/02-功能测试用例/00-索引与映射.md「模块移除与用例跳过」一节的用例状态。
+  testIgnore: ['tests/cert/**'],
   timeout: 2 * 60 * 1000, // 单个 test 超时 2 分钟
   globalTimeout: 60 * 60 * 1000,
   expect: {

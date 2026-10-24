@@ -72,6 +72,9 @@
  * 10. PR-V-14/15 校验错误经 $Message.error 全局提示（PR-T 系列同）；start/end 为原生
  *     type=time input，非法时间值（25:00/12:60）Playwright fill 直接抛 Malformed value，
  *     仅空值可复现「须为 HH:MM 格式」拦截。
+ * 11. 前端分页适配（2026-10-15）：列表前端分页默认 20 条/页且只渲染当前页，API/UI 造数后
+ *    新行可能落在第 2/3 页，原「造数后直接断言行可见」必然超时；统一改用
+ *    pp.expectProviderRowVisibleByName（先按名称本地筛选再断言行可见），断言内容不变。
  *
  * 运行：npx playwright test tests/providers/test_06_provider_validation.spec.js
  */
@@ -163,7 +166,7 @@ async function createProviderAndOpenList({ page, cleanup, overrides = {} }) {
   expect(data, 'API 造数服务商应成功').not.toBeNull();
   cleanup.trackName(name);
   await pp.gotoProvidersPage(page);
-  await pp.providerTable(page).expectRowVisible(name);
+  await pp.expectProviderRowVisibleByName(page, name);
   return name;
 }
 
@@ -185,7 +188,7 @@ async function setupProvider({ page }) {
   expect(data).not.toBeNull();
   cleanup.trackName(providerName);
   await pp.gotoProvidersPage(page);
-  await pp.providerTable(page).expectRowVisible(providerName);
+  await pp.expectProviderRowVisibleByName(page, providerName);
   return { cleanup, providerName };
 }
 
@@ -282,7 +285,7 @@ test.describe('模型服务商 - PR-V-02 name 格式校验', () => {
     const response = await pp.submitUpsertAndWait(page);
     expect(response.request().postDataJSON().name).toBe(name);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -325,7 +328,7 @@ test.describe('模型服务商 - PR-V-03 description 长度与控制字符校验
     const body = response.request().postDataJSON();
     expect(body.description.length).toBe(256);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('含控制字符拦截；留空合法', async ({ page }) => {
@@ -348,7 +351,7 @@ test.describe('模型服务商 - PR-V-03 description 长度与控制字符校验
     const response = await pp.submitUpsertAndWait(page);
     expect(response.request().postDataJSON().description).toBe('');
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -392,7 +395,7 @@ test.describe('模型服务商 - PR-V-04 instance_pool 至少 1 个', () => {
     const response = await pp.submitUpsertAndWait(page);
     expect(response.request().postDataJSON().instance_pool).toHaveLength(1);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -441,7 +444,7 @@ test.describe('模型服务商 - PR-V-05 instance.addr 必填与格式校验', (
       IP_ADDR,
     );
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('域名模式：非法域名拦截，合法域名通过', async ({ page }) => {
@@ -465,7 +468,7 @@ test.describe('模型服务商 - PR-V-05 instance.addr 必填与格式校验', (
       DOMAIN,
     );
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -516,7 +519,7 @@ test.describe('模型服务商 - PR-V-06 instance.port 范围校验', () => {
     const response = await pp.submitUpsertAndWait(page);
     expect(response.request().postDataJSON().instance_pool[0].port).toBe(65535);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('端口留空提交被拦截并提示；边界值 1 提交通过', async ({ page }) => {
@@ -534,7 +537,7 @@ test.describe('模型服务商 - PR-V-06 instance.port 范围校验', () => {
     const response = await pp.submitUpsertAndWait(page);
     expect(response.request().postDataJSON().instance_pool[0].port).toBe(1);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -586,7 +589,7 @@ test.describe('模型服务商 - PR-V-07 instance.weight 范围与至少一个 >
       IP_WEIGHT,
     );
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('全部权重为 0 拦截（UI 提示权重和=100，偏差 7）；存在 >0 时通过', async ({
@@ -620,7 +623,7 @@ test.describe('模型服务商 - PR-V-07 instance.weight 范围与至少一个 >
         .instance_pool.map((i) => i.weight),
     ).toEqual([IP_WEIGHT, 0]);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -671,7 +674,7 @@ test.describe('模型服务商 - PR-V-08 model_protocols 至少 1 个且不重�
       'anthropic',
     ]);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('PR-V-08 协议枚举校验-选 gemini 通过，选非法值拦截', async ({
@@ -697,7 +700,7 @@ test.describe('模型服务商 - PR-V-08 model_protocols 至少 1 个且不重�
       'gemini',
     ]);
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -748,7 +751,7 @@ test.describe('模型服务商 - PR-V-09 model_endpoint.schema 校验', () => {
       'http',
     );
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -789,7 +792,7 @@ test.describe('模型服务商 - PR-V-10 model_endpoint.uri 校验', () => {
       '/v1/models',
     );
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('uri 输入 /v1/models 提交通过', async ({ page }) => {
@@ -806,7 +809,7 @@ test.describe('模型服务商 - PR-V-10 model_endpoint.uri 校验', () => {
       '/v1/models',
     );
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -891,7 +894,7 @@ test.describe('模型服务商 - PR-V-12 keys.key 必填与长度校验', () => 
     const response = await pp.submitUpsertAndWait(page);
     expect(response.request().postDataJSON().keys[0].key).toBe('v'.repeat(512));
     cleanup.trackName(name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -960,7 +963,7 @@ test.describe('模型服务商 - PR-V-13 models 必填校验（至少 1 个，�
         'deepseek-coder',
       ]);
       cleanup.trackName(name);
-      await pp.providerTable(page).expectRowVisible(name, 15000);
+      await pp.expectProviderRowVisibleByName(page, name, 15000);
     });
   });
 });
@@ -1123,8 +1126,7 @@ test.describe('模型服务商 - PR-V-16 protocol_paths 协议键校验', () => 
     expect(body.protocol_paths).toEqual({ openai: '/v1', anthropic: '/v2' });
 
     cleanup.trackName(name);
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('addProtocolPath 自动选中协议，填写路径后提交成功', async ({ page }) => {
@@ -1143,8 +1145,7 @@ test.describe('模型服务商 - PR-V-16 protocol_paths 协议键校验', () => 
     expect(body.protocol_paths).toEqual({ openai: '/v1' });
 
     cleanup.trackName(name);
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });
 
@@ -1203,8 +1204,7 @@ test.describe('模型服务商 - PR-V-17 protocol_paths 路径格式校验', () 
     expect(body.protocol_paths).toEqual({ openai: '/v1' });
 
     cleanup.trackName(name);
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 
   test('合法路径 /v1/chat 和 /（仅根路径）均通过校验', async ({ page }) => {
@@ -1223,7 +1223,6 @@ test.describe('模型服务商 - PR-V-17 protocol_paths 路径格式校验', () 
     expect(body.protocol_paths).toEqual({ openai: '/v1/chat' });
 
     cleanup.trackName(name);
-    await pp.filterListSearch(page, '名称', name);
-    await pp.providerTable(page).expectRowVisible(name, 15000);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
 });

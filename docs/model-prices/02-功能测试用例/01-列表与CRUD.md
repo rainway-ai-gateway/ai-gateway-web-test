@@ -288,5 +288,34 @@
 
 ---
 
-*文档版本: v0.3*  
-*最后更新: 2026-09-17（MP-L-06 page_size 默认 20→50，分页选项扩展至 1000）*
+### MP-C-07：批量折扣系数提交payload规则
+
+**功能模块**: CRUD  
+**优先级**: P1  
+**用例编号**: MP-C-07
+
+#### 前置条件
+
+- 打开新增 / 编辑模型定价表单；已知 `batch_discount` 为非必填浮点，取值 (0,1]，仅 `mode != batch` 时填报
+
+#### 测试步骤
+
+1. mode 选择非 batch（如 `chat`），批量折扣系数填写 `0.5`，其他字段填写合法值 → 提交
+2. 保持 mode 非 batch，清空批量折扣系数 → 提交
+3. mode 选择 `batch`（此时不渲染批量折扣系数输入）→ 提交
+
+#### 预期结果
+
+1. 步骤 1：`POST /model-prices`（或 `PUT /model-prices/{id}`）请求体附带 `batch_discount`，值为 `0.5`
+2. 步骤 2：`mode != batch` 但未填写时，请求体 `batch_discount` 为 `null`（不附带该字段）
+3. 步骤 3：`mode=batch` 时请求体 `batch_discount` 为 `null`（不附带该字段）
+4. 提交规则：仅当 `mode != batch` 且 `batch_discount != null` 时才附该字段，否则置 null
+
+#### 补充说明
+
+- 取值范围校验见 MP-V-13；`mode=batch` 不渲染输入见 MP-V-14；查看态展示见 [02-详情页验证](./02-详情页验证.md) 的 MP-D-03
+
+---
+
+*文档版本: v0.4*  
+*最后更新: 2026-10-10（新增 MP-C-07：批量折扣系数提交 payload 规则）*

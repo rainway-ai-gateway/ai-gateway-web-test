@@ -136,7 +136,9 @@ test.describe('路由管理 - RT-V-03-3 同集群不同 Model 允许', () => {
 });
 
 test.describe('路由管理 - RT-V-12-1 备用组合去重', () => {
-  test('目标与备用同集群相同 Model 被拦截（RT-V-12-1 A）', async ({ page }) => {
+  // 2026-10-23（issue #128）：targets 与 fallbacks 各自列表内去重，不再跨列表比较，
+  // 因此同一 (cluster_name, model) 允许同时出现在目标与备用中
+  test('目标与备用同集群相同 Model 允许保存（RT-V-12-1 A）', async ({ page }) => {
     let cluster;
     await test.step('前置：查找可用集群', async () => {
       await enterGlobalRuleEdit(page);
@@ -160,11 +162,14 @@ test.describe('路由管理 - RT-V-12-1 备用组合去重', () => {
       await utils.selectRuleFallbackModel(page, 0, model);
     });
 
-    // 修订说明（2026-08-17）：UI 为 targets ↔ fallbacks 跨列表合并去重（同键拦截，
-    // route.clusterModelUsedInFallback / clusterModelUsedInTarget），不再允许跨列表同键保存
-    await test.step('本地保存应被拦截（跨列表同键，抽屉保持打开）', async () => {
-      await utils.submitRuleFormExpectLocalSaveMessage(page, '该组合已在');
-      await utils.expectRuleFormDrawerStillOpen(page);
+    await test.step('本地保存成功（跨列表同键不再拦截）', async () => {
+      await utils.submitRuleFormAndWait(page);
+      await utils.expectRuleFormDrawerHidden(page);
+      await utils.expectRuleRowVisible(page, ruleName);
+    });
+
+    await test.step('清理规则', async () => {
+      await utils.deleteRuleByNameAndSubmit(page, ruleName);
     });
   });
 

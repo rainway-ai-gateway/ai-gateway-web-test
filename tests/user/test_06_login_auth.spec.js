@@ -15,6 +15,7 @@
  */
 const { test, expect } = require('@playwright/test');
 const common = require('../../utils/common');
+const sessionUtils = require('../../utils/session');
 const utils = require('../../pages/user/UserPage');
 const fs = require('fs');
 const path = require('path');
@@ -56,6 +57,22 @@ test.describe('用户管理 - UM-32 登录认证', () => {
       const url = page.url();
       common.log('登录后URL: ' + url);
       expect(url).not.toContain('/login');
+    });
+
+    await test.step('同步共享登录态（auth.json）', async () => {
+      // 后端每个用户只保留 1 个 Session Key：本次登录已让 auth.json 里的旧 Key 失效，
+      // 若不回写，后续 spec 会拿着失效 Key 请求并弹出「Session Key 错误」遮罩，
+      // 表现为元素可见但点击被遮挡（locator.click 超时）。
+      await utils.persistAuthState(page);
+
+      // 回写有效性与可观测性：auth.json 必须带上本次登录的新 Key
+      const shared = sessionUtils.readAuthJsonUser();
+      expect(shared && shared.sessionKey).toBeTruthy();
+      common.log(
+        'auth.json 已同步本次登录的 Session Key: ' +
+          shared.sessionKey.substring(0, 10) +
+          '...',
+      );
     });
   });
 

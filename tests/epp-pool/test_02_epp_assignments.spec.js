@@ -21,7 +21,7 @@
  * - EP-ASGN-02 集群名称搜索
  * - EP-ASGN-03 排序/分页
  * - EP-ASGN-04 统计汇总：已分配/未分配/空闲实例组数
- * - EP-ASGN-05 未分配集群区域（红色告警+降级提示）
+ * - EP-ASGN-05 未分配集群区域（红色告警 + WRR 降级提示）
  * - EP-ASGN-06 手动覆写抽屉
  *
  * 运行：npx playwright test tests/epp-pool/test_02_epp_assignments.spec.js
@@ -95,7 +95,8 @@ test.describe('EPP调度分配 - EP-ASGN-01~06', () => {
     await test.step('2. 确认表格列结构', async () => {
       const table = eppPage.assignmentsTable(page);
       await table.waitForLoaded();
-      await table.expectHeaders('集群名称', '实例组', '主实例', '备实例', '状态', '操作');
+      // 单实例重构后分配粒度收敛为「实例组」，不再有主实例 / 备实例 / 状态列
+      await table.expectHeaders('集群名称', '实例组', '操作');
     });
 
     await test.step('3. 确认表格有数据行', async () => {
@@ -351,30 +352,38 @@ test.describe('EPP调度分配 - EP-ASGN-01~06', () => {
       expect(statsText.length).toBeGreaterThan(0);
     });
 
-    await test.step('3. 未分配集群区域的告警展示', async () => {
+    await test.step('3. 未分配集群区域展示（红色告警 + WRR 降级提示）', async () => {
+      // 单实例重构后已删除「降级」列，未分配状态改由 unassigned_clusters 区域验证
+      const unassignedCard = eppPage
+        .eppModuleRoot(page)
+        .locator('.ivu-card')
+        .filter({ hasText: '未分配集群' })
+        .first();
+
       if (unassignedClusters.length === 0) {
-        // 无未分配集群时：页面不应有红色错误标签，但统计区域正常
-        const errorTags = page.locator('.ivu-tag-error, .error-tag');
-        // 允许 0 个或少量错误标签（可能来自其他页面元素）
-        common.log(`当前环境无未分配集群，跳过红色告警验证（Open API 无法产生持久化 unassigned_clusters，需环境天然存在降级数据）`);
+        common.log(`当前环境无未分配集群，跳过未分配区域验证（Open API 无法产生持久化 unassigned_clusters，需环境天然存在未分配数据）`);
+        await expect(
+          unassignedCard,
+          '无未分配集群时不应渲染「未分配集群」区域',
+        ).toHaveCount(0);
         return;
       }
 
-      // 有未分配集群时：验证降级提示可见
       common.log(`未分配集群: ${JSON.stringify(unassignedClusters)}`);
-
-      const degradedHint = page.locator(':has-text("降级"), :has-text("未分配")').first();
-      const hintCount = await degradedHint.count();
-      if (hintCount > 0) {
-        await expect(degradedHint).toBeVisible();
-      }
-
-      // 验证红色告警区域
-      const redArea = page.locator(
-        '.ivu-tag-error, .error-tag, .text-danger, .red-text, [style*="color: red"], [style*="color:red"]',
-      ).first();
-      const hasRedWarning = (await redArea.count()) > 0;
-      common.log('红色告警区域存在: ' + hasRedWarning);
+      await expect(
+        unassignedCard,
+        '存在未分配集群时应渲染「未分配集群」区域',
+      ).toBeVisible({ timeout: 10000 });
+      await expect(
+        unassignedCard,
+        '未分配区域应给出 WRR 降级提示',
+      ).toContainText('服务降级为 WRR');
+      // 标题使用红色告警色 #ed4014：该内联样式施加在标题 <p slot="title"> 上（Assignments.vue:55），
+      // 而非 .ivu-card-head 容器本身，故断言标题 <p> 的 color。
+      await expect(
+        unassignedCard.locator('.ivu-card-head p').first(),
+        '未分配区域标题应为红色告警',
+      ).toHaveCSS('color', 'rgb(237, 64, 20)');
     });
   });
 
@@ -415,16 +424,19 @@ test.describe('EPP调度分配 - EP-ASGN-01~06', () => {
       }
     });
 
-    await test.step('2. 验证抽屉表单包含实例组和主实例下拉', async () => {
-      // 实例组选择器
-      const groupSelect = page.locator('.ivu-select, .el-select').filter({ hasText: /实例组/ }).first();
-      const hasGroupSelect = (await groupSelect.count()) > 0;
-
-      // 主实例选择器
-      const primarySelect = page.locator('.ivu-select, .el-select').filter({ hasText: /主实例/ }).first();
-      const hasPrimarySelect = (await primarySelect.count()) > 0;
-
-      common.log(`实例组下拉: ${hasGroupSelect}, 主实例下拉: ${hasPrimarySelect}`);
+    await test.step('2. 验证抽屉表单仅含「实例组」下拉（无主实例下拉）', async () => {
+      const drawer = eppPage.assignmentOverrideDrawer(page);
+      await expect(drawer, '覆写抽屉应已打开').toBeVisible({ timeout: 10000 });
+      // 单实例重构：分配粒度收敛为实例组，抽屉仅保留「实例组」下拉
+      await expect(drawer, '覆写抽屉应包含「实例组」下拉').toContainText('实例组');
+      await expect(
+        drawer,
+        '覆写抽屉不应再包含「主实例」下拉',
+      ).not.toContainText('主实例');
+      await expect(
+        drawer.locator('.ivu-select'),
+        '覆写抽屉应恰好有 1 个下拉（实例组）',
+      ).toHaveCount(1);
     });
 
     await test.step('3. 关闭抽屉（不提交）', async () => {

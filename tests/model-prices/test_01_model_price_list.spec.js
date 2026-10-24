@@ -140,24 +140,41 @@ test.describe('模型定价 - MP-L-02/03/04/05 筛选与搜索', () => {
     await mp.modelPriceTable(page).expectRowHidden('gpt-4o');
   });
 
-  test('MP-L-03 Model 搜索：model 单独查询被后端拒绝（422），前端提示失败且列表不变', async ({
+  test('MP-L-03 Model 搜索：仅填模型名时前端提示需同时选择提供商与模式，不发请求', async ({
     page,
   }) => {
-    // 后端契约（api-define §3.4/§3.6，issue #170）：列表过滤仅支持 provider/mode，
-    // 不含 model；带 model 但 provider/model/mode 三参不齐时一律返回 422 参数错误。
-    // 故 UI 的 model 搜索框发出的 model=... 请求会被后端拒绝。
-    const respPromise = page.waitForResponse(
-      (r) =>
-        r.url().includes('/open-api/v1/model-prices') &&
-        r.url().includes('model=gpt-4o'),
-      { timeout: 10000 },
+    // 前端新行为（index.vue fetchData）：带 model 查询后端按 (provider, model, mode)
+    // 三参单记录语义处理，缺一即 422；故仅填模型名（provider/mode 未选）时前端
+    // 弹出 iView 警告（modelPrices.modelSearchNeedsProviderMode）且不发请求，
+    // 列表保持上次结果。此用例断言该新行为（缺陷 3 已修复）。
+    const listRequests = [];
+    const trackListRequest = (req) => {
+      if (
+        req.method() === 'GET' &&
+        req.url().includes('/open-api/v1/model-prices') &&
+        req.url().includes('model=')
+      ) {
+        listRequests.push(req.url());
+      }
+    };
+    page.on('request', trackListRequest);
+
+    // iView Message 约 1.5s 自动消失，需并发等待捕获
+    const messagePromise = mp.expectMessage(
+      page,
+      mp.MSG.modelSearchNeedsProviderMode,
     );
     await mp.searchField(page, 'model', 'gpt-4o');
-    const resp = await respPromise;
-    expect(resp.status()).toBe(422);
+    await messagePromise;
 
-    // 前端提示加载失败，列表保持基线数据（既不清空也不过滤）
-    await mp.expectMessage(page, '加载模型定价失败');
+    // 停留片刻确保无任何 model-prices 列表请求发出
+    await page.waitForTimeout(800);
+    page.off('request', trackListRequest);
+    expect(listRequests, '仅填模型名不应发出 model-prices 列表请求').toEqual(
+      [],
+    );
+
+    // 列表保持基线数据（既不清空也不过滤）
     await mp.modelPriceTable(page).expectRowVisible('gpt-4o');
     await mp.modelPriceTable(page).expectRowVisible('deepseek-v3');
   });

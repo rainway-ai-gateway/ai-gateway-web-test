@@ -14,8 +14,8 @@ blob-report/
 auth.json
 components-dist/
 
-# Markdown 报告（每次跑测会覆盖/归档）
-report/
+# Markdown 报告（每次跑测会覆盖/归档，仅根目录 report/）
+/report/
 
 # 系统杂项
 .DS_Store

@@ -155,7 +155,7 @@ test.describe('用户管理 - UM-08 添加用户-密码格式校验', () => {
       await utils.expectAddUserFormFieldError(
         page,
         '密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordLength,
       );
     });
 
@@ -170,7 +170,7 @@ test.describe('用户管理 - UM-08 添加用户-密码格式校验', () => {
       await utils.expectAddUserFormFieldError(
         page,
         '密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordWhitespace,
       );
     });
 
@@ -185,17 +185,18 @@ test.describe('用户管理 - UM-08 添加用户-密码格式校验', () => {
       await utils.expectAddUserFormFieldError(
         page,
         '密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordUserName,
       );
     });
 
     await test.step('密码等于用户名逆序被拦截', async () => {
-      await utils.fillAddUserForm(page, 'abc', 'cba', 'cba');
+      // 样本需同时满足 8 字节下限，否则产品按分支优先级先报「长度不足」，测不到逆序规则
+      await utils.fillAddUserForm(page, 'abcdefgh', 'hgfedcba', 'hgfedcba');
       await utils.submitAddUserForm(page);
       await utils.expectAddUserFormFieldError(
         page,
         '密码',
-        utils.DOC_USER.tipPasswordRule,
+        utils.DOC_USER.tipPasswordUserName,
       );
     });
 

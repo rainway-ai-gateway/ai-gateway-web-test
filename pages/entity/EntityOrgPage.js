@@ -26,6 +26,7 @@ const {
 } = require('../../components/iview');
 const { ElSelectComponent } = require('../../components/element');
 const entityApiUtils = require('../../api/entity-api-utils');
+const readonly = require('../../utils/readonly');
 const {
   DRAWER_TITLE,
   DOC_ENTITY_ORG,
@@ -745,6 +746,65 @@ async function clearEntityRateLimitRuleField(
 async function setupEntityCreateWithRateLimit(page, entityName, typeName) {
   await fillEntityFormBasic(page, { name: entityName, typeName });
   await selectEntityEnableRateLimit(page, '是');
+}
+
+const ENTITY_BATCH_LIMIT_LABELS = {
+  max_create_rpm: '批量任务创建RPM',
+  max_active_batches: '在途批量任务上限',
+  max_file_bytes: '单文件字节上限',
+  max_file_lines: '单文件行数上限',
+};
+
+/**
+ * 填写批量限流维度（batch_limits），并确认已写入表单模型
+ */
+async function fillEntityBatchLimitField(
+  page,
+  key,
+  value,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const label = ENTITY_BATCH_LIMIT_LABELS[key];
+  if (!label) {
+    throw new Error(`未知的批量限流维度: ${key}`);
+  }
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  await expect(drawer).toBeVisible({ timeout: 15000 });
+  await new IvuFormComponent(drawer).fillInput(label, String(value));
+  await page.waitForTimeout(300);
+
+  const actual = await drawer.evaluate((drawerEl, fieldKey) => {
+    const formEl = drawerEl.querySelector('.ivu-form');
+    if (!formEl || !formEl.__vue__) return { ok: false };
+    let vm = formEl.__vue__;
+    while (vm && !vm.formData) {
+      vm = vm.$parent;
+    }
+    const batch =
+      vm &&
+      vm.formData &&
+      vm.formData.rate_limit_policy &&
+      vm.formData.rate_limit_policy.rules &&
+      vm.formData.rate_limit_policy.rules.batch_limits;
+    return { ok: !!batch, value: batch ? batch[fieldKey] : undefined };
+  }, key);
+  if (!actual.ok || Number(actual.value) !== Number(value)) {
+    throw new Error(
+      `批量限流字段 ${label} 未写入表单模型: ${JSON.stringify(actual)}`,
+    );
+  }
+}
+
+async function fillEntityBatchLimits(
+  page,
+  limits,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  for (const [key, value] of Object.entries(limits || {})) {
+    if (value !== undefined && value !== null) {
+      await fillEntityBatchLimitField(page, key, value, drawerTitle);
+    }
+  }
 }
 
 async function submitEntityFormExpectRateLimitError(
@@ -1965,6 +2025,172 @@ async function createEntityWithQuotaViaApi(
   }
 }
 
+// ---------------------------------------------------------------------------
+// 只读管理员视角（docs/entity-management/02-功能测试用例/10-只读视角.md
+// EM-E-RO-01 ~ EM-E-RO-03）
+//
+// 产品依据（ai-gateway-web src/modules/Entity）：
+// - EntityList.vue:20 工具栏「创建Entity」挂 `v-has`；:207/:229 操作列「编辑」「删除」以
+//   `directives: [{ name: 'has' }]` 渲染；:179 操作列「管理路由规则」不挂指令（只读保留）。
+// - EntityView.vue:126 详情抽屉「重置配额」挂 `v-has`（外层 `v-if="!quotaPlanUnlimited"`
+//   是「无限配额不渲染」的数据分支，与只读无关）。
+// - EntityTypeList.vue:20 工具栏「创建类型」挂 `v-has`；:124/:143 操作列「编辑」「删除」
+//   以 `directives: [{ name: 'has' }]` 渲染。
+// 模块内没有 `store.isReadonly()` / `v-show` 模式收敛分支，写入口一律靠 `.v-has-hidden`
+// 隐藏，故只读断言一律用 `readonly.expectVHasHidden`；定位一律用 CSS + hasText
+// （Playwright `getByRole` 默认排除隐藏元素，配不到 v-has 隐藏的按钮）。
+// ---------------------------------------------------------------------------
+
+/** Entity 管理页前端路由（src/router/router.js，两个 Tab 同一路由） */
+const ENTITY_ROUTE_PATH = 'Entity';
+
+/** 只读态同样渲染的页面锚点：面包屑「Entity管理」 */
+function entityBreadcrumb(page) {
+  return page.locator('.bfe-breadcrumb').getByText('Entity管理', { exact: true });
+}
+
+/**
+ * 当前激活列表的工具栏容器。
+ * EntityList / EntityTypeList 的写入口都在 `<div class="title">` 内，且两个 TabPane 的
+ * 内容由 `v-if="val === ..."`（index.vue:20/23）控制，同一时刻只有一个 `.title` 在 DOM 中。
+ */
+function entityListToolbar(page) {
+  return page.locator('.ivu-tabs-tabpane').locator('.title').first();
+}
+
+/** 组织管理工具栏「创建Entity」写按钮（EntityList.vue:20 挂 v-has） */
+function entityOrgCreateButton(page) {
+  return entityListToolbar(page)
+    .locator('button.ivu-btn')
+    .filter({ hasText: '创建Entity' });
+}
+
+/** 组织管理列表数据行（按名称定位，纯前端筛选后唯一） */
+function entityRowByName(page, entityName) {
+  return entityOrgTable(page).dataRows().filter({ hasText: entityName }).first();
+}
+
+/**
+ * 组织管理「操作」列按钮（按文案定位）。
+ * 用 CSS + hasText 而非 `rowAction()`（后者走 getByRole，配不到 v-has 隐藏的按钮）。
+ */
+function entityRowActionBtn(page, entityName, label) {
+  return entityRowByName(page, entityName)
+    .locator('button.ivu-btn')
+    .filter({ hasText: label });
+}
+
+/** 详情抽屉「重置配额」写按钮（EntityView.vue:126 挂 v-has） */
+function entityDetailResetQuotaBtn(page) {
+  return entityDetailDrawer(page)
+    .locator('button.ivu-btn')
+    .filter({ hasText: '重置配额' });
+}
+
+/** 详情抽屉「配额信息」卡片 */
+function entityDetailQuotaCard(page) {
+  return entityDetailDrawer(page)
+    .locator('.ivu-card')
+    .filter({ hasText: '配额信息' })
+    .first();
+}
+
+/** EM-E-RO-03 预期 1：详情配额信息区应正常只读展示的字段 label */
+const ENTITY_DETAIL_QUOTA_READONLY_LABELS = [
+  '无限配额',
+  '配额总量',
+  '配额单位',
+  '已使用',
+  '剩余量',
+  '重置周期',
+  '使用进度',
+];
+
+/**
+ * 只读视角就绪判定：面包屑 + 双 Tab + 组织管理列表表格可见。
+ * 不能用 `expectEntityOrgPageLayout`（它断言「创建Entity」可见）/ `isEntityOrgTabReady`
+ * （同因），只读态这两个写按钮都被 v-has 隐藏。
+ */
+async function expectEntityPageReadyReadonly(page) {
+  await expect(entityBreadcrumb(page)).toBeVisible({ timeout: 15000 });
+  await expectEntityManagementTabs(page);
+  await expectEntityOrgTableVisible(page);
+  await readonly.expectVHasHidden(
+    entityOrgCreateButton(page),
+    '工具栏「创建Entity」',
+  );
+}
+
+/**
+ * 只读视角直连 URL 进入 Entity 管理页（默认停在「Entity组织管理」Tab）。
+ * 不走 `gotoEntityManagementPage` / `gotoEntityOrgManagementPage` / `switchToEntityOrgTab`：
+ * 它们内部调用 `handleUrlInvalidAlert` / `ensureLoggedIn`，会以 conf.json 的 admin 凭证
+ * 重登并回写 auth.json，把只读态换回管理员态（utils/readonly.js 文件头约束 2）。
+ */
+async function gotoEntityPageReadonly(page) {
+  await readonly.gotoAsReadonly(page, ENTITY_ROUTE_PATH, {
+    ready: entityBreadcrumb(page),
+  });
+  await expectEntityPageReadyReadonly(page);
+  await readonly.expectStillReadonly(page);
+}
+
+/** EM-E-RO-02 预期 3（管理员对照）：组织管理操作列三个入口全部可见 */
+async function expectEntityOrgRowAllActionsVisible(page, entityName) {
+  for (const label of ['管理路由规则', '编辑', '删除']) {
+    await readonly.expectAdminVisible(
+      entityRowActionBtn(page, entityName, label),
+      `行内「${label}」`,
+    );
+  }
+}
+
+/** EM-E-RO-02 预期 1：组织管理操作列仅保留「管理路由规则」，写按钮被 v-has 隐藏 */
+async function expectEntityOrgRowReadonlyActions(page, entityName) {
+  await readonly.expectVHasHidden(
+    entityRowActionBtn(page, entityName, '编辑'),
+    `行内「编辑」（${entityName}）`,
+  );
+  await readonly.expectVHasHidden(
+    entityRowActionBtn(page, entityName, '删除'),
+    `行内「删除」（${entityName}）`,
+  );
+  const manageRulesBtn = entityRowActionBtn(page, entityName, '管理路由规则');
+  await readonly.expectReadonlyVisible(manageRulesBtn, '行内「管理路由规则」');
+  await expect(manageRulesBtn, '「管理路由规则」应仍是可点击入口').toBeEnabled();
+  await expect(
+    manageRulesBtn,
+    '「管理路由规则」应保持 success 型（绿色）按钮样式',
+  ).toHaveClass(/ivu-btn-success/);
+}
+
+/** EM-E-RO-03 预期 1：详情配额信息区只读字段正常展示 */
+async function expectEntityDetailQuotaReadonlyFields(page) {
+  const card = entityDetailQuotaCard(page);
+  await expect(card, '详情「配额信息」卡片应可见').toBeVisible({
+    timeout: 15000,
+  });
+  for (const label of ENTITY_DETAIL_QUOTA_READONLY_LABELS) {
+    await readonly.expectReadonlyVisible(
+      card.getByText(label, { exact: true }).first(),
+      `详情「${label}」`,
+    );
+  }
+}
+
+/**
+ * EM-E-RO-03 预期 3：Entity 详情不含密钥 / Key / 密码类字段，
+ * 因此详情无掩码展示相关校验（掩码校验见 API-Key 模块 EM-K-RO-04）。
+ */
+async function expectEntityDetailNoSecretFields(page) {
+  await readonly.expectAbsent(
+    entityDetailDrawer(page)
+      .locator('.info-label')
+      .filter({ hasText: /Key|密钥|密码/ }),
+    'Entity 详情中的密钥类字段',
+  );
+}
+
 module.exports = {
   entityOrgTable,
   entityOrgForm,
@@ -2014,6 +2240,8 @@ module.exports = {
   fillEntityRateLimitRuleFieldRaw,
   clearEntityRateLimitRuleField,
   setEntityRateLimitRuleFieldModel,
+  fillEntityBatchLimitField,
+  fillEntityBatchLimits,
   setupEntityCreateWithRateLimit,
   submitEntityFormExpectRateLimitError,
   submitEntityFormExpectRateLimitBackendReject,
@@ -2111,4 +2339,18 @@ module.exports = {
   createEntityWithQuotaViaApi,
   deleteEntityByNameViaApi,
   findEntityByNameViaApi,
+  // 只读管理员视角（docs/entity-management/…/10-只读视角.md）
+  entityListToolbar,
+  entityOrgCreateButton,
+  entityRowByName,
+  entityRowActionBtn,
+  entityDetailResetQuotaBtn,
+  entityDetailQuotaCard,
+  ENTITY_DETAIL_QUOTA_READONLY_LABELS,
+  expectEntityPageReadyReadonly,
+  gotoEntityPageReadonly,
+  expectEntityOrgRowAllActionsVisible,
+  expectEntityOrgRowReadonlyActions,
+  expectEntityDetailQuotaReadonlyFields,
+  expectEntityDetailNoSecretFields,
 };

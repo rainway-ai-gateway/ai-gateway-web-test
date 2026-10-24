@@ -36,6 +36,9 @@
  *    02 未约定行序，spec 改为按协议名定位行后校验路径（不做位置断言）。
  * 4. PR-D-03 预期未配置时「不展示卡片，或展示提示」：UI 采用后者，Card 保留并展示
  *    空态「-」（ProviderView.vue .empty-text），不渲染映射表；spec 按此断言。
+ * 5. 前端分页适配（2026-10-15）：列表前端分页默认 20 条/页且只渲染当前页，API 造数后
+ *    新行可能落在第 2/3 页，原「造数后直接断言行可见」必然超时；统一改用
+ *    pp.expectProviderRowVisibleByName（先按名称本地筛选再断言行可见），断言内容不变。
  *
  * 运行：npx playwright test tests/providers/test_03_provider_detail.spec.js
  */
@@ -84,7 +87,7 @@ async function setupFullProvider({ page }) {
   cleanup.trackName(providerName);
 
   await pp.gotoProvidersPage(page);
-  await pp.providerTable(page).expectRowVisible(providerName);
+  await pp.expectProviderRowVisibleByName(page, providerName);
   return { cleanup, providerName };
 }
 
@@ -253,8 +256,8 @@ test.describe('模型服务商 - PR-D-02 详情页分段计价配置 Card', () =
     cleanup.trackName(unconfiguredName);
 
     await pp.gotoProvidersPage(page);
-    await pp.providerTable(page).expectRowVisible(configuredName);
-    await pp.providerTable(page).expectRowVisible(unconfiguredName);
+    await pp.expectProviderRowVisibleByName(page, configuredName);
+    await pp.expectProviderRowVisibleByName(page, unconfiguredName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -288,7 +291,7 @@ test.describe('模型服务商 - PR-D-02 详情页分段计价配置 Card', () =
 
     // 2. 重新进入列表，打开未配置服务商详情
     await pp.gotoProvidersPage(page);
-    await pp.providerTable(page).expectRowVisible(unconfiguredName);
+    await pp.expectProviderRowVisibleByName(page, unconfiguredName);
     await pp.openViewDrawer(page, unconfiguredName);
     await pp.expectViewScopeVisible(page);
 
@@ -354,8 +357,8 @@ test.describe('模型服务商 - PR-D-03 详情页协议路径映射卡片展示
     cleanup.trackName(unconfiguredName);
 
     await pp.gotoProvidersPage(page);
-    await pp.providerTable(page).expectRowVisible(configuredName);
-    await pp.providerTable(page).expectRowVisible(unconfiguredName);
+    await pp.expectProviderRowVisibleByName(page, configuredName);
+    await pp.expectProviderRowVisibleByName(page, unconfiguredName);
   });
 
   test.afterEach(async ({ page }) => {
@@ -400,7 +403,7 @@ test.describe('模型服务商 - PR-D-03 详情页协议路径映射卡片展示
     await test.step('未配置 protocol_paths：卡片展示空态「-」，不渲染空表，仅展示形态', async () => {
       // 返回列表，关闭已配置详情
       await pp.gotoProvidersPage(page);
-      await pp.providerTable(page).expectRowVisible(unconfiguredName);
+      await pp.expectProviderRowVisibleByName(page, unconfiguredName);
 
       await pp.openViewDrawer(page, unconfiguredName);
       await pp.expectViewScopeVisible(page);

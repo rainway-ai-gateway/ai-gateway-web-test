@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { expect } = require('@playwright/test');
 const rc = require('../resource/ResourcePageCommon');
+const sessionUtils = require('../../utils/session');
 const { PageTableComponent } = require('../../components/layout');
 const {
   IvuDrawerComponent,
@@ -79,6 +80,45 @@ const FILTER_LABEL = {
   startTime: '起始时间',
   endTime: '结束时间',
 };
+
+// 资源类型枚举的界面文案（product：OperationLogs/index.vue RESOURCE_TYPE_OPTIONS +
+// RESOURCE_TYPE_LABEL_KEYS → i18n zh.js resourceType*）。列表页/详情页均渲染标签，
+// 不渲染原始枚举值，因此断言必须走映射后的中文文案。
+const RESOURCE_TYPE_OPTIONS = [
+  'entity',
+  'entity_type',
+  'api_key',
+  'provider',
+  'cluster',
+  'route',
+  'certificate',
+  'quota_plan',
+  'model_price',
+  'batch',
+  'batch_file',
+  'user',
+  'token',
+];
+
+const RESOURCE_TYPE_LABELS = {
+  entity: 'Entity',
+  entity_type: 'Entity 类型',
+  api_key: 'API Key',
+  provider: '服务商',
+  cluster: '集群',
+  route: '路由',
+  certificate: '证书',
+  quota_plan: '配额计划',
+  model_price: '模型定价',
+  batch: '批量任务',
+  batch_file: '批量文件',
+  user: '用户',
+  token: 'Token',
+};
+
+function resourceTypeLabel(type) {
+  return RESOURCE_TYPE_LABELS[type] || type;
+}
 
 function ivuDrawer(page) {
   return new IvuDrawerComponent(page);
@@ -142,6 +182,10 @@ async function gotoOperationLogPage(page) {
   await page.goto(rc.getAppBaseUrl() + '/operation-logs');
   await page.waitForLoadState('domcontentloaded');
   await ensureLocalStorageSession(page);
+  // 导航后会话守卫：Key 失效时页面会弹「Session Key 错误」遮罩拦截点击，先自愈再断言就绪
+  await sessionUtils.ensureSessionHealthy(page, {
+    retryUrl: rc.getAppBaseUrl() + '/operation-logs',
+  });
   await expectOperationLogPageReady(page);
 }
 
@@ -606,6 +650,9 @@ module.exports = {
   formatDateTimeValue,
   futureDateTimeString,
   operatorTypeLabel,
+  RESOURCE_TYPE_OPTIONS,
+  RESOURCE_TYPE_LABELS,
+  resourceTypeLabel,
   expectEmptyTable,
   expectPaginationTotalZero,
   expectActionTagColor,
