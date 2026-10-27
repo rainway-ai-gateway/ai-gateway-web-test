@@ -198,6 +198,26 @@ async function createProviderViaApi(page, payload) {
 }
 
 /**
+ * 创建服务商并返回原始响应体（供 422 参数非法断言，如 PR-C-23 显式携带只读字段）
+ * @returns {Promise<{status: number, body: object|null}>}
+ */
+async function createProviderRawViaApi(page, payload) {
+  try {
+    const userData = await getUserData(page);
+    const response = await page.request.post(
+      getOpenApiBaseUrl() + '/providers',
+      { data: payload, headers: authHeaders(userData) },
+    );
+    const body = await response.json();
+    common.log('接口创建服务商(原始)响应: ' + JSON.stringify(body).slice(0, 300));
+    return { status: response.status(), body };
+  } catch (error) {
+    common.log('接口创建服务商(原始)异常: ' + error.message);
+    return { status: 0, body: null };
+  }
+}
+
+/**
  * 删除服务商
  * @returns {Promise<{ok: boolean, body: object|null}>} body 供断言 409 等语义
  */
@@ -320,6 +340,7 @@ module.exports = {
   getProviderViaApi,
   findProviderByNameViaApi,
   createProviderViaApi,
+  createProviderRawViaApi,
   updateProviderViaApi,
   updateProviderRawViaApi,
   getProviderNamesViaApi,
