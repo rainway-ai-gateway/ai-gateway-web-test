@@ -76,12 +76,15 @@ const AUTH_PATH = path.join(__dirname, '../../auth.json');
 const LABEL = {
   name: '名称',
   description: '描述',
+  instanceSource: '实例来源',
+  k8sPoolName: 'K8s 池名称',
   instanceMode: '实例形态',
   instanceList: '实例IP列表',
   domain: '服务商域名',
   keyName: 'Key 名称',
   keyValue: 'Key 值',
   // Card 标题（用于在共用类名的表格间精确定位所属 Card）
+  instancePoolCard: '实例池',
   serviceAuthKeys: '服务鉴权 Keys',
   protocolPathMapping: '协议路径映射',
   timeZone: '时区',
@@ -134,6 +137,14 @@ const DOC = {
   protocolPathMustStartSlash: '上游 API 基路径必须以 / 开头',
   protocolPathNoTrailingSlash: '上游 API 基路径不能以 / 结尾',
   protocolPathInvalidChars: '上游 API 基路径包含非法字符（? $ # ..）',
+  // PR-C-20~24 实例来源（人工维护 / K8s 池）
+  instanceSourceManual: '人工维护实例池（instance_pool）',
+  instanceSourceK8s: 'K8s 实例池（k8s_pool）',
+  k8sPoolNamePlaceholder: '例如 llm-inference-pool',
+  k8sPoolNameRequired: '请填写 K8s 池名称',
+  // PR-C-24：详情页镜像实例空态（ProviderView `provider.k8sPoolEmpty`）
+  k8sPoolEmpty: '暂无镜像实例（池不存在 ≡ 零实例）',
+  instanceCreateButton: '创建',
 };
 
 function readSessionFromAuthFile() {
@@ -444,6 +455,124 @@ async function expectInstanceListError(page, message) {
   if (message !== undefined) {
     await expect(err).toHaveText(message);
   }
+}
+
+// ---------- 实例来源（人工维护实例池 / K8s 实例池，PR-C-20~24） ----------
+
+function instanceSourceItem(page) {
+  return upsertFormItem(upsertScope(page), LABEL.instanceSource);
+}
+
+function instanceSourceSelect(page) {
+  return new IvuSelectComponent(
+    page,
+    instanceSourceItem(page).locator('.ivu-select').first(),
+  );
+}
+
+function instancePoolCard(page) {
+  return upsertCard(page, LABEL.instancePoolCard);
+}
+
+/**
+ * 读取「实例来源」当前选中项文案（PR-C-20 预期 1：默认 instance_pool）
+ */
+async function getInstanceSourceText(page) {
+  const value = instanceSourceItem(page)
+    .locator('.ivu-select-selected-value')
+    .first();
+  await expect(value).toBeVisible({ timeout: 10000 });
+  return ((await value.textContent()) || '').trim();
+}
+
+/**
+ * 打开「实例来源」下拉读取全部选项文本并断言（随后 Escape 收起，避免 click-outside 吞点击）
+ */
+async function expectInstanceSourceOptions(page, labels) {
+  const select = instanceSourceSelect(page);
+  await expect(select.trigger).toBeVisible({ timeout: 10000 });
+  const items = page.locator('.ivu-select-dropdown:visible .ivu-select-item');
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if ((await items.count()) === 0) {
+      await select.trigger.click();
+    }
+    await page.waitForTimeout(450);
+    if ((await items.count()) > 0) {
+      break;
+    }
+  }
+  await expect(items.first()).toBeVisible({ timeout: 10000 });
+  const texts = (await items.allTextContents()).map((t) => t.trim());
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  expect(texts).toEqual(labels);
+}
+
+async function selectInstanceSource(page, optionLabel) {
+  await instanceSourceSelect(page).selectOptionExact(optionLabel);
+  // 下拉收起动画期间 click-outside 会吞掉后续点击，统一 Escape 后再等渲染
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+}
+
+function k8sPoolNameItem(page) {
+  return upsertFormItem(upsertScope(page), LABEL.k8sPoolName);
+}
+
+async function expectK8sPoolNameVisible(page) {
+  await expect(k8sPoolNameItem(page)).toBeVisible({ timeout: 10000 });
+}
+
+async function expectK8sPoolNameHidden(page) {
+  await expect(k8sPoolNameItem(page)).toHaveCount(0);
+}
+
+async function expectK8sPoolNamePlaceholder(page, text) {
+  const input = k8sPoolNameItem(page)
+    .locator('input:not([type="hidden"])')
+    .first();
+  await expect(input).toHaveAttribute('placeholder', text);
+}
+
+async function fillK8sPoolName(page, value) {
+  await fillInputByLabel(page, upsertScope(page), LABEL.k8sPoolName, value);
+}
+
+async function getK8sPoolNameValue(page) {
+  return getInputByLabelValue(page, upsertScope(page), LABEL.k8sPoolName);
+}
+
+/**
+ * 断言人工实例池（实例表格 + 「+ 创建」入口）不可见（PR-C-21 预期 1/2）
+ */
+async function expectInstanceListHidden(page) {
+  await expect(instanceListScope(page)).toHaveCount(0);
+  await expect(instancePoolCard(page).locator('.formBox table')).toHaveCount(0);
+  await expect(
+    instancePoolCard(page).getByRole('button', {
+      name: DOC.instanceCreateButton,
+    }),
+  ).toHaveCount(0);
+}
+
+async function expectInstanceListVisible(page) {
+  await expect(instanceListScope(page)).toBeVisible({ timeout: 10000 });
+}
+
+/**
+ * 读取人工实例池第 index 行的 addr / port / weight 当前值（PR-C-22 原值保留断言）
+ */
+async function getInstanceRowValue(page, index, field) {
+  const tdIndex = { addr: 0, port: 1, weight: 2 }[field];
+  const selector = field === 'addr' ? 'input' : '.ivu-input-number-input';
+  const input = instanceRows(page)
+    .nth(index)
+    .locator('td')
+    .nth(tdIndex)
+    .locator(selector)
+    .first();
+  await expect(input).toBeVisible({ timeout: 10000 });
+  return String(await input.inputValue()).trim();
 }
 
 // ---------- 模型协议 / 模型获取 ----------
@@ -1633,6 +1762,21 @@ module.exports = {
   fillInstanceRow,
   fillDomainName,
   expectInstanceListError,
+  instanceSourceItem,
+  instanceSourceSelect,
+  instancePoolCard,
+  getInstanceSourceText,
+  expectInstanceSourceOptions,
+  selectInstanceSource,
+  k8sPoolNameItem,
+  expectK8sPoolNameVisible,
+  expectK8sPoolNameHidden,
+  expectK8sPoolNamePlaceholder,
+  fillK8sPoolName,
+  getK8sPoolNameValue,
+  expectInstanceListHidden,
+  expectInstanceListVisible,
+  getInstanceRowValue,
   selectProtocols,
   discoverButton,
   expectDiscoverDisabled,
