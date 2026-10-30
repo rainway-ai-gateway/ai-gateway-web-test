@@ -56,7 +56,12 @@ function expandCaseList(cell) {
   const cleaned = cell
     .replace(/[（(][^（）()]*[)）]/g, ' ')
     .replace(/（不含[^）]*）/g, ' ');
-  const tokens = cleaned.split(/[、,，\s]+/).filter(Boolean);
+  // 允许区间写法带空格与双侧前缀（如「PR-V-01 ~ PR-V-21」）：归一为「PR-V-01~21」
+  const normalized = cleaned.replace(
+    /([A-Za-z][\w-]*?-\d+)\s*~\s*(?:[A-Za-z][\w-]*?-)?(\d+)/g,
+    '$1~$2',
+  );
+  const tokens = normalized.split(/[、,，\s]+/).filter(Boolean);
   const cases = [];
   let lastPrefix = null;
   for (const token of tokens) {
