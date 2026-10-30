@@ -86,7 +86,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── seed-report-data.js            # 报表造数
 │   ├── capture-*.js                   # 手册/新模块/报表截图
 │   └── cleanup-*.cjs                  # 各模块测试数据清理
-├── docs/                              # 18 个模块的两层测试文档 + `覆盖缺口清单.md`（全项目缺口/短板跟踪）
+├── docs/                              # 18 个模块的两层测试文档 + `覆盖缺口清单.md`（缺口跟踪）+ `模块深度检查清单.md`（覆盖率审计方法）
 ├── global-setup.js                    # Playwright 全局登录
 ├── global-teardown.js                 # Playwright 全局清理
 ├── playwright.config.js               # Playwright 配置
