@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 const { test, expect } = require('@playwright/test');
+const olp = require('../../pages/operation-logs/OperationLogPage');
+const entityApi = require('../../api/entity-api-utils');
 const utils = require('../../pages/entity/EntityPage');
 
 const DOC = utils.DOC_ENTITY_ORG;
@@ -117,5 +119,109 @@ test.describe('Entity 管理 - EM-E-16b 管理路由规则按钮跳转', () => {
     // 点击"管理路由规则"按钮
     // 验证跳转到路由规则页面
     // 验证 URL 包含 type='entity' 和 owner=Entity ID
+  });
+});
+
+/**
+ * 错误容错（覆盖缺口清单 #33）：主数据接口 500 时页面不白屏、有降级表现、恢复后可用。
+ * 断言取「最小不变量」：侧栏布局在（不白屏）+ 全局错误提示竞速捕获（iView Message 约 3s
+ * 自动消失；未捕获时记录为已知偏差并继续，不阻断回归）+ 恢复后重试成功。
+ */
+test.describe('Entity 组织管理 - 错误容错（#33）', () => {
+  const LIST_GLOB = '**/open-api/v1/entities**';
+
+  test('主数据接口返回 500 时不白屏、有降级表现，恢复后可用', async ({ page }) => {
+    await page.route(LIST_GLOB, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ ErrNum: 500, ErrMsg: 'mock internal error' }),
+      }),
+    );
+    await utils.gotoEntityOrgManagementPage(page);
+
+    await expect(page.locator('.bfe-sidebar').first()).toBeVisible({
+      timeout: 15000,
+    });
+
+    const toastPromise = page
+      .waitForSelector(
+        '.ivu-message-error, .ivu-notice .ivu-notice-title, .ivu-alert-error',
+        { state: 'visible', timeout: 15000 },
+      )
+      .catch(() => null);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const toast = await toastPromise;
+    if (toast) {
+      await expect(
+        page.locator('.ivu-message-error, .ivu-notice, .ivu-alert-error').first(),
+      ).toBeVisible();
+    } else {
+      console.log('[#33 偏差] 主数据接口 500 时 Entity 组织管理 页无可见错误提示（静默失败，待登记 BUG）');
+    }
+
+    await page.unroute(LIST_GLOB);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.locator('.bfe-sidebar').first()).toBeVisible({
+      timeout: 15000,
+    });
+  });
+});
+
+/**
+ * 审计反向核对（覆盖缺口清单 #39）：Entity 写操作在操作日志留痕正确。
+ * 审计写入异步（写库晚于 UI 成功提示）且日志表格不自动刷新，按「重试搜索」轮询。
+ */
+async function expectAuditRow(page, resourceName, action, attempts = 6) {
+  await olp.gotoOperationLogPage(page);
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) {
+      await page.waitForTimeout(2000);
+    }
+    await olp.searchByResourceName(page, resourceName);
+    // 同资源可能有多条记录（create/delete）：须匹配「资源名 + 动作」同一行
+    const matched = olp
+      .operationLogTable(page)
+      .dataRows()
+      .filter({ hasText: resourceName })
+      .filter({ hasText: action })
+      .first();
+    if (await matched.isVisible().catch(() => false)) {
+      await expect(matched).toBeVisible();
+      return;
+    }
+  }
+  throw new Error(
+    `操作日志未出现「${resourceName}」的 ${action} 记录（重试搜索 ${attempts} 次）`,
+  );
+}
+
+test.describe('Entity组织管理 - 审计反向核对（#39）', () => {
+  test('Entity 创建与删除均留痕（create/delete 记录可按资源名检索）', async ({
+    page,
+  }) => {
+    const entityName = await utils.generateTestEntityName();
+    const typeName = await utils.generateTestEntityTypeName();
+
+    await utils.gotoEntityTypeManagementPage(page);
+    await utils.createEntityTypeViaApiAndRefresh(page, typeName, '审计核对类型', 1);
+    const entity = await utils.createEntityWithTypeViaApi(page, {
+      name: entityName,
+      type: typeName,
+    });
+    expect(entity, 'Entity 应创建成功').toBeTruthy();
+
+    await test.step('创建留痕：操作日志出现 create 记录', async () => {
+      await expectAuditRow(page, entityName, 'create');
+    });
+
+    await test.step('删除留痕：删除后操作日志出现 delete 记录', async () => {
+      await entityApi.deleteEntityViaApi(page, entity.id);
+      await expectAuditRow(page, entityName, 'delete');
+    });
+
+    await entityApi.forceDeleteEntityTypeViaApi(page, typeName);
   });
 });

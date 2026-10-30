@@ -15,7 +15,6 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── ai-cache-api-utils.js
 │   ├── ai-context-api-utils.js
 │   ├── batch-api-utils.js
-│   ├── cert-api-utils.js
 │   ├── entity-api-utils.js
 │   ├── epp-pool-api-utils.js
 │   ├── intent-config-api-utils.js
@@ -39,7 +38,6 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── route/                         # RoutePage.js + ExpressionPanelPage.js
 │   ├── providers/                     # 模型服务商（ProviderPage.js）
 │   ├── model-prices/                  # 模型定价（ModelPricePage.js）
-│   ├── cert/                          # 证书管理（CertPage.js，模块已下线）
 │   ├── operation-logs/                # 操作日志（OperationLogPage.js）
 │   ├── report/                        # 数据报表（ReportPage.js）
 │   ├── batch-tasks/                   # 批量任务（BatchTaskPage.js）
@@ -62,10 +60,10 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── entity-type/                   # 4 个 spec
 │   ├── entity-management/             # 11 个 spec
 │   ├── api-key/                       # 6 个 spec
-│   ├── cluster/                       # 9 个 spec
+│   ├── cluster/                       # 16 个 spec（含 BC-J/BC-E/BC-C 场景用例）
 │   ├── providers/                     # 8 个 spec
 │   ├── model-prices/                  # 9 个 spec
-│   ├── route/                         # 13 个 spec
+│   ├── route/                         # 14 个 spec
 │   ├── epp-pool/                      # 3 个 spec
 │   ├── ai-cache/                      # 7 个 spec
 │   ├── traffic-mirror/                # 7 个 spec
@@ -75,21 +73,20 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── batch-tasks/                   # 4 个 spec
 │   ├── reencrypt-sweep/               # 5 个 spec
 │   ├── operation-logs/                # 3 个 spec
-│   └── cert/                          # 8 个 spec（已从常规回归排除）
 ├── test-files/                        # 测试数据文件
-│   ├── cert/                          # 证书上传测试文件
 │   └── model-prices/                  # YAML 导入测试文件（valid/invalid/duplicate 等）
 ├── report/                            # 每轮测试报告（gitignored）
 ├── scripts/
 │   ├── aggregate-report.js            # 生成按日期归档的全量回归报告 + 索引
 │   ├── accepted-skips.json            # 跳过签核清单
 │   ├── impact-scan.js                 # 既有用例影响扫描
+│   ├── check-coverage-mapping.js      # 映射表声明 ↔ spec 实际覆盖核对（`npm run check:mapping`）
 │   ├── init-test-data.js              # 测试数据初始化
 │   ├── seed-batch-task-data.cjs       # 批量任务造数/清理
 │   ├── seed-report-data.js            # 报表造数
 │   ├── capture-*.js                   # 手册/新模块/报表截图
 │   └── cleanup-*.cjs                  # 各模块测试数据清理
-├── docs/                              # 18 个模块的两层测试文档
+├── docs/                              # 18 个模块的两层测试文档 + `覆盖缺口清单.md`（全项目缺口/短板跟踪）
 ├── global-setup.js                    # Playwright 全局登录
 ├── global-teardown.js                 # Playwright 全局清理
 ├── playwright.config.js               # Playwright 配置
@@ -123,10 +120,10 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 | Entity 类型 | `docs/entity-type/` | `tests/entity-type/` | 4 | 类型列表、编辑、删除、只读视角 |
 | Entity 组织 | `docs/entity-management/` | `tests/entity-management/` | 11 | 组织 CRUD、配额/限流校验、跨模块串联、描述字段、只读视角 |
 | API-Key | `docs/api-key/` | `tests/api-key/` | 6 | Key CRUD、配额与限流校验、详情一致性、名称校验、只读视角 |
-| AI 业务集群 | `docs/business-cluster/` | `tests/cluster/` | 9 | 5 步向导、大模型配置、Key 亲和、EPP 均衡模式、字段校验、只读视角 |
+| AI 业务集群 | `docs/business-cluster/` | `tests/cluster/` | 16 | 5 步向导、大模型配置、Key 亲和、EPP 均衡模式、字段校验、只读视角；跨模块闭环（02g）、交互边界与引用保护（02h）、并发与竞态（02i） |
 | 模型服务商 | `docs/providers/` | `tests/providers/` | 8 | 实例来源、模型发现、Keys、分段计价、引用保护、只读视角 |
 | 模型定价 | `docs/model-prices/` | `tests/model-prices/` | 9 | 定价 CRUD、YAML 导入、分时段价格、精度与键级合并、只读视角 |
-| 路由管理 | `docs/route-management/` | `tests/route/` | 13 | 路由表、路由规则、表达式条件、条件原语面板、只读视角 |
+| 路由管理 | `docs/route-management/` | `tests/route/` | 14 | 路由表、路由规则、表达式条件、条件原语面板、只读视角 |
 | EPP 实例池与调度 | `docs/epp-pool/` | `tests/epp-pool/` | 3 | 实例池管理、调度分配、只读视角 |
 | AI 缓存规则 | `docs/ai-cache/` | `tests/ai-cache/` | 7 | 集合级规则双模式、语义缓存、语义设置、字段校验、拖拽排序、只读视角 |
 | 流量镜像规则 | `docs/traffic-mirror/` | `tests/traffic-mirror/` | 7 | 集合级规则双模式、KV/请求体/请求头注入、字段校验、拖拽排序、只读视角 |
@@ -136,12 +133,11 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 | 批量任务 | `docs/batch-tasks/` | `tests/batch-tasks/` | 4 | 列表、详情、取消、只读视角 |
 | 密钥收敛 | `docs/reencrypt-sweep/` | `tests/reencrypt-sweep/` | 5 | 触发与轮询、列表筛选、详情与错误、只读视角 |
 | 操作日志 | `docs/operation-logs/` | `tests/operation-logs/` | 3 | 列表筛选、详情、跨模块联动 |
-| 证书管理 | `docs/cert-management/` | `tests/cert/` | 8 | **模块已下线**：用例保留但被 `testIgnore` 排除，不计入常规回归 |
 
 > **已下线模块**：
 >
 > - **AI 网关实例池**（原 `docs/gateway-pool/` + `tests/gateway-pool/`）随 2026-09-20 `/alb-pool` 单例页面下线而清理，实例池相关断言改由 `tests/providers/` 覆盖。
-> - **证书管理**随 2026-09-11 菜单移除，UI 入口不复存在；`tests/cert/` 的 8 个 spec 由 `playwright.config.js` 的 `testIgnore` 排除，用例按生命周期约定保留为「跳过」，待模块恢复后移除该配置并同步回写文档。
+> - **证书管理**（原 `docs/cert-management/` + `tests/cert/` + `pages/cert/` + `api/cert-api-utils.js`）随 2026-09-11 菜单移除，UI 入口不复存在；相关用例、页面封装、API 工具与测试文档已于 2026-10-30 一并删除，模块恢复时需按测试文档规范重建。
 
 ## 测试执行
 
@@ -216,6 +212,9 @@ npm run report
 
 # 既有用例影响扫描（判断改动波及哪些用例）
 npm run impact-scan -- "关键词" --module=business-cluster
+
+# 映射表声明 ↔ spec 实际覆盖核对（CI/提交前建议执行；例外见 scripts/coverage-mapping-exceptions.json）
+npm run check:mapping
 
 # 清理测试数据（预览模式，不实际删除）
 npm run cleanup:testdata       # Entity 测试数据
@@ -321,7 +320,7 @@ await page.locator('.ivu-drawer-wrap').click()
 
 ## 测试环境要求
 
-- Node.js: 18+
+- Node.js: 18+（⚠️ 本机系统默认 `node` 可能为 v12，直接 `npx playwright` 会报 Node 版本错误；请用 nvm/Homebrew 的 Node ≥18，如 `/opt/homebrew/bin/node node_modules/.bin/playwright test ...`）
 - 浏览器: Playwright 内置 Chromium（headless，视口 1280×720）
 - 网络: 可访问 `conf.json` 中的 `ctlHost` / `apiHost`
 - 前置条件: 系统已部署并正常运行；单用户单会话，跑测期间避免其他人用同一账号登录

@@ -84,6 +84,14 @@ const DOC_BUSINESS_CLUSTER = {
   keysWeightSumMsg: '所有 Key 的权重之和必须等于 100',
   keyNotInProviderMsg: (name) => `Key ${name} 不在所属服务商的 Keys 中`,
   keyPolicyStrategyInvalidMsg: '选择策略仅支持 weighted_random',
+  // 2026-10-30 复查页逐项一致性（覆盖缺口清单 #1）：Key 路由策略/服务鉴权 Keys 复查区块文案
+  keyPolicyStrategyLabel: '选择策略',
+  keyPolicyMaxRetriesLabel: '最大重试次数',
+  keyPolicyBackoffInitialLabel: '初始退避时间 (ms)',
+  keyPolicyBackoffMaxLabel: '最大退避时间 (ms)',
+  keyPolicyStrategyWeightedRandom: '加权随机',
+  providerKeyHeader: 'Key',
+  keyWeightHeader: '权重',
   keyPolicyMaxRetriesInvalidMsg: '最大重试次数必须大于或等于 0',
   keyPolicyBackoffInvalidMsg: '退避时间必须大于或等于 0',
   keyPolicyBackoffMaxInvalidMsg: '最大退避时间必须大于或等于初始退避时间',
@@ -110,6 +118,24 @@ const DOC_BUSINESS_CLUSTER = {
   // 2026-10-10 上游错误归一（新增 Card，渲染在「Key 亲和性」与「均衡模式配置」之间，
   // WRR/EPP 两种均衡模式下均展示；文案对齐 i18n gatewayConfig.normalizeUpstreamError）
   normalizeUpstreamErrorCard: '上游错误归一',
+  // 2026-10-30 RM-BC-110~114 自动化（test_12）补充标签与文案
+  normalizeEnabledLabel: '是否启用',
+  normalizeStreamEnabledLabel: '流式归一(SSE)',
+  normalizeRedactSecretsLabel: '凭证脱敏',
+  normalizeUnrecognizedActionLabel: '未识别错误体处理',
+  normalizePassthroughLabel: '原样透传',
+  normalizeRewriteGenericLabel: '重写为通用错误（rewrite_generic）',
+  normalizeMaxBodyBytesLabel: '错误响应体读取上限(字节)',
+  normalizeMaxBodyBytesInvalidMsg: '错误响应体读取上限须为 0-4194304 的整数',
+  normalizeUnrecognizedActionInvalidMsg:
+    '未识别错误体处理仅支持 passthrough / rewrite_generic',
+  normalizeDefaults: {
+    enabled: false,
+    stream_enabled: false,
+    unrecognized_action: 'passthrough',
+    max_body_bytes: 65536,
+    redact_secrets: true,
+  },
   // 2026-09-09 均衡模式配置（RM-BC-93~103）
   // 2026-10-09 EPP 调度参数破坏性重构对齐 v0.6：
   // scheduling_profile/cache_affinity 重命名为 load_profile/affinity（枚举变更），
@@ -125,6 +151,8 @@ const DOC_BUSINESS_CLUSTER = {
   prefixCacheAffinityLabel: '前缀缓存亲和性',
   sessionAffinityEnabledLabel: '会话亲和性',
   sessionAffinityHeaderLabel: '会话亲和性 Header',
+  sessionAffinityHeaderRequiredWhenOff:
+    '亲和强度为 off 时会话亲和性不生效；请先将亲和强度切回 low/medium/high 填写 Header，或关闭会话亲和性',
   kvCacheUtilizationMaxLabel: 'KV 缓存利用率上限',
   waitingQueueMaxLabel: '排队长度过滤阈值',
   runningRequestsMaxLabel: '在飞请求数过滤阈值',

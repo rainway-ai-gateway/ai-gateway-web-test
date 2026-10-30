@@ -789,3 +789,79 @@ test.describe('数据报表 - 总览指标卡补充用例（RP-O-02 ~ RP-O-13）
     });
   });
 });
+/**
+ * 数据报表 - RP-O-18 总览加载中骨架屏
+ *
+ * 2026-10-30 补齐（覆盖缺口清单 #30：映射声称覆盖 RP-O-18，实际缺失）。
+ * 依据 Overview.vue：`v-if="loading && !overviewData"` 渲染 8 个指标卡骨架
+ * （.metric-card.skeleton + .skeleton-label/.skeleton-value）+ 3 个 chart-full
+ * + 2 个普通图表骨架（共 5 个 .skeleton-chart），子元素带 shimmer 1.5s 动画。
+ */
+test.describe('数据报表 - RP-O-18 总览加载中骨架屏', () => {
+  test('首次加载展示 8 指标卡 + 5 图表骨架，数据返回后消失', async ({ page }) => {
+    // 1. 慢速响应（3s）让骨架屏可观察
+    await page.context().route('**/report/overview**', async (route) => {
+      await new Promise((r) => setTimeout(r, 3000));
+      await route.continue();
+    });
+    await rp.gotoReportPage(page);
+
+    // 2. 骨架屏结构：8 个指标卡 + 3 个 chart-full + 2 个普通图（共 5 个图表骨架）
+    const metricSkeletons = page.locator('.metric-card.skeleton');
+    await expect(metricSkeletons.first()).toBeVisible({ timeout: 15000 });
+    await expect(metricSkeletons).toHaveCount(8);
+    await expect(page.locator('.metric-card.skeleton .skeleton-label')).toHaveCount(8);
+    await expect(page.locator('.metric-card.skeleton .skeleton-value')).toHaveCount(8);
+    await expect(page.locator('.chart-card.chart-full')).toHaveCount(3);
+    await expect(page.locator('.chart-card .skeleton-chart')).toHaveCount(5);
+
+    // 3. shimmer 流动动画（1.5s 循环）
+    const animation = await page
+      .locator('.skeleton-label')
+      .first()
+      .evaluate((el) => getComputedStyle(el).animationName);
+    expect(animation, '骨架元素应带 shimmer 动画').toContain('shimmer');
+
+    // 4. 数据返回：骨架屏消失，真实指标卡渲染
+    await expect(metricSkeletons).toHaveCount(0, { timeout: 30000 });
+    await expect(page.locator('.chart-card .skeleton-chart')).toHaveCount(0);
+    await expect(page.locator('.metric-card:not(.skeleton)').first()).toBeVisible();
+
+    // 5. 已加载状态下再次查询（overviewData 非空）：不再出现骨架屏
+    await rp.waitForReportOverviewResponse(page, () => rp.clickQueryButton(page));
+    await expect(page.locator('.metric-card.skeleton')).toHaveCount(0);
+  });
+});
+
+/**
+ * 数据报表 - 时间边界（覆盖缺口清单 #38）
+ *
+ * 跨年 + 月末边界区间查询：2025-12-31 23:59 ~ 2026-01-01 00:01 跨两年与月界，
+ * 断言接口 200、指标卡区与时序图正常渲染（不因 bucket 归属异常白屏/报错）。
+ */
+test.describe('数据报表 - 时间边界（#38）', () => {
+  test('跨年月末边界区间查询：接口 200 且图表正常渲染', async ({ page }) => {
+    await rp.gotoReportPage(page);
+
+    await test.step('设置跨年月界区间（2025-12-31 23:59 ~ 2026-01-01 00:01）', async () => {
+      await rp.setFilterDateTime(page, rp.DOC.startTimeLabel, '2025-12-31 23:59');
+      await rp.setFilterDateTime(page, rp.DOC.endTimeLabel, '2026-01-01 00:01');
+    });
+
+    await test.step('查询：接口 200，无页面报错', async () => {
+      const response = await rp.waitForReportOverviewResponse(page, () =>
+        rp.clickQueryButton(page),
+      );
+      expect(response.status(), '跨年边界区间查询应 200').toBe(200);
+    });
+
+    await test.step('指标卡区与时序图渲染（无白屏）', async () => {
+      await expect(page.locator('.metric-cards').first()).toBeVisible({
+        timeout: 15000,
+      });
+      await expect(page.locator('.chart-grid, .chart-card').first()).toBeVisible({
+        timeout: 15000,
+      });
+    });
+  });
+});

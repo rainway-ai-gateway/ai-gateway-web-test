@@ -445,3 +445,89 @@ test.describe('API-Key管理 - EM-K-67 仅配置批量限流可保存', () => {
     });
   });
 });
+
+// ==================== EM-K-66 批量限流接口数据与页面展示一致性 ====================
+
+/**
+ * 2026-10-30 补齐（覆盖缺口清单 #30：映射声称覆盖 EM-K-66，spec 无对应用例）。
+ * 基准：GET /api-keys/{id} 的 rate_limit_policy.rules.batch_limits 四维度；
+ * UI 侧断言编辑抽屉回显一致（创建时通过 API 造数，绕开 UI 表单噪声）。
+ */
+test.describe('API-Key管理 - EM-K-66 批量限流接口数据与页面展示一致性', () => {
+  const BATCH_LIMITS = {
+    max_create_rpm: 3,
+    max_active_batches: 2,
+    max_file_bytes: 2097152,
+    max_file_lines: 20,
+  };
+
+  test('接口返回的 batch_limits 与编辑抽屉回显逐项一致', async ({ page }) => {
+    const description = DOC.createSuccess.description + '_b66_' + Date.now();
+    const entityName = await utils.generateTestEntityName();
+    const typeName = await utils.generateTestEntityTypeName();
+
+    await test.step('前置：API 造数 Entity + 带 batch_limits 的 API-Key', async () => {
+      await utils.gotoEntityTypeManagementPage(page);
+      await utils.createEntityTypeViaApiAndRefresh(
+        page,
+        typeName,
+        '批量限流一致性类型',
+        1,
+      );
+      await utils.createEntityWithTypeViaApi(page, {
+        name: entityName,
+        type: typeName,
+      });
+      await utils.gotoApiKeyManagementPage(page);
+      const apiKey = await utils.createApiKeyViaApiAndAssert(page, {
+        description,
+        enabled: true,
+        entity_name: entityName,
+        rate_limit_policy: {
+          enabled: true,
+          rules: {
+            tpm: [],
+            rpm: [],
+            max_concurrency: -1,
+            batch_limits: BATCH_LIMITS,
+          },
+        },
+      });
+      expect(apiKey.id, 'API-Key 应创建成功').toBeTruthy();
+    });
+
+    await test.step('接口基准：GET 返回的 batch_limits 四维度', async () => {
+      const apiData = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      expect(apiData, '应能按描述查到 API-Key').not.toBeNull();
+      expect(apiData.rate_limit_policy.rules.batch_limits).toEqual(BATCH_LIMITS);
+    });
+
+    await test.step('UI：编辑抽屉批量限流四维度回显与接口一致', async () => {
+      await utils.reloadApiKeyManagementPage(page);
+      await utils.ensureApiKeyRowVisible(page, description);
+      await utils.openEditApiKeyDrawer(page, description);
+      for (const [key, value] of Object.entries(BATCH_LIMITS)) {
+        // 数字输入框带千分位（如 2,097,152），按数值比较
+        const raw = await utils.readApiKeyBatchLimitField(page, key);
+        expect(
+          Number(raw.replace(/,/g, '')),
+          `批量限流维度 ${key} 回显应与接口一致`,
+        ).toBe(Number(value));
+      }
+      await utils.cancelApiKeyForm(page, '编辑 API-Key');
+    });
+
+    await test.step('清理：删除 Entity（API-Key 随 Entity 级联删除）', async () => {
+      const apiData = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (apiData?.id) {
+        await utils.deleteApiKeyViaApi(page, apiData.id);
+      }
+    });
+  });
+});

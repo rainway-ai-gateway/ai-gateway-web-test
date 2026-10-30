@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 const { test, expect } = require('@playwright/test');
+const entityApi = require('../../api/entity-api-utils');
 const utils = require('../../pages/entity/EntityPage');
 
 const DOC = utils.DOC_ENTITY_ORG;
@@ -882,3 +883,83 @@ entityOrgDescribe(
     });
   },
 );
+
+// ==================== EM-CC-01/02 幂等与并发（覆盖缺口清单 #34/#35） ====================
+
+entityOrgDescribe('Entity组织管理 - EM-CC-01 创建Entity-重复点击提交幂等', (cleanup) => {
+  test('连点两次提交：同名 Entity 仅创建一条（#34）', async ({ page }) => {
+    const entityName = await utils.generateTestEntityName();
+    const typeName = await utils.generateTestEntityTypeName();
+    cleanup.trackEntityName(entityName);
+    cleanup.trackTypeName(typeName);
+
+    await utils.gotoEntityTypeManagementPage(page);
+    await utils.createEntityTypeViaUI(page, typeName, '幂等类型', 1);
+    await utils.gotoEntityOrgManagementPage(page);
+    await utils.openCreateEntityDrawer(page);
+    await utils.fillEntityFormBasic(page, { name: entityName, typeName });
+
+    const posts = [];
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().includes('/open-api/v1/entities')) {
+        posts.push(req.url());
+      }
+    });
+    await utils.submitEntityForm(page);
+    await utils.submitEntityForm(page).catch(() => {});
+    await page.waitForTimeout(2000);
+
+    const found = await utils.findEntityByNameViaApi(page, entityName);
+    expect(found, '同名 Entity 应创建成功').toBeTruthy();
+    expect(posts.length, 'POST /entities 次数应 ≤2（第二次被 UI 拦截或后端拒绝）').toBeLessThanOrEqual(2);
+    await utils.ensureEntityRowVisible(page, entityName);
+  });
+});
+
+entityOrgDescribe('Entity组织管理 - EM-CC-02 编辑期间他人修改', (cleanup) => {
+  test('UI 提交覆盖他人修改（last-write-wins，与 cluster BC-C-01 同语义的已知偏差）（#35）', async ({
+    page,
+  }) => {
+    const entityName = await utils.generateTestEntityName();
+    const typeName = await utils.generateTestEntityTypeName();
+    cleanup.trackEntityName(entityName);
+    cleanup.trackTypeName(typeName);
+
+    let entityId;
+
+    await test.step('前置：API 造数类型 + Entity（带描述）', async () => {
+      await utils.gotoEntityTypeManagementPage(page);
+      await utils.createEntityTypeViaApiAndRefresh(page, typeName, '并发类型', 1);
+      const entity = await utils.createEntityWithTypeViaApi(page, {
+        name: entityName,
+        type: typeName,
+        description: '初始描述',
+      });
+      expect(entity, 'Entity 应创建成功').toBeTruthy();
+      entityId = entity.id;
+    });
+
+    await test.step('打开编辑向导后，API 侧修改描述（模拟他人）', async () => {
+      await utils.gotoEntityOrgManagementPage(page);
+      await utils.openEditEntityDrawer(page, entityName);
+      const others = await entityApi.updateEntityViaApi(page, entityId, {
+        name: entityName,
+        type: typeName,
+        description: 'changed-by-others',
+      });
+      expect(others, '他人修改应成功').toBeTruthy();
+    });
+
+    await test.step('UI 填新描述并提交（不重新加载）', async () => {
+      await utils.fillEntityDescription(page, 'ui-value', '编辑Entity');
+      await utils.submitEntityFormAndWaitForEditSuccess(page);
+    });
+
+    await test.step('产品现状：无乐观锁 → 后写覆盖（已知偏差）', async () => {
+      const apiData = await utils.findEntityByNameViaApi(page, entityName);
+      expect(apiData.description, '后写覆盖（已知偏差，登记覆盖缺口清单 #35）').toBe(
+        'ui-value',
+      );
+    });
+  });
+});

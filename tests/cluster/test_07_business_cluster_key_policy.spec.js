@@ -265,6 +265,20 @@ test.describe('AI业务集群 - RM-BC-52~56、79 Key 路由策略与 key_policy'
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
 
+    // 复查页 Key 路由策略摘要与第 4 步输入逐项一致（覆盖缺口清单 #1 补齐）
+    const DOC = utils.DOC_BUSINESS_CLUSTER;
+    const reviewPolicy = await utils.getReviewBlockValues(
+      page,
+      utils.DRAWER_TITLE.createBusinessCluster,
+      DOC.keyPolicyCard,
+    );
+    expect(reviewPolicy[DOC.keyPolicyStrategyLabel]).toBe(
+      DOC.keyPolicyStrategyWeightedRandom,
+    );
+    expect(reviewPolicy[DOC.keyPolicyMaxRetriesLabel]).toBe('2');
+    expect(reviewPolicy[DOC.keyPolicyBackoffInitialLabel]).toBe('1000');
+    expect(reviewPolicy[DOC.keyPolicyBackoffMaxLabel]).toBe('3000');
+
     // 3. 提交体 key_policy 结构完整且为修改后的值
     const request = await utils.waitForClusterCreateRequest(page, () =>
       utils.clickWizardSubmit(page),

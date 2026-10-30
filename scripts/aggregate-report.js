@@ -47,8 +47,6 @@ const INDEX_FILE = path.join(ARCHIVE_DIR, 'README.md');
 /** 迁移前的单文件报告位置：仅作为历史行兼容读取，不再写入 */
 const LEGACY_OUT = path.join(ROOT, 'TEST-REPORT.md');
 const WORKSPACE_ROOT = path.join(ROOT, '..');
-/** 被 playwright.config.js 的 testIgnore 排除的模块（回归外，单列说明） */
-const IGNORED_MODULE_DIR = 'cert';
 
 const { inferModule } = require('../utils/generate_report');
 
@@ -91,18 +89,6 @@ function listSpecFiles(dir = path.join(ROOT, 'tests'), acc = []) {
     }
   }
   return acc.sort();
-}
-
-/** 统计某目录下的 spec 文件数与非注释行里的 test( 数（用于「回归外」模块的静态口径） */
-function countSpecsAndCases(moduleDir) {
-  const dir = path.join(ROOT, 'tests', moduleDir);
-  const files = listSpecFiles(dir);
-  let cases = 0;
-  for (const rel of files) {
-    const source = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
-    cases += (source.match(/^\s*test\s*\(/gm) || []).length;
-  }
-  return { specs: files.length, cases };
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +354,7 @@ function renderIndex() {
     md += `| [${r.file}](./${encodeURI(r.file)}) | ${r.run} | ${cell(r.total)} | ${cell(r.passed)} | ${cell(r.failed)} | ${cell(r.skipped)} | ${r.verdict} |\n`;
   }
   md +=
-    '\n> 每份报告内部还保留「历史全量回归」表，用于跨归档对比；判定口径与跳过签核规则见报告第 8 节。\n';
+    '\n> 每份报告内部还保留「历史全量回归」表，用于跨归档对比；判定口径与跳过签核规则见报告第 7 节。\n';
 
   fs.writeFileSync(INDEX_FILE, md, 'utf-8');
   return INDEX_FILE;
@@ -451,7 +437,6 @@ function render(records, meta) {
     }),
   );
   const unaccepted = allSkips.filter((s) => !s.acceptedBy);
-  const cert = countSpecsAndCases(IGNORED_MODULE_DIR);
   const perModule = new Map();
   for (const r of records) {
     if (!perModule.has(r.module)) {
@@ -580,12 +565,7 @@ function render(records, meta) {
     md += '\n';
   }
 
-  md += `## 6. 回归外模块（\`testIgnore\` 排除）\n\n`;
-  md += `\`tests/${IGNORED_MODULE_DIR}/\` 共 **${cert.specs} 个 spec / ${cert.cases} 条用例**，被 \`playwright.config.js\` 的 \`testIgnore\` 排除，**不计入上表分母**。\n`;
-  md += '原因：证书管理模块已于 2026-09-11 随菜单移除，UI 入口不复存在（详见 `docs/cert-management/02-功能测试用例/00-索引与映射.md`）。\n';
-  md += '恢复条件：删除 `testIgnore` 中的该条并同步回写该模块文档的用例状态。\n\n';
-
-  md += '## 7. 历史全量回归\n\n';
+  md += '## 6. 历史全量回归\n\n';
   md += '| 日期 | 用例数 | 通过 | 失败 | 跳过 | 通过率 | 耗时 | 证据 |\n|---|---|---|---|---|---|---|---|\n';
   // 去重：历史行按整行内容去重——同一份 test-results.json 被重复生成（或反复执行本脚本）
   // 时不应再追加一行，否则历史表会出现多份完全相同的记录
@@ -614,7 +594,7 @@ function render(records, meta) {
   for (const row of history) md += `| ${row.join(' | ')} |\n`;
   md += '\n> 历史行来自 `regression-reports/` 下既有的归档报告，只增不改；更早的全量回归（如 2026-10-15 的 1002 条 / 807 通过 / 158 失败 / 37 跳过，80.54%）其报告产物随 `report/` 被清理而不可寻址，仅在 `docs/<模块>/…/00-索引与映射.md` 的「取数依据」里留有数字。\n\n';
 
-  md += '## 8. 维护约定\n\n';
+  md += '## 7. 维护约定\n\n';
   md += '1. **跑全量**：\n\n```bash\nPW_WORKERS=1 npx playwright test tests/ --global-timeout=0\n```\n\n';
   md += '2. **生成本次归档报告**：\n\n```bash\nnpm run report:tracked\n```\n\n';
   md += '   脚本只在「本轮覆盖了全部常规 spec」时写入 `regression-reports/TEST-REPORT-<运行日期>.md`（定向批次不会覆盖全站结论）；同一天第二次全量回归会自动追加 `-HHmmss`，不覆盖已有归档；需要另存时用 `--out <path>`。写入后会自动刷新 `regression-reports/README.md` 索引。\n';
@@ -642,9 +622,7 @@ function main() {
   const report = readJson(opts.json);
   const records = collect(report);
   const runFiles = new Set(records.map((r) => r.file));
-  const diskSpecs = listSpecFiles().filter(
-    (f) => !f.startsWith(`tests/${IGNORED_MODULE_DIR}/`),
-  );
+  const diskSpecs = listSpecFiles();
   const missing = diskSpecs.filter((f) => !runFiles.has(f));
   const extra = [...runFiles].filter((f) => !diskSpecs.includes(f));
   const isFull = missing.length === 0 && extra.length === 0;

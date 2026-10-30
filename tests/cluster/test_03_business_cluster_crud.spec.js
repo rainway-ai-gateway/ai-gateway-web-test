@@ -42,6 +42,7 @@
 const { test, expect } = require('@playwright/test');
 const utils = require('../../pages/resource/ResourcePage');
 const routeApi = require('../../api/route-api-utils');
+const routeUtils = require('../../pages/route/RoutePage');
 const api = require('../../api/provider-api-utils');
 
 const MODEL_A1 = 'Qwen/Qwen2.5-3B-Instruct';
@@ -736,5 +737,76 @@ test.describe('AI业务集群管理 - RM-BC-14 删除约束', () => {
     // 回到集群列表，验证集群仍在（未被删除）
     await utils.gotoBusinessClusterManagementPage(page);
     await utils.ensureBusinessClusterRowVisible(page, clusterName);
+  });
+
+  test('BC-J-03 引用约束生命周期闭环：前往处理 → 删规则 → 删集群成功', async ({
+    page,
+  }) => {
+    test.setTimeout(300000);
+    const clusterName = utils.generateTestBusinessClusterName();
+    cleanup.trackBusinessCluster(clusterName);
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
+
+    await utils.createCluster(
+      page,
+      await buildClusterPayload(page, clusterName, providerName),
+    );
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await utils.ensureBusinessClusterRowVisible(page, clusterName);
+
+    // 1. API 造路由规则引用该集群
+    const current = await routeApi.getGlobalRouteRulesViaApi(page);
+    const ruleName = `bc_j03_${Date.now()}`;
+    const linked = await routeApi.setGlobalRouteRulesViaApi(page, {
+      enabled: false,
+      rules: [
+        ...(current?.rules || []),
+        {
+          name: ruleName,
+          cond: 'default_t()',
+          targets: [{ cluster_name: clusterName, model: '', weight: 100 }],
+          fallbacks: [],
+        },
+      ],
+    });
+    expect(linked).toBe(true);
+
+    // 2. 删除被拦截，弹窗展示引用规则名
+    const result = await utils.attemptDeleteBusinessCluster(page, clusterName);
+    expect(result.ok).toBe(false);
+    const deleteErrorModal = page
+      .locator('.ivu-modal-wrap')
+      .filter({ hasText: /删除失败|deleteFailed/ })
+      .first();
+    await expect(deleteErrorModal).toBeVisible({ timeout: 30000 });
+    await expect(deleteErrorModal).toContainText(ruleName);
+
+    // 3. 走「前往处理」用户路径到路由页（导航闭环）
+    await deleteErrorModal
+      .locator('a')
+      .filter({ hasText: '前往处理' })
+      .first()
+      .click();
+    await page.waitForURL(/route-tables|route-rules/, { timeout: 15000 });
+
+    // 4. 路由页删除该规则并提交生效（解除引用）
+    await routeUtils.deleteRuleByNameAndSubmit(page, ruleName);
+
+    // 5. 回集群页：删除成功、列表行消失
+    await utils.gotoBusinessClusterManagementPage(page);
+    await utils.ensureBusinessClusterRowVisible(page, clusterName);
+    const afterUnlink = await utils.attemptDeleteBusinessCluster(
+      page,
+      clusterName,
+    );
+    expect(afterUnlink.ok, '解除引用后集群应删除成功').toBe(true);
+    await utils.businessClusterTable(page).waitForLoaded();
+    await expect(
+      utils.businessClusterTable(page).rowByText(clusterName),
+    ).toHaveCount(0);
   });
 });

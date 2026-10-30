@@ -59,6 +59,26 @@ class PageTableComponent {
   rowAction(rowText, buttonName) {
     return this.rowByText(rowText).getByRole('button', { name: buttonName });
   }
+  /** 读取某行的单元格文本（按列顺序）；OL-L-13 等「接口 ↔ 列表逐字段比对」用 */
+  async rowCellTexts(rowText) {
+    const cells = this.rowByText(rowText).locator('td');
+    const count = await cells.count();
+    const texts = [];
+    for (let i = 0; i < count; i += 1) {
+      texts.push(((await cells.nth(i).textContent()) || '').trim());
+    }
+    return texts;
+  }
+  /** 读取数据区首行单元格文本（按列顺序）；接口 ↔ 列表首行逐字段比对用 */
+  async firstRowCellTexts() {
+    const cells = this.dataRows().first().locator('td');
+    const count = await cells.count();
+    const texts = [];
+    for (let i = 0; i < count; i += 1) {
+      texts.push(((await cells.nth(i).textContent()) || '').trim());
+    }
+    return texts;
+  }
   searchInput(placeholder) {
     return this.searchArea().getByPlaceholder(placeholder);
   }

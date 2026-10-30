@@ -39,7 +39,6 @@ const userUtils = require(path.join(WEB_TEST_ROOT, 'pages/user/UserPage'));
 const entityUtils = require(path.join(WEB_TEST_ROOT, 'pages/entity/EntityPage'));
 const routeUtils = require(path.join(WEB_TEST_ROOT, 'pages/route/RoutePage'));
 const clusterUtils = require(path.join(WEB_TEST_ROOT, 'pages/resource/BusinessClusterPage'));
-const certUtils = require(path.join(WEB_TEST_ROOT, 'pages/cert/CertPage'));
 const oplogUtils = require(path.join(WEB_TEST_ROOT, 'pages/operation-logs/OperationLogPage'));
 const entityApi = require(path.join(WEB_TEST_ROOT, 'api/entity-api-utils'));
 
@@ -364,68 +363,6 @@ test('06 路由管理截图', async ({ page }) => {
       .click({ timeout: 5000 });
     await page.waitForTimeout(500);
   });
-});
-
-test('09 证书管理截图', async ({ page }) => {
-  await userUtils.ensureLoggedIn(page);
-
-  await tryStep('证书列表', async () => {
-    await certUtils.gotoCertPage(page);
-    await page.waitForTimeout(800);
-    await shot(page, '07-cert-list.png');
-  });
-  await tryStep('添加证书抽屉', async () => {
-    await certUtils.openAddCertDrawer(page);
-    await page.waitForTimeout(600);
-    await shot(page, '07-cert-create.png');
-  });
-  await tryStep('证书表单校验', async () => {
-    await drawer(page).getByRole('button', { name: '提交' }).click();
-    await page.waitForTimeout(600);
-    await shot(page, '07-cert-validation.png');
-    await certUtils.closeCertDrawer(page).catch(() => closeOverlays(page));
-  });
-  await closeOverlays(page);
-
-  await closeOverlays(page);
-
-  await tryStep('切换默认证书确认', async () => {
-    await certUtils.gotoCertPage(page);
-    await closeOverlays(page);
-    const certs = await certUtils.getCertList(page);
-    const target = (certs || []).find((c) => !c.is_default);
-    if (!target) {
-      throw new Error('没有可切换的非默认证书');
-    }
-    await page.locator('.show-cert-isdefult .ivu-select-selection').click();
-    await page
-      .locator('.ivu-select-dropdown:visible .ivu-select-item')
-      .filter({ hasText: target.cert_name })
-      .first()
-      .click();
-    await expect(page.locator('.ivu-modal-wrap')).toBeVisible({ timeout: 5000 });
-    await page.waitForTimeout(500);
-    await shot(page, '07-cert-switch-default.png');
-    await page.keyboard.press('Escape');
-  });
-
-  await tryStep('删除确认弹窗', async () => {
-    await certUtils.gotoCertPage(page);
-    await closeOverlays(page);
-    const certs = await certUtils.getCertList(page);
-    const target = (certs || []).find((c) => !c.is_default);
-    if (!target) {
-      throw new Error('没有可删除的非默认证书');
-    }
-    await certUtils.searchCertByName(page, target.cert_name);
-    await page.waitForTimeout(500);
-    await certUtils.certTable(page).rowAction(target.cert_name, '删除').click();
-    await expect(page.locator('.ivu-modal-wrap')).toBeVisible({ timeout: 5000 });
-    await page.waitForTimeout(500);
-    await shot(page, '07-cert-delete.png');
-    await certUtils.cancelDeleteCert(page).catch(() => {});
-  });
-  await closeOverlays(page);
 });
 
 test('10 操作日志截图', async ({ page }) => {

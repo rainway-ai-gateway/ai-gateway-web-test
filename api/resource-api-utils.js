@@ -426,6 +426,23 @@ async function deleteCluster(page, clusterName) {
   }
 }
 
+// PATCH /clusters/{name}（BC-C-01/02 并发场景：模拟「他人」修改集群配置）
+async function updateClusterWithResponse(page, clusterName, payload) {
+  const userData = await getUserData(page);
+  const response = await page.request.patch(
+    getOpenApiBaseUrl() + '/clusters/' + encodeURIComponent(clusterName),
+    { data: payload, headers: authHeaders(userData.sessionKey) },
+  );
+  let body = {};
+  try {
+    body = await response.json();
+  } catch (_error) {
+    body = {};
+  }
+  common.log('PATCH cluster 响应: ' + response.status() + ' ' + JSON.stringify(body).slice(0, 200));
+  return { status: response.status(), body };
+}
+
 async function createCluster(page, clusterData) {
   try {
     const userData = await getUserData(page);
@@ -744,6 +761,7 @@ module.exports = {
   deleteCluster,
   createCluster,
   createClusterWithResponse,
+  updateClusterWithResponse,
   createClusterWithProvider,
   updateGlobalRouteRules,
   getGlobalRouteRules,

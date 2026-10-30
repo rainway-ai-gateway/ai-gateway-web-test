@@ -27,7 +27,8 @@
     "seed:batch:execute": "node scripts/seed-batch-task-data.cjs --execute",
     "cleanup:batch": "node scripts/seed-batch-task-data.cjs --clean",
     "cleanup:batch:execute": "node scripts/seed-batch-task-data.cjs --clean --execute",
-    "impact-scan": "node scripts/impact-scan.js"
+    "impact-scan": "node scripts/impact-scan.js",
+    "check:mapping": "node scripts/check-coverage-mapping.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

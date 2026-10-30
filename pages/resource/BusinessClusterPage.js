@@ -1425,6 +1425,276 @@ async function setKeyAffinityFieldViaModel(
   await waitAfterResourceMutation(page, 200);
 }
 
+// ---------------------------------------------------------------------------
+// 上游错误归一（normalize_upstream_error，RM-BC-110~114）
+// Card 渲染在「Key 亲和性」与「均衡模式配置」之间；3 个 iView Switch +
+// enabled 条件渲染的 iView Select（未识别错误体处理）与 InputNumber（读取上限）。
+// 提交体恒含 normalize_upstream_error（GatewayConfig.buildData 按默认补齐）。
+// ---------------------------------------------------------------------------
+
+function normalizeUpstreamErrorCard(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.llm-section-card')
+    .filter({ hasText: DOC_BUSINESS_CLUSTER.normalizeUpstreamErrorCard });
+}
+
+// 设置上游错误归一各字段；未传入的字段保持原状
+async function fillNormalizeUpstreamError(
+  page,
+  { enabled, streamEnabled, redactSecrets, unrecognizedAction, maxBodyBytes },
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = normalizeUpstreamErrorCard(page, drawerTitle);
+  if (enabled !== undefined) {
+    await setEppSwitchByLabel(card, DOC_BUSINESS_CLUSTER.normalizeEnabledLabel, enabled);
+    await waitAfterResourceMutation(page, 300);
+  }
+  if (streamEnabled !== undefined) {
+    await setEppSwitchByLabel(
+      card,
+      DOC_BUSINESS_CLUSTER.normalizeStreamEnabledLabel,
+      streamEnabled,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (redactSecrets !== undefined) {
+    await setEppSwitchByLabel(
+      card,
+      DOC_BUSINESS_CLUSTER.normalizeRedactSecretsLabel,
+      redactSecrets,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (unrecognizedAction !== undefined) {
+    // 选项文案：passthrough → 「原样透传」；rewrite_generic → 「重写为通用错误（rewrite_generic）」
+    const optionText =
+      unrecognizedAction === 'passthrough'
+        ? DOC_BUSINESS_CLUSTER.normalizePassthroughLabel
+        : DOC_BUSINESS_CLUSTER.normalizeRewriteGenericLabel;
+    await setEppSelectByLabel(
+      page,
+      card,
+      DOC_BUSINESS_CLUSTER.normalizeUnrecognizedActionLabel,
+      optionText,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (maxBodyBytes !== undefined) {
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.normalizeMaxBodyBytesLabel,
+      maxBodyBytes,
+    );
+    await waitAfterResourceMutation(page, 200);
+  }
+}
+
+// 读取上游错误归一当前值；enabled=false 时条件字段未渲染，对应键为 null
+async function getNormalizeUpstreamErrorValues(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = normalizeUpstreamErrorCard(page, drawerTitle);
+  const item = (label) => eppFormItemExact(card, label);
+  return {
+    enabled: await eppSwitchState(await item(DOC_BUSINESS_CLUSTER.normalizeEnabledLabel)),
+    streamEnabled: await eppSwitchState(
+      await item(DOC_BUSINESS_CLUSTER.normalizeStreamEnabledLabel),
+    ),
+    redactSecrets: await eppSwitchState(
+      await item(DOC_BUSINESS_CLUSTER.normalizeRedactSecretsLabel),
+    ),
+    unrecognizedAction: await eppSelectValue(
+      await item(DOC_BUSINESS_CLUSTER.normalizeUnrecognizedActionLabel),
+    ),
+    maxBodyBytes: await eppTextInputValue(
+      await item(DOC_BUSINESS_CLUSTER.normalizeMaxBodyBytesLabel),
+      '.ivu-input-number-input',
+    ),
+  };
+}
+
+// 校验断言：Card 内错误提示（normalize_upstream_error 的 FormItem 校验）
+async function expectNormalizeUpstreamErrorError(
+  page,
+  message,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = normalizeUpstreamErrorCard(page, drawerTitle);
+  const matcher = message instanceof RegExp ? message : String(message);
+  await expect(
+    card
+      .locator('.ivu-form-item-error-tip')
+      .filter({ hasText: matcher })
+      .first(),
+  ).toBeVisible({ timeout: 10000 });
+}
+
+// max_body_bytes 校验：InputNumber（min=0/max=4194304/precision=0）会钳制越界输入，
+// 越界值只能通过 Vue 模型注入触发 FormItem 校验（对齐 setKeyAffinityFieldViaModel）
+async function setNormalizeUpstreamErrorFieldViaModel(
+  page,
+  field,
+  value,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const injected = await page.evaluate(
+    (payload) => {
+      const allForms = document.querySelectorAll('.ivu-form');
+      for (const formEl of allForms) {
+        const formVue = formEl.__vue__;
+        if (!formVue) continue;
+        let current = formVue;
+        for (let i = 0; i < 10 && current; i++) {
+          if (
+            current.formData &&
+            'model_mappings' in current.formData &&
+            current.formData.normalize_upstream_error
+          ) {
+            current.formData.normalize_upstream_error[payload.field] = payload.value;
+            current.$forceUpdate();
+            if (current.$refs.formData) {
+              current.$nextTick(() => {
+                try {
+                  current.$refs.formData.validateField(
+                    `normalize_upstream_error.${payload.field}`,
+                  );
+                } catch (e) {
+                  /* 字段未挂载：无校验可执行 */
+                }
+              });
+            }
+            return true;
+          }
+          current = current.$parent;
+        }
+      }
+      return false;
+    },
+    { field, value },
+  );
+  if (!injected) {
+    throw new Error(`无法通过表单设置 normalize_upstream_error.${field} 字段`);
+  }
+  await waitAfterResourceMutation(page, 200);
+}
+
+// 复查页 / 详情页的「上游错误归一」区块（Review 组件：已配置时为 policy-card
+// 内的 review-item；接口未返回该对象时为「上游错误归一: -」缺省行）
+function normalizeReviewBlock(page, drawerTitle) {
+  return ivuDrawer(page)
+    .withTitle(drawerTitle)
+    .locator('.ivu-drawer-body')
+    .locator('ul')
+    .filter({ hasText: DOC_BUSINESS_CLUSTER.normalizeUpstreamErrorCard })
+    .first();
+}
+
+// 读取复查/详情区块展示值（review-label → review-value）；缺省分支（接口未返回
+// 该对象）返回 enabled='-'、其余字段 null
+async function getNormalizeReviewValues(page, drawerTitle) {
+  const block = normalizeReviewBlock(page, drawerTitle);
+  if ((await block.locator('.review-item').count()) === 0) {
+    const value = ((await block.locator('li.value').first().textContent()) || '').trim();
+    return {
+      enabled: value,
+      streamEnabled: null,
+      redactSecrets: null,
+      unrecognizedAction: null,
+      maxBodyBytes: null,
+    };
+  }
+  const read = async (label) => {
+    const item = block.locator('.review-item').filter({ hasText: label }).first();
+    if ((await item.count()) === 0) return null;
+    return ((await item.locator('.review-value').textContent()) || '').trim();
+  };
+  const enabled = await read(DOC_BUSINESS_CLUSTER.normalizeEnabledLabel);
+  return {
+    enabled,
+    streamEnabled: await read(DOC_BUSINESS_CLUSTER.normalizeStreamEnabledLabel),
+    redactSecrets: await read(DOC_BUSINESS_CLUSTER.normalizeRedactSecretsLabel),
+    unrecognizedAction: await read(
+      DOC_BUSINESS_CLUSTER.normalizeUnrecognizedActionLabel,
+    ),
+    maxBodyBytes: await read(DOC_BUSINESS_CLUSTER.normalizeMaxBodyBytesLabel),
+  };
+}
+
+// 复查页/详情页指定区块（ul.detail-row-block，policy-card 的 review-item 结构）
+// 逐项读取：返回 { review-label: review-value }；区块缺省（接口未返回该对象）
+// 时为「标题: -」行，返回 { '-': '-' } 形态的缺省标记（enabled 取 li.value 文本）
+async function getReviewBlockValues(page, drawerTitle, blockTitle) {
+  const block = ivuDrawer(page)
+    .withTitle(drawerTitle)
+    .locator('.ivu-drawer-body')
+    .locator('ul.detail-row-block')
+    .filter({ hasText: blockTitle })
+    .first();
+  const items = block.locator('.review-item');
+  if ((await items.count()) === 0) {
+    const value = ((await block.locator('li.value').first().textContent()) || '').trim();
+    return { 缺省: value };
+  }
+  const result = {};
+  for (let i = 0; i < (await items.count()); i += 1) {
+    const label = (
+      (await items.nth(i).locator('.review-label').textContent()) || ''
+    ).replace(/[:：]\s*$/, '').trim();
+    const value = (
+      (await items.nth(i).locator('.review-value').textContent()) || ''
+    ).trim();
+    result[label] = value;
+  }
+  return result;
+}
+
+// 复查页/详情页「服务鉴权 Keys」表格（mapping-table：Key / 权重两列），
+// 返回 [{ name, weight }]；无 Keys 时为「-」缺省行，返回 []
+async function getReviewKeysTable(page, drawerTitle) {
+  const block = ivuDrawer(page)
+    .withTitle(drawerTitle)
+    .locator('.ivu-drawer-body')
+    .locator('ul.detail-row-block')
+    .filter({ hasText: DOC_BUSINESS_CLUSTER.serviceAuthKeysCard })
+    .first();
+  const table = block.locator('table.mapping-table');
+  if ((await table.count()) === 0) return [];
+  const rows = table.locator('tbody tr');
+  const result = [];
+  for (let i = 0; i < (await rows.count()); i += 1) {
+    const cells = rows.nth(i).locator('td');
+    result.push({
+      name: ((await cells.nth(0).textContent()) || '').trim(),
+      weight: ((await cells.nth(1).textContent()) || '').trim(),
+    });
+  }
+  return result;
+}
+
+// 模型重定向 Card 内的映射表格作用域
+function modelMappingTable(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.llm-section-card')
+    .filter({ hasText: DOC_BUSINESS_CLUSTER.modelRedirectCard })
+    .locator('table tbody');
+}
+
+/** 模型重定向映射行数（BC-E-10 删行断言） */
+async function getModelMappingRowCount(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelMappingTable(page, drawerTitle).locator('tr').count();
+}
+
+/** 删除第 rowIndex 行模型映射（行内「删除」按钮，removeModelMapping） */
+async function deleteModelMappingRow(page, rowIndex, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  const row = modelMappingTable(page, drawerTitle).locator('tr').nth(rowIndex);
+  await row.getByRole('button', { name: /^删除$/ }).click();
+  await waitAfterResourceMutation(page, 300);
+}
+
 // provider（所属服务商）下拉：使用 el-select 版 selectProvider（见 fillModelStep 上方）
 // 保留 fillProvider 作为兼容别名：选择 provider 并等待详情联动
 async function fillProvider(
@@ -1834,76 +2104,98 @@ function eppFormItem(card, label) {
   return card.locator('.ivu-form-item').filter({ hasText: label }).first();
 }
 
-// 获取 epp_config 当前值
+// 按 label 精确匹配表单项：「会话亲和性」与「会话亲和性 Header」互为前缀，
+// hasText 会同时命中两项，switch/header 取值必须用精确匹配。
+// 未命中时返回空集合（count() === 0），字段因 affinity=off 被 v-if 隐藏时即为此状态。
+async function eppFormItemExact(card, label) {
+  const items = card.locator('.ivu-form-item');
+  const index = await items.evaluateAll(
+    (nodes, target) =>
+      nodes.findIndex((node) => {
+        const labelEl = node.querySelector('.ivu-form-item-label');
+        return ((labelEl && labelEl.textContent) || '')
+          .replace(/\s+/g, ' ')
+          .trim() === target;
+      }),
+    label,
+  );
+  return index < 0 ? items.filter({ hasText: '\u0000' }) : items.nth(index);
+}
+
+// 读取表单项内 switch 状态；字段未渲染（v-if 隐藏）时返回 null
+async function eppSwitchState(item) {
+  const switchEl = item.locator('.ivu-switch').first();
+  if ((await switchEl.count()) === 0 || !(await switchEl.isVisible())) {
+    return null;
+  }
+  return switchEl.evaluate((el) => el.classList.contains('ivu-switch-checked'));
+}
+
+// 读取表单项内文本输入框的值；字段未渲染时返回 null
+async function eppTextInputValue(item, selector = 'input') {
+  const input = item.locator(selector).first();
+  if ((await input.count()) === 0 || !(await input.isVisible())) {
+    return null;
+  }
+  return (await input.inputValue()).trim();
+}
+
+// 读取表单项内 iView Select 的选中值（剥离「英文值（中文注释）」注释）；未渲染返回 null
+async function eppSelectValue(item) {
+  const selected = item.locator('.ivu-select-selected-value').first();
+  if ((await selected.count()) === 0) {
+    return null;
+  }
+  return stripOptionComment(await selected.textContent());
+}
+
+// 获取 epp_config 当前值；字段因 affinity=off 隐藏时对应键为 null
 async function getEppConfigValues(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
   const card = balanceModeCard(page, drawerTitle);
-  const schedulingProfile = await card
-    .locator('.ivu-select-selected-value')
-    .nth(1)
-    .textContent()
-    .catch(() => '');
-  const cacheAffinity = await card
-    .locator('.ivu-select-selected-value')
-    .nth(2)
-    .textContent()
-    .catch(() => '');
-  const prefixCacheAffinity = await card
-    .locator('.ivu-switch')
-    .first()
-    .evaluate((el) => el.classList.contains('ivu-switch-checked'))
-    .catch(() => false);
-  const sessionAffinityEnabled = await card
-    .locator('.ivu-switch')
-    .nth(1)
-    .evaluate((el) => el.classList.contains('ivu-switch-checked'))
-    .catch(() => false);
-  const fallbackOnEmpty = await eppFormItem(card, DOC_BUSINESS_CLUSTER.fallbackOnEmptyLabel)
-    .locator('.ivu-switch')
-    .first()
-    .evaluate((el) => el.classList.contains('ivu-switch-checked'))
-    .catch(() => false);
-  const kvCacheUtilizationMax = await card
-    .locator('.ivu-input-number-input')
-    .first()
-    .inputValue()
-    .catch(() => '');
-  const waitingQueueMax = await eppFormItem(
-    card,
-    DOC_BUSINESS_CLUSTER.waitingQueueMaxLabel,
-  )
-    .locator('.ivu-input-number-input')
-    .inputValue()
-    .catch(() => '');
-  const runningRequestsMax = await eppFormItem(
-    card,
-    DOC_BUSINESS_CLUSTER.runningRequestsMaxLabel,
-  )
-    .locator('.ivu-input-number-input')
-    .inputValue()
-    .catch(() => '');
-  const metricsStalenessThresholdMs = await eppFormItem(
-    card,
-    DOC_BUSINESS_CLUSTER.metricsStalenessThresholdMsLabel,
-  )
-    .locator('.ivu-input-number-input')
-    .inputValue()
-    .catch(() => '');
+  const item = (label) => eppFormItemExact(card, label);
+
   return {
-    schedulingProfile: stripOptionComment(schedulingProfile),
-    cacheAffinity: stripOptionComment(cacheAffinity),
-    prefixCacheAffinity,
-    sessionAffinityEnabled,
-    fallbackOnEmpty,
-    kvCacheUtilizationMax,
-    waitingQueueMax,
-    runningRequestsMax,
-    metricsStalenessThresholdMs,
+    schedulingProfile: await eppSelectValue(
+      await item(DOC_BUSINESS_CLUSTER.schedulingProfileLabel),
+    ),
+    cacheAffinity: await eppSelectValue(
+      await item(DOC_BUSINESS_CLUSTER.cacheAffinityLabel),
+    ),
+    prefixCacheAffinity: await eppSwitchState(
+      await item(DOC_BUSINESS_CLUSTER.prefixCacheAffinityLabel),
+    ),
+    sessionAffinityEnabled: await eppSwitchState(
+      await item(DOC_BUSINESS_CLUSTER.sessionAffinityEnabledLabel),
+    ),
+    sessionAffinityHeader: await eppTextInputValue(
+      await item(DOC_BUSINESS_CLUSTER.sessionAffinityHeaderLabel),
+    ),
+    fallbackOnEmpty: await eppSwitchState(
+      await item(DOC_BUSINESS_CLUSTER.fallbackOnEmptyLabel),
+    ),
+    kvCacheUtilizationMax: await eppTextInputValue(
+      await item(DOC_BUSINESS_CLUSTER.kvCacheUtilizationMaxLabel),
+      '.ivu-input-number-input',
+    ),
+    waitingQueueMax: await eppTextInputValue(
+      await item(DOC_BUSINESS_CLUSTER.waitingQueueMaxLabel),
+      '.ivu-input-number-input',
+    ),
+    runningRequestsMax: await eppTextInputValue(
+      await item(DOC_BUSINESS_CLUSTER.runningRequestsMaxLabel),
+      '.ivu-input-number-input',
+    ),
+    metricsStalenessThresholdMs: await eppTextInputValue(
+      await item(DOC_BUSINESS_CLUSTER.metricsStalenessThresholdMsLabel),
+      '.ivu-input-number-input',
+    ),
   };
 }
 
 // 按 label 定位 Card 内 InputNumber 输入框并填值（先清空，失焦触发 min/precision 约束）
 async function fillEppNumberInput(card, label, value) {
-  const input = eppFormItem(card, label).locator('.ivu-input-number-input').first();
+  const item = await eppFormItemExact(card, label);
+  const input = item.locator('.ivu-input-number-input').first();
   await input.fill('');
   await input.fill(String(value));
   await input.blur();
@@ -1911,7 +2203,11 @@ async function fillEppNumberInput(card, label, value) {
 
 // 按 label 定位 Card 内 switch 并切换到目标状态
 async function setEppSwitchByLabel(card, label, target) {
-  const switchEl = eppFormItem(card, label).locator('.ivu-switch').first();
+  const item = await eppFormItemExact(card, label);
+  const switchEl = item.locator('.ivu-switch').first();
+  if ((await switchEl.count()) === 0) {
+    throw new Error(`未找到 label 为「${label}」的开关（字段当前可能已被隐藏）`);
+  }
   const isChecked = await switchEl.evaluate((el) =>
     el.classList.contains('ivu-switch-checked'),
   );
@@ -1920,70 +2216,73 @@ async function setEppSwitchByLabel(card, label, target) {
   }
 }
 
+// 按 label 选中 Card 内 iView Select 的下拉项
+async function setEppSelectByLabel(page, card, label, optionText) {
+  const item = await eppFormItemExact(card, label);
+  await item.locator('.ivu-select-selection').first().click();
+  await page.waitForTimeout(200);
+  await page
+    .locator('.ivu-select-dropdown:visible .ivu-select-item')
+    .filter({ hasText: optionText })
+    .first()
+    .click();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+}
+
 // 设置 epp_config 各字段值
 async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
   const card = balanceModeCard(page, drawerTitle);
 
   if (values.schedulingProfile !== undefined) {
-    // 第2个 Select（第1个是 balance_mode）；选项文案以英文值开头，直接按英文值匹配
-    const selects = card.locator('.ivu-select-selection');
-    await selects.nth(1).click();
-    await page.waitForTimeout(200);
-    await page
-      .locator('.ivu-select-dropdown:visible .ivu-select-item')
-      .filter({ hasText: values.schedulingProfile })
-      .first()
-      .click();
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(200);
+    // 选项文案以英文值开头（如 "balanced（均衡，默认）"），按英文值子串匹配
+    await setEppSelectByLabel(
+      page,
+      card,
+      DOC_BUSINESS_CLUSTER.schedulingProfileLabel,
+      values.schedulingProfile,
+    );
     await waitAfterResourceMutation(page, 200);
   }
   if (values.cacheAffinity !== undefined) {
-    const selects = card.locator('.ivu-select-selection');
-    await selects.nth(2).click();
-    await page.waitForTimeout(200);
-    await page
-      .locator('.ivu-select-dropdown:visible .ivu-select-item')
-      .filter({ hasText: values.cacheAffinity })
-      .first()
-      .click();
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(200);
+    await setEppSelectByLabel(
+      page,
+      card,
+      DOC_BUSINESS_CLUSTER.cacheAffinityLabel,
+      values.cacheAffinity,
+    );
     await waitAfterResourceMutation(page, 200);
   }
   if (values.prefixCacheAffinity !== undefined) {
-    const switches = card.locator('.ivu-switch');
-    const isChecked = await switches.first().evaluate((el) =>
-      el.classList.contains('ivu-switch-checked'),
+    await setEppSwitchByLabel(
+      card,
+      DOC_BUSINESS_CLUSTER.prefixCacheAffinityLabel,
+      values.prefixCacheAffinity,
     );
-    if (values.prefixCacheAffinity !== isChecked) {
-      await switches.first().click();
-      await waitAfterResourceMutation(page, 200);
-    }
+    await waitAfterResourceMutation(page, 200);
   }
   if (values.sessionAffinityEnabled !== undefined) {
-    const switches = card.locator('.ivu-switch');
-    const isChecked = await switches.nth(1).evaluate((el) =>
-      el.classList.contains('ivu-switch-checked'),
+    await setEppSwitchByLabel(
+      card,
+      DOC_BUSINESS_CLUSTER.sessionAffinityEnabledLabel,
+      values.sessionAffinityEnabled,
     );
-    if (values.sessionAffinityEnabled !== isChecked) {
-      await switches.nth(1).click();
-      await waitAfterResourceMutation(page, 200);
-    }
+    await waitAfterResourceMutation(page, 200);
   }
   if (values.sessionAffinityHeader !== undefined) {
-    const headerItem = card
-      .locator('.ivu-form-item')
-      .filter({ hasText: DOC_BUSINESS_CLUSTER.sessionAffinityHeaderLabel })
-      .locator('input');
-    await headerItem.fill(values.sessionAffinityHeader);
+    const item = await eppFormItemExact(
+      card,
+      DOC_BUSINESS_CLUSTER.sessionAffinityHeaderLabel,
+    );
+    await item.locator('input').first().fill(values.sessionAffinityHeader);
     await waitAfterResourceMutation(page, 200);
   }
   if (values.kvCacheUtilizationMax !== undefined) {
-    const inputs = card.locator('.ivu-input-number-input');
-    await inputs.first().fill('');
-    await inputs.first().fill(String(values.kvCacheUtilizationMax));
-    await inputs.first().blur();
+    await fillEppNumberInput(
+      card,
+      DOC_BUSINESS_CLUSTER.kvCacheUtilizationMaxLabel,
+      values.kvCacheUtilizationMax,
+    );
     await waitAfterResourceMutation(page, 200);
   }
   // ===== RM-BC-104~107 新增 EPP 调度参数字段 =====
@@ -2019,6 +2318,213 @@ async function fillEppConfig(page, values, drawerTitle = DRAWER_TITLE.createBusi
     );
     await waitAfterResourceMutation(page, 200);
   }
+}
+
+// ===== 2026-10-28 条件项隐藏 + .llm-form-grid 自适应网格（RM-BC-96~98、RM-BC-123）=====
+// 大模型配置各卡由固定 Row(12+12) 改为 .llm-form-grid（flex-wrap，每项 width:50%），
+// affinity=off 时条件项 v-if 不渲染，后续字段自动补位；同排判定用 getBoundingClientRect 的 top。
+
+// 同一 flex 行内各项 top 坐标一致，四舍五入后允许 2px 误差
+const GRID_ROW_TOLERANCE_PX = 2;
+
+// 均衡模式卡片内 EPP 字段网格：卡片内第一个 .llm-form-grid
+//（其后的网格属于「EPP 运行时参数」子卡，不在本组断言范围）
+function eppConfigGrid(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return balanceModeCard(page, drawerTitle).locator('.llm-form-grid').first();
+}
+
+// 按卡片标题定位 LLM 配置区的分组卡片
+function llmSectionCard(
+  page,
+  cardTitle,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.llm-section-card')
+    .filter({ hasText: cardTitle })
+    .first();
+}
+
+// 任意分组卡片内的自适应网格（取卡片内第一个 .llm-form-grid）
+function llmFormGrid(
+  page,
+  cardTitle,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return llmSectionCard(page, cardTitle, drawerTitle)
+    .locator('.llm-form-grid')
+    .first();
+}
+
+// 读取网格的可见项与行排布：每项取 label 文本与 getBoundingClientRect，
+// 按 top 坐标聚合成行（行内按 left 排序，即视觉上的左右邻居）
+async function getLlmFormGridLayout(grid) {
+  const raw = await grid.evaluate((el) => {
+    const gridRect = el.getBoundingClientRect();
+    const nodes = Array.from(el.children).filter((child) =>
+      child.classList.contains('llm-form-grid-item'),
+    );
+    return {
+      width: Math.round(gridRect.width),
+      items: nodes.map((node) => {
+        const labelEl = node.querySelector('.ivu-form-item-label');
+        const rect = node.getBoundingClientRect();
+        return {
+          label: ((labelEl && labelEl.textContent) || '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+        };
+      }),
+    };
+  });
+
+  const rows = [];
+  for (const item of raw.items) {
+    const row = rows.find(
+      (candidate) => Math.abs(candidate.y - item.y) <= GRID_ROW_TOLERANCE_PX,
+    );
+    if (row) {
+      row.items.push(item);
+    } else {
+      rows.push({ y: item.y, items: [item] });
+    }
+  }
+  rows.sort((a, b) => a.y - b.y);
+  rows.forEach((row) => row.items.sort((a, b) => a.x - b.x));
+
+  return {
+    width: raw.width,
+    items: raw.items,
+    rows: rows.map((row) => row.items.map((item) => item.label)),
+  };
+}
+
+// EPP 配置网格布局快照：{ width, items[{label,x,y,width}], rows[[label...]] }
+async function getEppGridLayout(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return getLlmFormGridLayout(eppConfigGrid(page, drawerTitle));
+}
+
+// EPP 网格已渲染字段的 label 顺序（DOM 顺序 = 视觉顺序）
+async function getEppGridLabels(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  const layout = await getEppGridLayout(page, drawerTitle);
+  return layout.items.map((item) => item.label);
+}
+
+// 断言 EPP 网格中指定字段已渲染
+async function expectEppGridFieldVisible(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const labels = await getEppGridLabels(page, drawerTitle);
+  expect(
+    labels,
+    `EPP 网格应渲染「${label}」，实际可见项：${JSON.stringify(labels)}`,
+  ).toContain(label);
+}
+
+// 断言 EPP 网格中指定字段整体不渲染（v-if 而非 v-show：DOM 中不留占位节点）
+async function expectEppGridFieldHidden(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const labels = await getEppGridLabels(page, drawerTitle);
+  expect(
+    labels,
+    `「${label}」应整体隐藏不渲染，实际可见项：${JSON.stringify(labels)}`,
+  ).not.toContain(label);
+}
+
+// 断言网格排布无空白块：每项 50% 宽（不整行拉伸）、除末行外每行 2 项、
+// 单项只出现在末行（flex 换行下不会出现「左空白 + 右单项」）、无占位空元素
+async function expectLlmFormGridNoBlankBlock(grid, label = '大模型配置网格') {
+  const layout = await getLlmFormGridLayout(grid);
+  expect(layout.items.length, `${label} 应有可见表单项`).toBeGreaterThan(0);
+
+  layout.items.forEach((item) => {
+    expect(item.label, `${label} 不应存在无 label 的占位项`).not.toBe('');
+    const ratio = item.width / layout.width;
+    expect(
+      ratio,
+      `${label}「${item.label}」应占 50% 宽，实际 ${(ratio * 100).toFixed(1)}%`,
+    ).toBeGreaterThan(0.45);
+    expect(
+      ratio,
+      `${label}「${item.label}」不应被拉伸成整行宽，实际 ${(ratio * 100).toFixed(1)}%`,
+    ).toBeLessThan(0.6);
+  });
+
+  layout.rows.forEach((row, index) => {
+    const isLastRow = index === layout.rows.length - 1;
+    expect(
+      row.length,
+      `${label} 第 ${index + 1} 行最多并排 2 项，实际：${JSON.stringify(row)}`,
+    ).toBeLessThanOrEqual(2);
+    expect(
+      row.length > 0,
+      `${label} 第 ${index + 1} 行不应为空行`,
+    ).toBe(true);
+    if (!isLastRow) {
+      expect(
+        row.length,
+        `${label} 第 ${index + 1} 行（非末行）应并排 2 项，实际：${JSON.stringify(row)}`,
+      ).toBe(2);
+    }
+  });
+
+  return layout;
+}
+
+// 断言 EPP 配置区不出现任何「off 时不生效」类提示：
+// 无「不生效」文案、无「（off…）」后缀、无橙色提示元素
+async function expectNoAffinityOffHint(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const grid = eppConfigGrid(page, drawerTitle);
+  await expect(
+    grid,
+    '不应出现任何「off 时不生效」类提示文案',
+  ).not.toContainText('不生效');
+  await expect(
+    grid,
+    '字段名不应追加「（off 时不生效）」类后缀',
+  ).not.toContainText('（off');
+  await expect(
+    grid.locator('.epp-off-hint'),
+    '不应渲染 off 相关提示元素',
+  ).toHaveCount(0);
+}
+
+// 断言指定 epp_config 字段的内联校验错误（message 省略则只断言有错误）
+async function expectEppFieldError(
+  page,
+  label,
+  message,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = balanceModeCard(page, drawerTitle);
+  const item = await eppFormItemExact(card, label);
+  const tip = item.locator('.ivu-form-item-error-tip');
+  await expect(tip).toBeVisible();
+  if (message !== undefined) {
+    await expect(tip).toHaveText(message);
+  }
+}
+
+// 断言指定 epp_config 字段无内联校验错误
+async function expectEppFieldErrorHidden(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = balanceModeCard(page, drawerTitle);
+  const item = await eppFormItemExact(card, label);
+  await expect(item.locator('.ivu-form-item-error-tip')).toHaveCount(0);
 }
 
 // 等待编辑集群的 GET 请求完成
@@ -2483,6 +2989,11 @@ async function expectEppRuntimeToast(page, text) {
   await new IvuMessageComponent(page).expectText(text);
 }
 
+// 断言全局提示（iView Message 渲染在 body 级，不在抽屉 DOM 内）
+async function expectToast(page, text) {
+  await new IvuMessageComponent(page).expectText(text);
+}
+
 // 记录本轮是否发起过 POST /clusters（用于「校验失败不发起提交」断言）
 function watchClusterCreateRequests(page) {
   const state = { count: 0 };
@@ -2621,6 +3132,26 @@ function clusterWizardCloseBtn(
   drawerTitle = DRAWER_TITLE.createBusinessCluster,
 ) {
   return ivuDrawer(page).withTitle(drawerTitle).locator('.ivu-drawer-close');
+}
+
+/**
+ * 读取向导抽屉内按 label 定位的表单输入值（文本/数字框通用）。
+ * 用于「关闭后重开应为初始值」类断言（覆盖缺口清单 #4）。
+ */
+async function getWizardFieldValue(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const item = ivuDrawer(page)
+    .withTitle(drawerTitle)
+    .locator('.ivu-drawer-body .ivu-form-item')
+    .filter({ hasText: label })
+    .first();
+  const input = item
+    .locator('input.ivu-input, .ivu-input-number-input, textarea')
+    .first();
+  return (await input.inputValue()).trim();
 }
 
 /** 「详情」抽屉 */
@@ -2817,6 +3348,7 @@ module.exports = {
   expectMatchPrefixFieldVisible,
   expectStripPrefixSwitchState,
   expectModelKeysRowCount,
+  modelKeysTable,
   addModelKeyRow,
   removeModelKeyRow,
   fillModelKeyRow,
@@ -2834,6 +3366,16 @@ module.exports = {
   expectKeyAffinityFieldsVisible,
   expectKeyAffinityError,
   expectKeyAffinityErrorHidden,
+  normalizeUpstreamErrorCard,
+  fillNormalizeUpstreamError,
+  getNormalizeUpstreamErrorValues,
+  expectNormalizeUpstreamErrorError,
+  setNormalizeUpstreamErrorFieldViaModel,
+  getNormalizeReviewValues,
+  getReviewBlockValues,
+  getModelMappingRowCount,
+  deleteModelMappingRow,
+  getReviewKeysTable,
   expectModelCardGrouping,
   selectProvider,
   selectForwardModels,
@@ -2880,6 +3422,19 @@ module.exports = {
   setBalanceMode,
   getEppConfigValues,
   fillEppConfig,
+  // 2026-10-28 条件项隐藏 + .llm-form-grid 自适应网格（RM-BC-96~98、RM-BC-123）
+  eppConfigGrid,
+  llmSectionCard,
+  llmFormGrid,
+  getLlmFormGridLayout,
+  getEppGridLayout,
+  getEppGridLabels,
+  expectEppGridFieldVisible,
+  expectEppGridFieldHidden,
+  expectLlmFormGridNoBlankBlock,
+  expectNoAffinityOffHint,
+  expectEppFieldError,
+  expectEppFieldErrorHidden,
   waitForClusterGetResponse,
   waitForClusterReviewRequest,
   // 2026-10-13 EPP 运行时参数（RM-BC-115~122）
@@ -2903,6 +3458,7 @@ module.exports = {
   expectReviewEppRuntimeValues,
   expectReviewEppRuntimeUnset,
   expectEppRuntimeToast,
+  expectToast,
   watchClusterCreateRequests,
   // 只读管理员视角（docs/business-cluster/…/02f-只读视角.md）
   BUSINESS_CLUSTER_PATH,
@@ -2921,6 +3477,7 @@ module.exports = {
   clusterWizardNextBtn,
   clusterWizardPrevBtn,
   clusterWizardCloseBtn,
+  getWizardFieldValue,
   clusterDetailDrawer,
   clusterDetailActionButtons,
   clusterDetailNameValue,

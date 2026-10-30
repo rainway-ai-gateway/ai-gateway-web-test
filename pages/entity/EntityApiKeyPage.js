@@ -852,6 +852,32 @@ async function fillApiKeyBatchLimits(
   }
 }
 
+/**
+ * 读取编辑抽屉中「批量限流」维度输入值（EM-K-66 接口 ↔ 页面回显一致性用）
+ * @param {string} key max_create_rpm | max_active_batches | max_file_bytes | max_file_lines
+ */
+async function readApiKeyBatchLimitField(
+  page,
+  key,
+  drawerTitle = DRAWER_TITLE.editApiKey,
+) {
+  const label = API_KEY_BATCH_LIMIT_LABELS[key];
+  if (!label) {
+    throw new Error(`未知的批量限流维度: ${key}`);
+  }
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  await expect(drawer).toBeVisible({ timeout: 15000 });
+  const item = drawer
+    .locator('.ivu-form-item')
+    .filter({ hasText: label })
+    .first();
+  const input = item
+    .locator('input.ivu-input, .ivu-input-number-input')
+    .first();
+  await expect(input).toBeVisible({ timeout: 10000 });
+  return (await input.inputValue()).trim();
+}
+
 async function setupApiKeyCreateWithRateLimit(page, description) {
   await fillApiKeyDescription(page, description);
   await selectApiKeyEnableRateLimit(page, '是');
@@ -1758,6 +1784,7 @@ module.exports = {
   setApiKeyRateLimitRuleFieldModel,
   fillApiKeyBatchLimitField,
   fillApiKeyBatchLimits,
+  readApiKeyBatchLimitField,
   setupApiKeyCreateWithRateLimit,
   submitApiKeyFormExpectRateLimitError,
   selectApiKeyMaxConcurrencyOption,

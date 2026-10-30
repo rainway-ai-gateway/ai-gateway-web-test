@@ -314,7 +314,7 @@ const INTERACTIVE_SELECTOR = 'button, a[href], .ivu-btn, [role="button"]';
 
 /**
  * 遍历前端路由（`ai-gateway-web/src/router/router.js`）。
- * `cert` 未列入：该模块 2026-09-11 随菜单移除，`playwright.config.js` 有 testIgnore。
+ * `cert` 未列入：证书管理模块 2026-09-11 随菜单移除，相关用例与 pages 封装已删除。
  */
 const SWEEP_ROUTES = [
   { slug: 'user', label: '用户管理' },

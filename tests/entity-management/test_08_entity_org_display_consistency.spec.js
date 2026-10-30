@@ -537,3 +537,75 @@ entityOrgDescribe(
     });
   },
 );
+
+/**
+ * Entity组织管理 - EM-E-61 批量限流接口数据与页面展示一致性
+ *
+ * 2026-10-30 补齐（00-索引与映射「批量限流」节自登记的缺口：EM-E-57~61 未纳入自动化映射，
+ * 其中 EM-E-61 建议参照本节 EOD-01 写法补充）。基准：GET /entities 返回的
+ * rate_limit_policy.rules.batch_limits 四维度；UI 侧断言编辑抽屉回显一致。
+ */
+entityOrgDescribe(
+  'Entity组织管理 - EM-E-61 批量限流接口数据与页面展示一致性',
+  (cleanup) => {
+    const BATCH_LIMITS = {
+      max_create_rpm: 3,
+      max_active_batches: 2,
+      max_file_bytes: 2097152,
+      max_file_lines: 20,
+    };
+
+    test('接口返回的 batch_limits 与编辑抽屉回显逐项一致', async ({ page }) => {
+      const entityName = await utils.generateTestEntityName();
+      const typeName = await utils.generateTestEntityTypeName();
+      cleanup.trackTypeName(typeName);
+      cleanup.trackEntityName(entityName);
+
+      await test.step('前置：API 造数类型 + 带 batch_limits 的 Entity', async () => {
+        await utils.gotoEntityTypeManagementPage(page);
+        await utils.createEntityTypeViaApiAndRefresh(
+          page,
+          typeName,
+          '批量限流一致性类型',
+          1,
+        );
+        const entity = await utils.createEntityWithTypeViaApi(page, {
+          name: entityName,
+          type: typeName,
+          rateLimitPolicy: {
+            enabled: true,
+            rules: {
+              tpm: [],
+              rpm: [],
+              max_concurrency: -1,
+              batch_limits: BATCH_LIMITS,
+            },
+          },
+        });
+        expect(entity, 'Entity 应创建成功').toBeTruthy();
+      });
+
+      await test.step('接口基准：GET 返回 batch_limits 四维度', async () => {
+        const apiData = await utils.findEntityByNameViaApi(page, entityName);
+        expect(apiData, '应能按名称查到 Entity').not.toBeNull();
+        expect(apiData.rate_limit_policy.rules.batch_limits).toEqual(
+          BATCH_LIMITS,
+        );
+      });
+
+      await test.step('UI：编辑抽屉批量限流四维度回显与接口一致', async () => {
+        await utils.gotoEntityOrgManagementPage(page);
+        await utils.openEditEntityDrawer(page, entityName);
+        for (const [key, value] of Object.entries(BATCH_LIMITS)) {
+          // 数字输入框带千分位（如 2,097,152），按数值比较
+          const raw = await utils.readEntityBatchLimitField(page, key);
+          expect(
+            Number(raw.replace(/,/g, '')),
+            `批量限流维度 ${key} 回显应与接口一致`,
+          ).toBe(Number(value));
+        }
+        await utils.cancelEditEntityForm(page);
+      });
+    });
+  },
+);
