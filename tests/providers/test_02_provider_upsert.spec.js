@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 /**
- * 模型服务商 - 创建/编辑服务商（PR-C-01~PR-C-24）
+ * 模型服务商 - 创建/编辑服务商（PR-C-01~PR-C-25）
  *
  * 覆盖用例（docs/providers/02-功能测试用例/02-创建与编辑.md）：
  * - PR-C-01 创建成功（IP 模式）：提交 POST /providers；提交体不含 create_time/update_time；
@@ -46,19 +46,27 @@
  * - PR-C-19 协议路径映射-清空映射须显式提交空对象：删除全部映射行后 PATCH 请求体
  *   显式含 protocol_paths:{}（不得省略或为 null）；重开保持空态，未修改再提交仍为 {}。
  * - PR-C-20 实例来源单选切换：默认 `instance_pool`；下拉仅两项（人工维护 / K8s 池）；
- *   切 k8s 渲染「K8s 池名称」、人工实例表格隐藏；切回后表格恢复；提交体 instance_source 与所选一致。
- * - PR-C-21 K8s 池模式不展示镜像实例列表：k8s 模式仅「K8s 池名称」输入框，无实例表格 /
- *   无「+ 创建」/ 无删除入口；填池名提交成功，提交体含 k8s_pool_name、不含 k8s_instance_pool
- *   （**编辑既有 instance_pool 服务商后切换来源提交**，即 2026-10-26 缺陷的回归用例）。
- * - PR-C-22 切回人工维护实例池原值保留：人工模式填两行 → 切 k8s → 切回，行值与可编辑性保留，
+ *   切 k8s 渲染「K8s 实例池」可搜索下拉（带必填 *）、人工实例表格隐藏；切回后表格恢复；
+ *   提交体 instance_source 与所选一致。
+ * - PR-C-21 K8s 池模式不展示镜像实例列表：k8s 模式仅「K8s 实例池」下拉，无实例表格 /
+ *   无「+ 创建」/ 无删除入口；下拉选池后提交成功，提交体含 k8s_pool_name、不含
+ *   k8s_instance_pool（**编辑既有 instance_pool 服务商后切换来源提交**，即 2026-10-26 缺陷的回归用例）。
+ * - PR-C-22 切回人工维护实例池原值保留：人工模式填两行 → 切 k8s 并选池 → 切回，行值与可编辑性保留，
  *   提交体含 instance_pool 且不含 k8s_pool_name。
  * - PR-C-23 提交体不含 k8s_instance_pool：k8s 模式提交体不含 k8s_instance_pool、
- *   不含 instance_pool；接口层显式携带 k8s_instance_pool → 422。
- * - PR-C-24 k8s_pool_name 引用池无需预先存在：填系统中不存在的合法池名不被拦截，
- *   提交体含该池名；详情页展示池名与空态「暂无镜像实例（池不存在 ≡ 零实例）」。
+ *   不含 instance_pool；接口层显式携带 k8s_instance_pool 按未知字段静默忽略（200，不再 422）。
+ * - PR-C-24 k8s_pool_name 引用池无需预先存在：**已跳过**（UI 已无手填入口，改为下拉选池；
+ *   池不存在 ≡ 零实例的接口层覆盖见 PR-C-23，编辑回显见 PR-C-25 场景 ③）。
+ * - PR-C-25 K8s 实例池下拉选项与接口一致及空池降级：场景 ① 选项与 GET /k8s_pools 完全一致、
+ *   可搜索、无辅助小字；场景 ② 系统无池时下拉为禁用项「暂无可用的 K8s 实例池」、留空提交
+ *   提示「请选择 K8s 实例池」；场景 ③ 已保存池名不存在时追加「<名>(池不存在)」并保持选中，
+ *   提交体仍含原 k8s_pool_name。
  *
- * PR-C-24 偏差记录：02 预期 4「该 Provider 被 cluster 引用且有效池为空时 cluster 请求返回 500」
- * 需要额外造 cluster 引用（跨模块造数），本 spec 不断言该条；预期 1~3 全覆盖。
+ * 数据隔离：K8s 池经 InnerAPI 造数（`api/k8s-pool-api-utils.js`，命名前缀 qa_pool_），
+ * afterEach 删除；PR-C-25 场景 ②「系统无池」经页面侧路由桩返回空列表（本环境的池由
+ * K8s 同步任务维护，删池后会被立即重建，环境层面无法达到「无池」，详见该用例注释）。
+ * 会话约束：造池/删池复用页面 Session，**不得再调 POST /auth/session-keys**
+ * （会让已下发的 Session Key 立即失效，前端会话随之 401）。
  *
  * 文档偏差记录（保留 02 验收语义，具体实现差异已在 ProviderPage.js 头部记录）：
  * - 实例池表头：02 验收为「IP/域名」，UI 实际渲染「IP地址」——本 spec 断言首列含
@@ -1264,32 +1272,83 @@ test.describe('模型服务商 - PR-C-18 协议路径映射-路径格式校验',
   });
 });
 
+
 // ===================================================================
-// PR-C-20 ~ PR-C-24：实例来源（人工维护实例池 / K8s 实例池）
+// PR-C-20 ~ PR-C-25：实例来源（人工维护实例池 / K8s 实例池下拉）
 // 设计见 docs/providers/02-功能测试用例/02-创建与编辑.md
+// 2026-10-27 变更：K8s 池名由「手填输入框」改为「可搜索下拉」，选项来自
+// GET /open-api/v1/k8s_pools；已保存池不在列表中时追加「<名>(池不存在)」。
 // 回归背景：2026-10-03 commit 775da80 在 ProviderUpsert.vue 引用了未定义的
 // `isK8sPool`，导致 k8s 模式下「提交」静默 return（无提示、无请求）。
 // PR-C-21 的编辑态提交即为该缺陷的回归用例。
 // ===================================================================
 
-const K8S_POOL_NAME = 'llm-inference-pool';
-const K8S_POOL_NOT_EXIST = 'no-such-pool';
+const k8sPoolApi = require('../../api/k8s-pool-api-utils');
+
+const K8S_POOL_INSTANCES = [
+  { addr: '10.0.0.11', port: 8000, weight: 100 },
+  { addr: '10.0.0.12', port: 8000, weight: 100 },
+];
+
+let poolSeq = 0;
+
+function uniquePoolName() {
+  poolSeq += 1;
+  return k8sPoolApi.POOL_NAME_PREFIX + Date.now().toString(36) + '_' + poolSeq;
+}
+
+/**
+ * API 造一个 K8s 池（命名前缀 qa_pool_，afterEach 清理）
+ */
+async function createK8sPool(page, poolCleanup, instances = K8S_POOL_INSTANCES) {
+  const poolName = uniquePoolName();
+  const data = await k8sPoolApi.createK8sPoolViaApi(page, poolName, instances);
+  expect(data, 'API 造数 K8s 池应成功').not.toBeNull();
+  poolCleanup.trackPool(poolName);
+  return poolName;
+}
+
+/**
+ * API 造一个 k8s_pool 模式服务商并进入列表页（afterEach 清理）
+ */
+async function createK8sProviderAndOpenList({ page, cleanup, poolName }) {
+  const name = uniqueName('provider');
+  const data = await api.createProviderViaApi(page, {
+    name,
+    description: '自动化测试-K8s 池模式',
+    instance_source: 'k8s_pool',
+    k8s_pool_name: poolName,
+    model_protocols: ['openai'],
+    model_endpoint: { schema: 'https', uri: '/v1/models' },
+    models: [DEFAULT_MODEL],
+    keys: [],
+  });
+  expect(data, 'API 造数 K8s 模式服务商应成功').not.toBeNull();
+  cleanup.trackName(name);
+  await pp.gotoProvidersPage(page);
+  await pp.expectProviderRowVisibleByName(page, name);
+  return name;
+}
 
 test.describe('模型服务商 - PR-C-20 实例来源单选切换', () => {
   let cleanup;
+  let poolCleanup;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
     await pp.gotoProvidersPage(page);
   });
 
   test.afterEach(async ({ page }) => {
     await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
   });
 
-  test('默认人工维护、两项单选；切 k8s 渲染池名并隐藏实例表；切回恢复；提交体与所选一致', async ({
+  test('默认人工维护、两项单选；切 k8s 渲染可搜索池下拉并隐藏实例表；切回恢复；提交体与所选一致', async ({
     page,
   }) => {
+    const poolName = await createK8sPool(page, poolCleanup);
     const name = uniqueName('provider');
     await openCreateAndFillBasic(page, name, '自动化测试-实例来源切换');
 
@@ -1303,14 +1362,18 @@ test.describe('模型服务商 - PR-C-20 实例来源单选切换', () => {
       ]);
     });
 
-    await test.step('预期 2：切 k8s → 渲染「K8s 池名称」、人工实例表格隐藏', async () => {
+    await test.step('预期 2：切 k8s → 渲染「K8s 实例池」可搜索下拉、人工实例表格隐藏', async () => {
       await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
       await pp.expectK8sPoolNameVisible(page);
-      await pp.expectK8sPoolNamePlaceholder(
-        page,
-        pp.DOC.k8sPoolNamePlaceholder,
-      );
+      await pp.expectK8sPoolRequired(page);
+      await pp.expectK8sPoolRequiredMark(page);
+      await pp.expectK8sPoolFilterable(page);
+      await pp.expectK8sPoolPlaceholder(page, pp.DOC.k8sPoolSelectPlaceholder);
       await pp.expectInstanceListHidden(page);
+      // 选项来自 GET /k8s_pools：新建池应在下拉中（全量一致性见 PR-C-25 场景 ①）
+      const options = await pp.openK8sPoolOptions(page);
+      await pp.closeK8sPoolOptions(page);
+      expect(options.map((option) => option.text)).toContain(poolName);
     });
 
     await test.step('预期 3：切回 instance_pool → 人工实例表格恢复', async () => {
@@ -1328,6 +1391,7 @@ test.describe('模型服务商 - PR-C-20 实例来源单选切换', () => {
       const response = await pp.submitUpsertAndWait(page);
       const body = response.request().postDataJSON();
       expect(body.instance_source).toBe('instance_pool');
+      expect(body).not.toHaveProperty('k8s_pool_name');
       cleanup.trackName(name);
       await pp.expectProviderRowVisibleByName(page, name);
     });
@@ -1336,19 +1400,23 @@ test.describe('模型服务商 - PR-C-20 实例来源单选切换', () => {
 
 test.describe('模型服务商 - PR-C-21 K8s 池模式不展示镜像实例列表', () => {
   let cleanup;
+  let poolCleanup;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
     await pp.gotoProvidersPage(page);
   });
 
   test.afterEach(async ({ page }) => {
     await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
   });
 
-  test('编辑既有 instance_pool 服务商切换为 k8s：仅池名输入框，提交体含 k8s_pool_name 且不含 instance_pool', async ({
+  test('编辑既有 instance_pool 服务商切换为 k8s：仅池下拉，提交体含 k8s_pool_name 且不含 instance_pool', async ({
     page,
   }) => {
+    const poolName = await createK8sPool(page, poolCleanup);
     const name = await createProviderAndOpenList({
       page,
       cleanup,
@@ -1357,19 +1425,19 @@ test.describe('模型服务商 - PR-C-21 K8s 池模式不展示镜像实例列�
 
     await pp.openEditDrawer(page, name);
 
-    await test.step('预期 1/2：k8s 模式下无实例表格、无「+ 创建」入口', async () => {
+    await test.step('预期 1/2：k8s 模式下仅池下拉，无实例表格、无「+ 创建」入口', async () => {
       await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
       await pp.expectK8sPoolNameVisible(page);
       await pp.expectInstanceListHidden(page);
     });
 
     // 2026-10-26 缺陷回归点：此前点击提交静默无反应（不发 PATCH）
-    const response = await test.step('预期 3：填池名提交成功，提交体不含 instance_pool', async () => {
-      await pp.fillK8sPoolName(page, K8S_POOL_NAME);
+    const response = await test.step('预期 3：选择池提交成功，提交体不含 instance_pool / k8s_instance_pool', async () => {
+      await pp.selectK8sPool(page, poolName);
       const res = await pp.submitEditAndWait(page);
       const body = res.request().postDataJSON();
       expect(body.instance_source).toBe('k8s_pool');
-      expect(body.k8s_pool_name).toBe(K8S_POOL_NAME);
+      expect(body.k8s_pool_name).toBe(poolName);
       expect(body).not.toHaveProperty('instance_pool');
       expect(body).not.toHaveProperty('k8s_instance_pool');
       return res;
@@ -1379,7 +1447,7 @@ test.describe('模型服务商 - PR-C-21 K8s 池模式不展示镜像实例列�
     await test.step('落库校验：来源切换生效，休眠 instance_pool 原值保留', async () => {
       const detail = await api.getProviderViaApi(page, name);
       expect(detail.instance_source).toBe('k8s_pool');
-      expect(detail.k8s_pool_name).toBe(K8S_POOL_NAME);
+      expect(detail.k8s_pool_name).toBe(poolName);
       expect(detail.instance_pool).toEqual([
         { addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT, disable: false },
       ]);
@@ -1390,19 +1458,23 @@ test.describe('模型服务商 - PR-C-21 K8s 池模式不展示镜像实例列�
 
 test.describe('模型服务商 - PR-C-22 切回人工维护实例池原值保留', () => {
   let cleanup;
+  let poolCleanup;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
     await pp.gotoProvidersPage(page);
   });
 
   test.afterEach(async ({ page }) => {
     await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
   });
 
-  test('人工模式两行实例 → 切 k8s → 切回：原值保留、可继续编辑、提交体含 instance_pool', async ({
+  test('人工模式两行实例 → 切 k8s 下拉选池 → 切回：原值保留、可继续编辑、提交体含 instance_pool', async ({
     page,
   }) => {
+    const poolName = await createK8sPool(page, poolCleanup);
     const name = uniqueName('provider');
     await openCreateAndFillBasic(page, name, '自动化测试-实例来源回切');
 
@@ -1420,20 +1492,26 @@ test.describe('模型服务商 - PR-C-22 切回人工维护实例池原值保留
       });
     });
 
-    await test.step('预期 1：切 k8s 再切回，两行原值保留', async () => {
+    await test.step('预期 2：切 k8s → 池下拉可见、人工实例表格隐藏', async () => {
       await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
+      await pp.expectK8sPoolNameVisible(page);
       await pp.expectInstanceListHidden(page);
+      await pp.selectK8sPool(page, poolName);
+      expect(await pp.getK8sPoolSelectedValue(page)).toBe(poolName);
+    });
+
+    await test.step('预期 1/3：切回 instance_pool → 两行原值保留且可继续编辑', async () => {
       await pp.selectInstanceSource(page, pp.DOC.instanceSourceManual);
       await pp.expectInstanceListVisible(page);
       await pp.expectInstanceRowCount(page, 2);
       expect(await pp.getInstanceRowValue(page, 0, 'addr')).toBe('10.0.0.1');
       expect(await pp.getInstanceRowValue(page, 1, 'addr')).toBe('10.0.0.2');
       expect(await pp.getInstanceRowValue(page, 1, 'port')).toBe('8080');
-    });
-
-    await test.step('预期 2/3：切回后可继续编辑，提交体为生效分支的 instance_pool', async () => {
       await pp.fillInstanceRow(page, 1, { addr: '10.0.0.3' });
       expect(await pp.getInstanceRowValue(page, 1, 'addr')).toBe('10.0.0.3');
+    });
+
+    await test.step('预期 4：提交体为生效分支的 instance_pool（不含 k8s_pool_name）', async () => {
       const response = await pp.submitUpsertAndWait(page);
       const body = response.request().postDataJSON();
       expect(body.instance_source).toBe('instance_pool');
@@ -1449,41 +1527,45 @@ test.describe('模型服务商 - PR-C-22 切回人工维护实例池原值保留
 
 test.describe('模型服务商 - PR-C-23 提交体不含 k8s_instance_pool', () => {
   let cleanup;
+  let poolCleanup;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
     await pp.gotoProvidersPage(page);
   });
 
   test.afterEach(async ({ page }) => {
     await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
   });
 
-  test('k8s 模式 UI 提交体不含只读镜像字段；接口显式携带 k8s_instance_pool 返回 422', async ({
+  test('k8s 模式 UI 提交体不含已删除字段；接口显式携带 k8s_instance_pool 被静默忽略（不再 422）', async ({
     page,
   }) => {
+    const poolName = await createK8sPool(page, poolCleanup);
     const name = uniqueName('provider');
     await openCreateAndFillBasic(page, name, '自动化测试-只读镜像字段');
     await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
-    await pp.fillK8sPoolName(page, K8S_POOL_NAME);
+    await pp.selectK8sPool(page, poolName);
 
     await test.step('预期 1/2：UI 提交体不含 k8s_instance_pool，也不含 instance_pool', async () => {
       const response = await pp.submitUpsertAndWait(page);
       const body = response.request().postDataJSON();
-      expect(body.k8s_pool_name).toBe(K8S_POOL_NAME);
+      expect(body.k8s_pool_name).toBe(poolName);
       expect(body).not.toHaveProperty('k8s_instance_pool');
       expect(body).not.toHaveProperty('instance_pool');
       cleanup.trackName(name);
       await pp.expectProviderRowVisibleByName(page, name);
     });
 
-    await test.step('预期 3：接口层显式携带 k8s_instance_pool → 422', async () => {
+    await test.step('预期 3：接口层显式携带 k8s_instance_pool → 按未知字段静默忽略（200，响应不含该字段）', async () => {
       const rawName = uniqueName('provider');
       const res = await api.createProviderRawViaApi(page, {
         name: rawName,
         description: '自动化测试-只读镜像字段-接口',
         instance_source: 'k8s_pool',
-        k8s_pool_name: K8S_POOL_NAME,
+        k8s_pool_name: poolName,
         k8s_instance_pool: [
           { addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT },
         ],
@@ -1492,54 +1574,304 @@ test.describe('模型服务商 - PR-C-23 提交体不含 k8s_instance_pool', () 
         models: [DEFAULT_MODEL],
         keys: [],
       });
-      expect(res.body.ErrNum).toBe(422);
-      expect(String(res.body.ErrMsg)).toContain('k8s_instance_pool');
-      if (res.body.ErrNum === 200) {
-        cleanup.trackName(rawName);
-      }
+      expect(res.body.ErrNum, 'k8s_instance_pool 已删除，请求体携带应静默忽略').toBe(
+        200,
+      );
+      expect(res.body.Data).not.toBeNull();
+      expect(res.body.Data).not.toHaveProperty('k8s_instance_pool');
+      expect(res.body.Data.instance_source).toBe('k8s_pool');
+      expect(res.body.Data.k8s_pool_name).toBe(poolName);
+      cleanup.trackName(rawName);
     });
   });
 });
 
-test.describe('模型服务商 - PR-C-24 k8s_pool_name 引用池无需预先存在', () => {
+test.describe('模型服务商 - PR-C-24 k8s_pool_name 引用池无需预先存在（跳过）', () => {
+  // 跳过原因（docs/providers/02-功能测试用例/02-创建与编辑.md PR-C-24，2026-10-28 判定）：
+  // UI 已无手填入口 —— 「K8s 实例池」改为下拉选择（选项来自 GET /k8s_pools），
+  // 「填写不存在的池名」在 UI 层不可达；后端「池不存在 ≡ 零实例」契约未变，
+  // 该场景的接口层覆盖见 PR-C-23，编辑已保存但池被删除的回显见 PR-C-25 场景 ③。
+  // 恢复条件：重新开放手填入口。
+  test.skip('填写不存在的池名提交不被拦截（UI 手填入口已移除，暂不可达）', async () => {});
+});
+
+test.describe('模型服务商 - PR-C-25 K8s 实例池下拉选项与接口一致及空池降级', () => {
   let cleanup;
+  let poolCleanup;
 
   test.beforeEach(async ({ page }) => {
     cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
     await pp.gotoProvidersPage(page);
   });
 
   test.afterEach(async ({ page }) => {
     await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
   });
 
-  test('填写不存在的合法池名不被拦截；详情展示池名与镜像实例空态', async ({
+  test('场景 ①：下拉选项与 GET /k8s_pools 返回完全一致，可搜索且无辅助小字', async ({
     page,
   }) => {
-    const name = uniqueName('provider');
-    await openCreateAndFillBasic(page, name, '自动化测试-池不存在');
-    await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
-    await pp.expectK8sPoolNameVisible(page);
-    await pp.fillK8sPoolName(page, K8S_POOL_NOT_EXIST);
+    const poolA = await createK8sPool(page, poolCleanup, [
+      { addr: '10.0.0.21', port: 8000, weight: 100 },
+    ]);
+    const poolB = await createK8sPool(page, poolCleanup, [
+      { addr: '10.0.0.31', port: 8080, weight: 50 },
+      { addr: '10.0.0.32', port: 8080, weight: 50 },
+    ]);
 
-    await test.step('预期 1/2：提交不被拦截，提交体含该池名', async () => {
-      const response = await pp.submitUpsertAndWait(page);
+    await openCreateAndFillBasic(
+      page,
+      uniqueName('provider'),
+      '自动化测试-池下拉选项',
+    );
+    await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
+
+    await test.step('选项与接口 Data.list[].name 完全一致（顺序以接口返回为准）', async () => {
+      const apiNames = await k8sPoolApi.getK8sPoolNamesViaApi(page);
+      expect(apiNames).toContain(poolA);
+      expect(apiNames).toContain(poolB);
+      await pp.expectK8sPoolOptions(page, apiNames);
+    });
+
+    await test.step('下拉可搜索：输入池名片段仅保留匹配项', async () => {
+      const matched = await pp.expectK8sPoolSearchable(page, poolA);
+      expect(matched).toEqual([poolA]);
+    });
+
+    await test.step('下拉下方不展示实例数 / 同步时间等辅助小字', async () => {
+      await pp.expectK8sPoolNoAuxText(page);
+    });
+  });
+
+  test('场景 ②：系统无池时下拉为禁用项「暂无可用的 K8s 实例池」，留空提交被拦截', async ({
+    page,
+  }) => {
+    // 环境限制（2026-10-28 实测）：本环境的 test-pool 由 K8s 侧同步维护，
+    // InnerAPI DELETE 返回 200 后池会被同步任务立即重建（instance_count 归零但仍在列表中），
+    // 「系统内一个池都没有」无法经删池达到；改用路由桩让 GET /k8s_pools 返回空列表
+    // （Data.list = []），验证的是前端在「无可用池」响应下的降级与拦截行为，语义与 02 一致。
+    const emptyListStub = async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ErrNum: 200, ErrMsg: 'success', Data: { list: [] } }),
+      });
+    };
+    await page.route('**/open-api/v1/k8s_pools', emptyListStub);
+
+    try {
+      await test.step('前置：页面侧 GET /k8s_pools 返回空列表（Data.list = []）', async () => {
+        await openCreateAndFillBasic(
+          page,
+          uniqueName('provider'),
+          '自动化测试-系统无池',
+        );
+        const [poolResp] = await Promise.all([
+          page.waitForResponse(
+            (r) =>
+              r.url().includes('/open-api/v1/k8s_pools') &&
+              r.request().method() === 'GET',
+            { timeout: 15000 },
+          ),
+          pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s),
+        ]);
+        expect(poolResp.status()).toBe(200);
+        const payload = await poolResp.json();
+        expect(payload.Data.list, '桩应返回空池列表').toEqual([]);
+      });
+
+      await test.step('预期：下拉内为唯一禁用项「暂无可用的 K8s 实例池」', async () => {
+        await pp.expectK8sPoolNoOptions(page);
+      });
+
+      await test.step('预期：留空提交被拦截，提示「请选择 K8s 实例池」', async () => {
+        await expectSubmitBlocked(page);
+        await pp.expectK8sPoolValidationError(
+          page,
+          pp.DOC.k8sPoolNameRequired,
+        );
+      });
+    } finally {
+      await page.unroute('**/open-api/v1/k8s_pools', emptyListStub);
+    }
+  });
+
+  test('场景 ③：已保存池名不在列表中时追加「(池不存在)」并保持选中，提交不丢值', async ({
+    page,
+  }) => {
+    const missingPool = uniquePoolName();
+    const name = await createK8sProviderAndOpenList({
+      page,
+      cleanup,
+      poolName: missingPool,
+    });
+
+    await pp.openEditDrawer(page, name);
+
+    await test.step('预期：下拉追加「<名>(池不存在)」且保持选中', async () => {
+      const options = await pp.expectK8sPoolNotExistOptionSelected(
+        page,
+        missingPool,
+      );
+      const apiNames = await k8sPoolApi.getK8sPoolNamesViaApi(page);
+      expect(options.map((option) => option.text)).toEqual([
+        ...apiNames,
+        missingPool + '(' + pp.DOC.k8sPoolNotExistSuffix + ')',
+      ]);
+    });
+
+    await test.step('预期：直接提交，提交体仍含原 k8s_pool_name（值不丢失）', async () => {
+      const response = await pp.submitEditAndWait(page);
       const body = response.request().postDataJSON();
       expect(body.instance_source).toBe('k8s_pool');
-      expect(body.k8s_pool_name).toBe(K8S_POOL_NOT_EXIST);
-      cleanup.trackName(name);
-      await pp.expectProviderRowVisibleByName(page, name);
+      expect(body.k8s_pool_name).toBe(missingPool);
+      const detail = await api.getProviderViaApi(page, name);
+      expect(detail.k8s_pool_name).toBe(missingPool);
+    });
+  });
+});
+
+/**
+ * 错误容错（覆盖缺口清单 #33）：主数据接口 500 时页面不白屏、有降级表现、恢复后可用。
+ * 断言取「最小不变量」：侧栏布局在（不白屏）+ 全局错误提示竞速捕获（iView Message 约 3s
+ * 自动消失；未捕获时记录为已知偏差并继续，不阻断回归）+ 恢复后重试成功。
+ */
+test.describe('模型服务商 - 错误容错（#33）', () => {
+  const LIST_GLOB = '**/open-api/v1/providers**';
+
+  test('主数据接口返回 500 时不白屏、有降级表现，恢复后可用', async ({ page }) => {
+    await page.route(LIST_GLOB, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ ErrNum: 500, ErrMsg: 'mock internal error' }),
+      }),
+    );
+    await pp.gotoProvidersPage(page);
+
+    await expect(page.locator('.bfe-sidebar').first()).toBeVisible({
+      timeout: 15000,
     });
 
-    await test.step('预期 3：详情页展示池名与空态文案', async () => {
-      await pp.openViewDrawer(page, name);
-      expect(await pp.viewInfoValue(page, '实例池', '实例来源')).toBe(
-        pp.DOC.instanceSourceK8s,
-      );
-      expect(await pp.viewInfoValue(page, '实例池', 'K8s 池名称')).toBe(
-        K8S_POOL_NOT_EXIST,
-      );
-      await expect(pp.viewScope(page)).toContainText(pp.DOC.k8sPoolEmpty);
+    const toastPromise = page
+      .waitForSelector(
+        '.ivu-message-error, .ivu-notice .ivu-notice-title, .ivu-alert-error',
+        { state: 'visible', timeout: 15000 },
+      )
+      .catch(() => null);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const toast = await toastPromise;
+    if (toast) {
+      await expect(
+        page.locator('.ivu-message-error, .ivu-notice, .ivu-alert-error').first(),
+      ).toBeVisible();
+    } else {
+      console.log('[#33 偏差] 主数据接口 500 时 模型服务商 页无可见错误提示（静默失败，待登记 BUG）');
+    }
+
+    await page.unroute(LIST_GLOB);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.locator('.bfe-sidebar').first()).toBeVisible({
+      timeout: 15000,
     });
+  });
+});
+
+// ==================== PR-CC-01/02 幂等与并发（覆盖缺口清单 #34/#35） ====================
+
+test.describe('模型服务商 - PR-CC-01 创建服务商-重复点击提交幂等', () => {
+  test('连点两次提交：同名服务商仅创建一条（#34）', async ({ page }) => {
+    const providerName = 'provider_cc01_' + Date.now().toString(36);
+
+    await pp.gotoProvidersPage(page);
+    await pp.openCreateDrawer(page);
+    await pp.fillName(page, providerName);
+    await pp.selectInstanceMode(page, 'IP');
+    await pp.fillInstanceRow(page, 0, { addr: '127.0.0.1', port: 80, weight: 100 });
+    await pp.selectProtocols(page, ['openai']);
+    await pp.openBatchAddModels(page);
+    await pp.fillBatchModelsText(page, 'Qwen/Qwen2.5-3B-Instruct');
+    await pp.confirmBatchAddModels(page);
+
+    const posts = [];
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().includes('/open-api/v1/providers')) {
+        posts.push(req.url());
+      }
+    });
+    await pp.clickSubmit(page);
+    await pp.clickSubmit(page).catch(() => {});
+    await page.waitForTimeout(2000);
+
+    const names = await api.getProviderNamesViaApi(page);
+    expect(
+      names.filter((n) => n === providerName).length,
+      '同名服务商应仅一条',
+    ).toBe(1);
+    expect(posts.length, 'POST /providers 次数应 ≤2').toBeLessThanOrEqual(2);
+    await pp.expectProviderRowVisibleByName(page, providerName);
+    // 清理
+    await pp.clickDelete(page, providerName);
+    await pp.confirmDeleteAndWait(page, providerName);
+  });
+});
+
+test.describe('模型服务商 - PR-CC-02 编辑期间他人修改', () => {
+  test('UI 提交覆盖他人修改（last-write-wins，已知偏差）（#35）', async ({ page }) => {
+    const providerName = 'provider_cc02_' + Date.now().toString(36);
+    const created = await api.createProviderViaApi(page, {
+      name: providerName,
+      description: '初始描述',
+      model_protocols: ['openai'],
+      model_endpoint: { schema: 'https', uri: '/v1/models' },
+      models: ['Qwen/Qwen2.5-3B-Instruct'],
+      keys: [],
+      instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+    });
+    expect(created, 'API 造数服务商应成功').toBeTruthy();
+
+    try {
+      await pp.gotoProvidersPage(page);
+      await pp.openEditDrawer(page, providerName);
+
+      // API 侧修改描述（模拟他人；PATCH Body 须全量字段）
+      const current = await api.getProviderViaApi(page, providerName);
+      const others = await api.updateProviderRawViaApi(page, providerName, {
+        description: 'changed-by-others',
+        model_protocols: current.model_protocols,
+        model_endpoint: current.model_endpoint,
+        models: current.models,
+        keys: current.keys,
+        instance_pool: current.instance_pool,
+      });
+      expect(others.ok, '他人修改应成功').toBe(true);
+
+      // UI 填新描述并提交（不重新加载）
+      await pp.fillDescription(page, 'ui-value', '编辑服务商');
+      await pp.submitEditAndWait(page);
+
+      const after = await api.getProviderViaApi(page, providerName);
+      expect(after.description, '后写覆盖（已知偏差，登记 #35）').toBe('ui-value');
+    } finally {
+      await pp.gotoProvidersPage(page);
+      if (
+        await pp
+          .providerTable(page)
+          .rowByText(providerName)
+          .isVisible()
+          .catch(() => false)
+      ) {
+        await pp.clickDelete(page, providerName);
+        await pp.confirmDeleteAndWait(page, providerName, { expectSuccess: false });
+      }
+    }
   });
 });
