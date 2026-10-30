@@ -121,6 +121,13 @@ class PageTableComponent {
   async pageNumberCount() {
     return this.pagination().locator('.el-pager li.number').count();
   }
+  /** 末页页码（页码项的最后一项文本；大数据量翻末页用） */
+  async lastPageNumber() {
+    const items = this.pagination().locator('li.number');
+    const count = await items.count();
+    if (count === 0) return 0;
+    return Number(((await items.nth(count - 1).textContent()) || '').trim());
+  }
   pagination() {
     return this.root.locator('.el-pagination').first();
   }

@@ -311,3 +311,203 @@ test.describe('AI业务集群 - BC-E-11 描述字段 XSS 转义（#17）', () =>
     await utils.closeBusinessClusterDetail(page);
   });
 });
+
+test.describe('AI业务集群 - BC-E-12 大数据量列表（#40）', () => {
+  let cleanup;
+  let providerCleanup;
+  const BULK_COUNT = 60;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = utils.createResourceTestCleanup();
+    providerCleanup = api.createProviderTestCleanup();
+    await utils.gotoBusinessClusterManagementPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+    await providerCleanup.cleanup(page);
+  });
+
+  test('60 个集群列表：翻页末页行可见、总条数正确、筛选定位可用', async ({ page }) => {
+    test.setTimeout(600000);
+    const providerName = await createProvider({ page, cleanup: providerCleanup });
+    const names = [];
+    for (let i = 0; i < BULK_COUNT; i += 1) {
+      const name = `bulk_${Date.now().toString(36)}_${i}`;
+      names.push(name);
+      cleanup.trackBusinessCluster(name);
+      const { status } = await (async () => {
+        const resApi = require('../../api/resource-api-utils');
+        return resApi.createClusterWithResponse(
+          page,
+          {
+            name,
+            basic: {
+              protocol: 'https',
+              connection: { max_idle_conn_per_rs: 2, cancel_on_client_close: false },
+              retries: { max_retry_in_cluster: 2 },
+              buffers: { req_write_buffer_size: 512 },
+              timeouts: {
+                timeout_read_client_again: 60000,
+                timeout_readbody_client: 30000,
+                timeout_conn_serv: 2000,
+                timeout_response_header: 60000,
+                timeout_write_client: 60000,
+              },
+            },
+            sticky_sessions: {
+              enabled: true,
+              hash_strategy: 'CLIENT_ID_ONLY',
+              hash_header: 'Cookie:USERID',
+            },
+            passive_health_check: {
+              schema: 'http',
+              failnum: 10,
+              interval: 1000,
+              host: 'www.test1.com',
+              uri: '/interface',
+              statuscode: 200,
+            },
+            llm_config: {
+              provider: providerName,
+              models: [MODEL_A1],
+              model_mappings: [],
+              keys: [],
+              key_policy: {
+                strategy: 'weighted_random',
+                max_retries: 0,
+                retry_backoff_initial: 500,
+                retry_backoff_max: 5000,
+              },
+              key_affinity: {
+                enabled: false,
+                ttl: 600,
+                redis_prefix: 'bfe:ai:key_affinity',
+                penalty_enable: true,
+              },
+            },
+          },
+        );
+      })();
+      expect(status, `第 ${i} 个集群应创建成功`).toBe(200);
+    }
+
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const table = utils.businessClusterTable(page);
+    await table.waitForLoaded();
+
+    // 1. 分页存在且能翻到末页（页大小以产品实际为准，取末页码；
+    //    分页渲染晚于表格，轮询等待末页码出现）
+    await expect
+      .poll(async () => table.lastPageNumber(), { timeout: 15000 })
+      .toBeGreaterThan(1);
+    const lastPage = await table.lastPageNumber();
+    await table.clickPageNumber(lastPage);
+    const lastRow = names[names.length - 1];
+    await expect(table.rowByText(lastRow)).toBeVisible({ timeout: 20000 });
+
+    // 2. 筛选定位大数据量中的指定行（不翻页直接搜到）
+    await utils.searchBusinessClusterAndWait(page, names[0]);
+    await expect(table.rowByText(names[0])).toBeVisible({ timeout: 20000 });
+    await expect(table.dataRows()).toHaveCount(1);
+  });
+});
+
+test.describe('AI业务集群 - BC-E-13 集群删除不影响功能增强规则（#43）', () => {
+  let cleanup;
+  let providerCleanup;
+  let cacheCleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = utils.createResourceTestCleanup();
+    providerCleanup = api.createProviderTestCleanup();
+    cacheCleanup = require('../../pages/ai-cache/AICachePage').createAiCacheTestCleanup();
+    await cacheCleanup.saveOriginalState(page);
+    await utils.gotoBusinessClusterManagementPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cacheCleanup.cleanup(page);
+    await cleanup.cleanup(page);
+    await providerCleanup.cleanup(page);
+  });
+
+  test('存在缓存规则时删除集群：缓存规则不受集群生命周期影响仍展示', async ({
+    page,
+  }) => {
+    test.setTimeout(300000);
+    const cacheUtils = require('../../pages/ai-cache/AICachePage');
+    const ruleName = cacheUtils.generateTestRuleName('ac_e13_');
+    const clusterName = utils.generateTestBusinessClusterName();
+    cleanup.trackBusinessCluster(clusterName);
+    const providerName = await createProvider({ page, cleanup: providerCleanup });
+
+    await test.step('前置：API 造缓存规则 + EPP/WRR 集群', async () => {
+      await cacheUtils.ensureAiCacheRuleExistsViaApi(page, {
+        name: ruleName,
+        cond: 'default_t()',
+      });
+      await utils.createCluster(page, {
+        name: clusterName,
+        basic: {
+          protocol: 'https',
+          connection: { max_idle_conn_per_rs: 2, cancel_on_client_close: false },
+          retries: { max_retry_in_cluster: 2 },
+          buffers: { req_write_buffer_size: 512 },
+          timeouts: {
+            timeout_read_client_again: 60000,
+            timeout_readbody_client: 30000,
+            timeout_conn_serv: 2000,
+            timeout_response_header: 60000,
+            timeout_write_client: 60000,
+          },
+        },
+        sticky_sessions: {
+          enabled: true,
+          hash_strategy: 'CLIENT_ID_ONLY',
+          hash_header: 'Cookie:USERID',
+        },
+        passive_health_check: {
+          schema: 'http',
+          failnum: 10,
+          interval: 1000,
+          host: 'www.test1.com',
+          uri: '/interface',
+          statuscode: 200,
+        },
+        llm_config: {
+          provider: providerName,
+          models: [MODEL_A1],
+          model_mappings: [],
+          keys: [],
+          key_policy: {
+            strategy: 'weighted_random',
+            max_retries: 0,
+            retry_backoff_initial: 500,
+            retry_backoff_max: 5000,
+          },
+          key_affinity: {
+            enabled: false,
+            ttl: 600,
+            redis_prefix: 'bfe:ai:key_affinity',
+            penalty_enable: true,
+          },
+        },
+      });
+    });
+
+    await test.step('删除集群（缓存规则存在的前提下）', async () => {
+      await page.reload();
+      await page.waitForLoadState('domcontentloaded');
+      await utils.ensureBusinessClusterRowVisible(page, clusterName);
+      const result = await utils.attemptDeleteBusinessCluster(page, clusterName);
+      expect(result.ok, '集群应删除成功（缓存规则不构成引用阻塞）').toBe(true);
+    });
+
+    await test.step('显式断言（#43）：缓存规则仍正常展示', async () => {
+      await cacheUtils.reloadAiCachePage(page);
+      await cacheUtils.expectRuleRowVisible(page, ruleName);
+    });
+  });
+});
