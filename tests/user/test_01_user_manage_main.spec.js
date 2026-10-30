@@ -176,7 +176,7 @@ test.describe('用户管理 - UM-03 分页功能', () => {
  * 自动消失；未捕获时记录为已知偏差并继续，不阻断回归）+ 恢复后重试成功。
  */
 test.describe('用户管理 - 错误容错（#33）', () => {
-  const LIST_GLOB = '**/open-api/v1/users**';
+  const LIST_GLOB = '**/open-api/v1/auth/users**';
 
   test('主数据接口返回 500 时不白屏、有降级表现，恢复后可用', async ({ page }) => {
     await page.route(LIST_GLOB, (route) =>
