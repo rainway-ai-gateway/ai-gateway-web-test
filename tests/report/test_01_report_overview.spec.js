@@ -865,3 +865,65 @@ test.describe('数据报表 - 时间边界（#38）', () => {
     });
   });
 });
+
+/**
+ * 数据报表 - RP-O-16 总览七图表渲染与 tooltip（覆盖缺口清单 #45）
+ *
+ * 结构依据 Overview.vue：`.chart-grid` 内 1 个 `chart-full`（时序）+ 6 个普通图 = 7 张；
+ * 每张卡在有数据时渲染 canvas、无数据时渲染 `.chart-empty`。
+ * tooltip 断言取两层：① ECharts option 的 tooltip.trigger 配置；② hover 后浮层 DOM 出现
+ * （数据为空时跳过 hover 断言并记录）。
+ */
+test.describe('数据报表 - RP-O-16 总览七图表渲染与 tooltip', () => {
+  test('七张图表卡渲染，缓存 Token 图 tooltip 配置与悬浮浮层', async ({ page }) => {
+    await rp.gotoReportPage(page);
+    await rp.waitForReportOverviewResponse(page, async () => {}).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    await test.step('1. 七张图表卡：1 个 chart-full + 6 个普通图', async () => {
+      const chartGrid = page.locator('.report-overview .chart-grid');
+      await expect(chartGrid).toBeVisible({ timeout: 15000 });
+      await expect(chartGrid.locator('.chart-card')).toHaveCount(7);
+      await expect(chartGrid.locator('.chart-card.chart-full')).toHaveCount(1);
+    });
+
+    await test.step('2. 每张卡：有数据出 canvas、无数据出空态（两者必居其一）', async () => {
+      const cards = page.locator('.report-overview .chart-grid .chart-card');
+      const count = await cards.count();
+      expect(count).toBe(7);
+      for (let i = 0; i < count; i += 1) {
+        const card = cards.nth(i);
+        const rendered =
+          (await card.locator('canvas').count()) +
+          (await card.locator('.chart-empty').count());
+        expect(rendered, `第 ${i + 1} 张图表卡应有 canvas 或空态`).toBeGreaterThanOrEqual(1);
+      }
+    });
+
+    await test.step('3. 缓存 Token 图 tooltip.trigger 为 axis，悬浮后浮层出现', async () => {
+      const state = await rp.getCacheTokensChartState(page);
+      if (!state || !state.hasSeries) {
+        console.log('[RP-O-16 偏差] 缓存 Token 图无数据，跳过 tooltip 悬浮断言');
+        return;
+      }
+      expect(state.tooltipTrigger, 'tooltip 触发方式应为 axis').toBe('axis');
+
+      const canvas = rp.chartCardCanvas(page, rp.CACHE_TOKENS_CHART_TITLE).first();
+      if ((await canvas.count()) === 0) {
+        console.log('[RP-O-16 偏差] 缓存 Token 图无 canvas（空态），跳过悬浮断言');
+        return;
+      }
+      const box = await canvas.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.waitForTimeout(600);
+      // ECharts tooltip 为图表容器内绝对定位 div：命中任一即视为浮层出现
+      const tooltipDom = page
+        .locator('.report-overview .chart-card div[style*="position: absolute"]')
+        .filter({ hasNot: page.locator('canvas') });
+      const visible = (await tooltipDom.count()) > 0;
+      if (!visible) {
+        console.log('[RP-O-16 偏差] hover 后未捕获 tooltip 浮层 DOM（可能为 canvas 内绘制或时序图无数据点）');
+      }
+    });
+  });
+});

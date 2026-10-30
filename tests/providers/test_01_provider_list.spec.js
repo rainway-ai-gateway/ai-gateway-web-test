@@ -855,3 +855,63 @@ test.describe('模型服务商 - PR-L-11 查询模型价格跳转并按服务商
     await mpp.expectViewScopeHidden(page);
   });
 });
+
+/**
+ * #51 大数据量列表（覆盖缺口清单 #51）：25 个服务商 → 翻末页可达 + 筛选精确定位。
+ * 背景：providers 列表为前端分页 20/页，且 pageTable 在数据刷新时会清空列筛选（历史坑）。
+ */
+test.describe('模型服务商 - PR-L-12 大数据量列表（#51）', () => {
+  const BULK = 25;
+  const created = [];
+
+  test.afterAll(async ({ browser }) => {
+    // 独立 page 清理（afterAll 无 page fixture）
+    const page = await browser.newPage({ storageState: 'auth.json' });
+    try {
+      for (const name of created) {
+        await api.deleteProviderViaApi(page, name).catch(() => {});
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('25 个服务商：末页可达、总数分页正确、筛选命中单行', async ({ page }) => {
+    test.setTimeout(600000);
+    await pp.gotoProvidersPage(page);
+    for (let i = 0; i < BULK; i += 1) {
+      const name = 'provider_bulk_' + Date.now().toString(36) + '_' + i;
+      created.push(name);
+      const data = await api.createProviderViaApi(page, {
+        name,
+        description: 'bulk list 造数',
+        model_protocols: ['openai'],
+        model_endpoint: { schema: 'https', uri: '/v1/models' },
+        models: ['Qwen/Qwen2.5-3B-Instruct'],
+        keys: [],
+        instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+      });
+      expect(data, `第 ${i} 个服务商应创建成功`).not.toBeNull();
+    }
+
+    await pp.gotoProvidersPage(page);
+    const table = pp.providerTable(page);
+    await table.waitForLoaded();
+
+    await test.step('分页渲染且末页可达，末页含最后创建的服务商', async () => {
+      await expect
+        .poll(async () => table.lastPageNumber(), { timeout: 20000 })
+        .toBeGreaterThan(1);
+      const last = await table.lastPageNumber();
+      await table.clickPageNumber(last);
+      await expect(table.rowByText(created[created.length - 1])).toBeVisible({
+        timeout: 20000,
+      });
+    });
+
+    await test.step('按名称筛选精确定位单行', async () => {
+      await pp.expectProviderRowVisibleByName(page, created[0]);
+      await expect(table.dataRows()).toHaveCount(1);
+    });
+  });
+});

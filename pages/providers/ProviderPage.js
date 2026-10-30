@@ -435,6 +435,34 @@ async function fillInstanceRow(page, index, { addr, port, weight }) {
   await page.waitForTimeout(200);
 }
 
+/**
+ * 实例池行「删除」按钮（#46）：InstancePool 的 deleteAble 在仅剩 1 行时禁用
+ */
+function instanceRowDeleteButton(page, index) {
+  return instanceRows(page)
+    .nth(index)
+    .locator('td')
+    .nth(3)
+    .getByRole('button', { name: /删除|删除行/ })
+    .first();
+}
+
+async function removeInstanceRow(page, index) {
+  const btn = instanceRowDeleteButton(page, index);
+  await expect(btn).toBeVisible({ timeout: 10000 });
+  await btn.click();
+  await page.waitForTimeout(300);
+}
+
+async function expectInstanceRowDeleteDisabled(page, index, disabled = true) {
+  const btn = instanceRowDeleteButton(page, index);
+  if (disabled) {
+    await expect(btn).toBeDisabled();
+  } else {
+    await expect(btn).toBeEnabled();
+  }
+}
+
 async function fillInputNumber(input, value) {
   await expect(input).toBeVisible({ timeout: 10000 });
   await input.click({ clickCount: 3 });
@@ -886,6 +914,16 @@ async function fillKeyRow(page, index, { name, key }) {
 }
 
 // ---------- 提交 / 取消 ----------
+
+/** 关闭服务商编辑/创建抽屉（右上角 X；iView Drawer 无取消按钮场景） */
+async function closeProviderDrawer(page) {
+  // 关闭按钮在抽屉头部（drawer-wrap 层），不在 .provider-upsert 作用域内
+  const activeDrawer = page
+    .locator('.ivu-drawer-wrap:not(.ivu-drawer-hidden)')
+    .last();
+  await activeDrawer.locator('.ivu-drawer-close').click();
+  await expect(upsertScope(page)).toBeHidden({ timeout: 10000 });
+}
 
 async function clickSubmit(page) {
   await upsertScope(page).getByRole('button', { name: '提交' }).click();
@@ -2063,6 +2101,8 @@ module.exports = {
   fillDescription,
   selectInstanceMode,
   fillInstanceRow,
+  removeInstanceRow,
+  expectInstanceRowDeleteDisabled,
   fillDomainName,
   expectInstanceListError,
   instanceSourceItem,
@@ -2103,6 +2143,7 @@ module.exports = {
   addKeyRow,
   fillKeyRow,
   clickSubmit,
+  closeProviderDrawer,
   expectDrawerHidden,
   submitUpsertAndWait,
   submitEditAndWait,

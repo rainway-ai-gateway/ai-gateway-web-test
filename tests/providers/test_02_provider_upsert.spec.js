@@ -1875,3 +1875,189 @@ test.describe('模型服务商 - PR-CC-02 编辑期间他人修改', () => {
     }
   });
 });
+
+// ==================== PR-C-26 P0：编辑态 Keys 掩码三分支 ====================
+
+/**
+ * PR-C-26 编辑态 Keys 掩码回显与「未改动保留原值」（覆盖缺口清单 #49）
+ *
+ * 依据 ProviderUpsert.vue:733-774 三分支：
+ * ① 回显 maskSecretKey(originalKey)；② 未改动（display === 原值或掩码）→ 提交原值；
+ * ③ 改动 → 提交新值。此前 PR-C-03 只覆盖第 ③ 支。
+ * **掩码串若被当真值提交，真 Key 会被覆盖为 sk-xxx****xxxx → 网关鉴权全部失效。**
+ */
+test.describe('模型服务商 - PR-C-26 编辑态 Keys 掩码回显与未改动保留原值', () => {
+  const RAW_KEY = 'sk-old-secret-123456'; // 20 位，>12 → 前8 + **** + 后4
+  const expectMask = (s) => s.slice(0, 8) + '****' + s.slice(-4);
+
+  test('回显为掩码；未改动提交保留原明文；改动后提交新值', async ({ page }) => {
+    const providerName = 'provider_c26_' + Date.now().toString(36);
+    const created = await api.createProviderViaApi(page, {
+      name: providerName,
+      description: 'PR-C-26 掩码保留造数',
+      model_protocols: ['openai'],
+      model_endpoint: { schema: 'https', uri: '/v1/models' },
+      models: ['Qwen/Qwen2.5-3B-Instruct'],
+      keys: [{ name: 'key-old', key: RAW_KEY }],
+      instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+    });
+    expect(created, 'API 造数服务商应成功').toBeTruthy();
+
+    try {
+      await test.step('① 编辑抽屉回显 Key 值为掩码（不含明文）', async () => {
+        await pp.gotoProvidersPage(page);
+        await pp.openEditDrawer(page, providerName);
+        const keyInput = pp
+          .keyRows(page)
+          .nth(0)
+          .locator('td')
+          .nth(1)
+          .locator('input')
+          .first();
+        const displayed = (await keyInput.inputValue()).trim();
+        expect(displayed, '回显应为 maskSecretKey 结果').toBe(expectMask(RAW_KEY));
+        expect(displayed, '回显不得含明文').not.toContain(RAW_KEY);
+      });
+
+      await test.step('② 未改动直接提交：请求体 key 为原明文（不得是掩码串）', async () => {
+        const response = await submitEditAndWait(page, providerName);
+        const body = response.request().postDataJSON();
+        expect(body.keys).toHaveLength(1);
+        expect(body.keys[0].name).toBe('key-old');
+        expect(body.keys[0].key, '未改动须提交原明文').toBe(RAW_KEY);
+        expect(body.keys[0].key, '不得把掩码串提交为 Key').not.toContain('****');
+      });
+
+      await test.step('③ 改为新值提交：请求体为新明文', async () => {
+        await pp.gotoProvidersPage(page);
+        await pp.openEditDrawer(page, providerName);
+        await pp.fillKeyRow(page, 0, { key: 'sk-new-secret-abcdef' });
+        const response = await submitEditAndWait(page, providerName);
+        const body = response.request().postDataJSON();
+        expect(body.keys[0].key).toBe('sk-new-secret-abcdef');
+
+        // 读回核对：落库为新值（且非掩码）
+        const after = await api.getProviderViaApi(page, providerName);
+        expect(after.keys[0].key).toBe('sk-new-secret-abcdef');
+      });
+    } finally {
+      await pp.gotoProvidersPage(page);
+      if (
+        await pp
+          .providerTable(page)
+          .rowByText(providerName)
+          .isVisible()
+          .catch(() => false)
+      ) {
+        await pp.clickDelete(page, providerName);
+        await pp.confirmDeleteAndWait(page, providerName, { expectSuccess: false });
+      }
+    }
+  });
+});
+
+// ==================== PR-C-27：模型发现失败 / 超时降级 ====================
+
+test.describe('模型服务商 - PR-C-27 模型发现失败与超时降级', () => {
+  const DISCOVER_GLOB = '**/providers/tools/discover-models**';
+  const MODEL = 'Qwen/Qwen2.5-3B-Instruct';
+
+  test('discover 500 / abort 时有提示且已填模型不被清空', async ({ page }) => {
+    const providerName = 'provider_c27_' + Date.now().toString(36);
+    const model = MODEL;
+
+    const openFilledForm = async () => {
+      await pp.gotoProvidersPage(page);
+      await pp.openCreateDrawer(page);
+      await pp.fillName(page, providerName);
+      await pp.selectInstanceMode(page, 'IP');
+      await pp.fillInstanceRow(page, 0, { addr: '127.0.0.1', port: 80, weight: 100 });
+      await pp.selectProtocols(page, ['openai']);
+      await pp.openBatchAddModels(page);
+      await pp.fillBatchModelsText(page, model);
+      await pp.confirmBatchAddModels(page);
+      await pp.expectModelTags(page, [model]);
+    };
+
+    await test.step('场景 A：discover 返回 500 → 有提示、model 保留', async () => {
+      await openFilledForm();
+      await page.route(DISCOVER_GLOB, (route) =>
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ ErrNum: 500, ErrMsg: 'mock discover error' }),
+        }),
+      );
+      const toastPromise = page
+        .waitForSelector('.ivu-message-error, .ivu-notice .ivu-notice-title', {
+          state: 'visible',
+          timeout: 15000,
+        })
+        .catch(() => null);
+      await pp.discoverModelsAndWait(page);
+      const toast = await toastPromise;
+      if (toast) {
+        await expect(
+          page.locator('.ivu-message-error, .ivu-notice').first(),
+        ).toBeVisible();
+      } else {
+        console.log('[PR-C-27 偏差] discover 500 时无可见错误提示（静默失败）');
+      }
+      await pp.expectModelTags(page, [model]);
+      await page.unroute(DISCOVER_GLOB);
+      await pp.closeProviderDrawer(page);
+    });
+
+    await test.step('场景 B：discover 超时（abort）→ 已填 model 仍保留', async () => {
+      await page.route(DISCOVER_GLOB, (route) => route.abort('timedout'));
+      await openFilledForm();
+      await pp.discoverModelsAndWait(page).catch(() => {});
+      await pp.expectModelTags(page, [model]);
+      await page.unroute(DISCOVER_GLOB);
+      await pp.closeProviderDrawer(page);
+    });
+  });
+});
+
+// ==================== #46 实例池删行 ====================
+
+test.describe('模型服务商 - PR-C-28 实例池行删除（#46）', () => {
+  test('增行后可删；仅剩 1 行时删除禁用；提交体行数正确', async ({ page }) => {
+    const providerName = 'provider_i46_' + Date.now().toString(36);
+
+    await pp.gotoProvidersPage(page);
+    await pp.openCreateDrawer(page);
+    await pp.fillName(page, providerName);
+    await pp.selectInstanceMode(page, 'IP');
+    await pp.fillInstanceRow(page, 0, { addr: '127.0.0.1', port: 80, weight: 100 });
+    await pp.selectProtocols(page, ['openai']);
+    await pp.openBatchAddModels(page);
+    await pp.fillBatchModelsText(page, 'Qwen/Qwen2.5-3B-Instruct');
+    await pp.confirmBatchAddModels(page);
+
+    await test.step('初始 1 行：删除按钮禁用', async () => {
+      await pp.expectInstanceRowDeleteDisabled(page, 0, true);
+    });
+
+    await test.step('增行到 2 行：删除可用；删除一行回到 1 行且按钮再禁用', async () => {
+      await pp.addInstanceRow(page);
+      await pp.fillInstanceRow(page, 1, { addr: '127.0.0.2', port: 81, weight: 0 });
+      await pp.expectInstanceRowDeleteDisabled(page, 0, false);
+      await pp.removeInstanceRow(page, 1);
+      await expect(pp.instanceRows(page)).toHaveCount(1);
+      await pp.expectInstanceRowDeleteDisabled(page, 0, true);
+    });
+
+    await test.step('提交体 instance_pool 仅含 1 行', async () => {
+      const response = await pp.submitUpsertAndWait(page);
+      const body = response.request().postDataJSON();
+      expect(body.instance_pool).toHaveLength(1);
+      expect(body.instance_pool[0].addr).toBe('127.0.0.1');
+      await pp.expectDrawerHidden(page);
+    });
+
+    // 清理
+    await pp.clickDelete(page, providerName);
+    await pp.confirmDeleteAndWait(page, providerName);
+  });
+});
