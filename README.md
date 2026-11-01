@@ -64,7 +64,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── providers/                     # 8 个 spec
 │   ├── model-prices/                  # 9 个 spec
 │   ├── route/                         # 15 个 spec
-│   ├── epp-pool/                      # 4 个 spec
+│   ├── epp-pool/                      # 5 个 spec
 │   ├── ai-cache/                      # 8 个 spec
 │   ├── traffic-mirror/                # 8 个 spec
 │   ├── intent-config/                 # 8 个 spec
@@ -124,7 +124,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 | 模型服务商 | `docs/providers/` | `tests/providers/` | 8 | 实例来源、模型发现、Keys、分段计价、引用保护、只读视角 |
 | 模型定价 | `docs/model-prices/` | `tests/model-prices/` | 9 | 定价 CRUD、YAML 导入、分时段价格、精度与键级合并、只读视角 |
 | 路由管理 | `docs/route-management/` | `tests/route/` | 15 | 路由表、路由规则、表达式条件、条件原语面板、只读视角 |
-| EPP 实例池与调度 | `docs/epp-pool/` | `tests/epp-pool/` | 4 | 实例池管理、调度分配、只读视角 |
+| EPP 实例池与调度 | `docs/epp-pool/` | `tests/epp-pool/` | 5 | 实例池管理、调度分配、只读视角 |
 | AI 缓存规则 | `docs/ai-cache/` | `tests/ai-cache/` | 7 | 集合级规则双模式、语义缓存、语义设置、字段校验、拖拽排序、只读视角 |
 | 流量镜像规则 | `docs/traffic-mirror/` | `tests/traffic-mirror/` | 8 | 集合级规则双模式、KV/请求体/请求头注入、字段校验、拖拽排序、只读视角 |
 | 意图配置 | `docs/intent-config/` | `tests/intent-config/` | 8 | 全局最小置信度、问题集、发布流程（含编辑/删除到发布闭环与并发覆盖）、离开拦截、只读视角 |
