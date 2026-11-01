@@ -1364,12 +1364,20 @@ async function selectApiKeyEntityFilter(page, entityName) {
 
 async function selectApiKeyQuotaTypeFilter(page, quotaType) {
   const table = apiKeyTable(page);
-  const trigger = table
-    .searchArea()
-    .locator('.ivu-form-item')
-    .filter({ hasText: '配额类型' })
-    .locator('.ivu-select')
-    .first();
+  const searchArea = table.searchArea();
+  // pageTable 的搜索区是一张表：每列一个 td，下拉没有 .ivu-form-item 包裹，
+  // 只能按占位符「请选择配额类型」定位（2026-11-01 审计修正，原实现永不命中）
+  const selects = searchArea.locator('.ivu-select');
+  await expect(selects.first()).toBeVisible({ timeout: 15000 });
+  let trigger = selects.nth(1);
+  const count = await selects.count();
+  for (let i = 0; i < count; i += 1) {
+    const text = ((await selects.nth(i).innerText()) || '').replace(/\s+/g, '');
+    if (text.includes('配额类型') || text.includes('无限') || text.includes('有限')) {
+      trigger = selects.nth(i);
+      break;
+    }
+  }
   if ((await trigger.count()) === 0) {
     throw new Error('配额类型筛选下拉框不存在');
   }
@@ -1417,10 +1425,15 @@ async function expectApiKeyVisibleInAllPages(
   const pagination = table.pagination();
   const pageCount = await pagination.getByRole('listitem').count();
 
+  // 首页给足等待（首屏请求 + 渲染），后续页只等渲染：行要么在，要么不在，
+  // 30s/页在 100+ 条数据时会直接撞穿单用例 120s 上限（2026-11-01 审计修正）
   for (let i = 2; i <= pageCount; i++) {
-    await waitForApiKeysListResponse(page, () => table.clickPageNumber(i));
+    // 前端分页（serverPagination=false）不触发 GET /api-keys：不能再包
+    // waitForApiKeysListResponse（每页白等 15s，6 页直接撞穿 120s 用例上限）
+    await table.clickPageNumber(i);
+    await waitForPageSettled(page, 300);
     try {
-      await table.expectRowVisible(description, timeout);
+      await table.expectRowVisible(description, 5000);
       return;
     } catch (err) {
       common.log('第' + i + '页未找到 API-Key');
