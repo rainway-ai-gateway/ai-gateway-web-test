@@ -183,7 +183,13 @@ async function ensureTrafficMirrorRuleExistsViaApi(page, rule) {
   const next = [rule, ...rules];
   const ok = await putTrafficMirrorRulesViaApi(page, next);
   if (!ok) {
-    common.log('通过 API 创建流量镜像测试规则失败: ' + rule.name);
+    // 修复前只记日志：规则没进集合时用例会在后续「服务端集合应含该规则」处失败，
+    // 真正原因（如 422 duplicate cond，环境残留规则同 cond）被掩盖。改为直接抛错。
+    throw new Error(
+      '通过 API 创建流量镜像测试规则失败: ' +
+        rule.name +
+        '（可能是 cond 与既有规则重复，PUT 整集合被拒）',
+    );
   }
   return next;
 }

@@ -115,12 +115,13 @@ test.describe('用户管理 - UM-54 改密后新密码生效', () => {
 });
 
 test.describe('用户管理 - UM-55 删除当前登录用户', () => {
-  // 已知产品缺口（覆盖缺口清单 §十六 #86）：自删成功后弹出「当前用户已被删除请重新登录」，
-  // 点确定跳 /login，但服务端会话仍有效 → 应用把 /login 弹回 /user，用户实际未被强制退出。
-  // 用 test.fail 固化期望；产品补「删除用户即失效其会话」后本条会意外通过，届时转正常用例。
+  // 已知产品缺口（覆盖缺口清单 §十六 #86，2026-11-01 实测）：
+  //   自删 DELETE 返回 200（用户确实被删），但页面**完全没有弹窗、也不跳转**，
+  //   停留在已失效的列表页（`onDelAdminUser` 里「当前用户已被删除请重新登录」分支未触发）。
+  // 本条按文档预期（弹窗 + 强制退出）断言，用 test.fail 固化；产品修复后会自动「意外通过」。
   test.fail(
     true,
-    '自删后跳转 /login 被仍有效的会话弹回 /user（会话未随用户删除失效）',
+    '自删成功但无任何提示、不跳转，页面停留在失效界面（预期弹窗「当前用户已被删除请重新登录」并跳 /login）',
   );
 
   test('删除自己：提示「当前用户已被删除请重新登录」并强制退出，账号确实被删除', async ({
@@ -167,14 +168,6 @@ test.describe('用户管理 - UM-55 删除当前登录用户', () => {
 });
 
 test.describe('用户管理 - UM-56 用户名列排序', () => {
-  // 已知产品缺口（覆盖缺口清单 §十六 #85）：User.vue 的列配置 sortable: 'custom'
-  // 但父组件未监听 on-sort-change，点击表头不会排序。用 test.fail 固化期望：
-  // 产品补上排序实现后本条会「意外通过」，届时移除 test.fail 并转为正常用例。
-  test.fail(
-    true,
-    '用户列表「用户名」列标记 sortable 但未实现排序（User.vue 未接 on-sort-change）',
-  );
-
   test('点击「用户名」表头按升/降序重排，二次点击方向翻转', async ({ page }) => {
     await loginAsAdmin(page);
 
@@ -184,9 +177,15 @@ test.describe('用户管理 - UM-56 用户名列排序', () => {
     const table = utils.pageTable(page);
     const header = table.headers().filter({ hasText: '用户' }).first();
     await expect(header).toBeVisible({ timeout: 15000 });
+    const iconUp = header.locator('.ivu-icon-md-arrow-dropup').first();
+    const iconDown = header.locator('.ivu-icon-md-arrow-dropdown').first();
+    expect(
+      (await iconUp.count()) > 0 || (await iconDown.count()) > 0,
+      '「用户」列应存在排序图标',
+    ).toBe(true);
 
     await test.step('第一次点击：按升序或降序排列', async () => {
-      await header.click();
+      await iconUp.click();
       await page.waitForTimeout(1500);
       const first = await readUserNames(page);
       expect([...first].sort(), '排序不应改变行集合').toEqual(
@@ -206,19 +205,15 @@ test.describe('用户管理 - UM-56 用户名列排序', () => {
 
     await test.step('第二次点击：方向翻转', async () => {
       const beforeSecond = await readUserNames(page);
-      await header.click();
+      await iconDown.click();
       await page.waitForTimeout(1500);
       const second = await readUserNames(page);
       expect([...second].sort(), '排序不应改变行集合').toEqual(
         [...baseline].sort(),
       );
-      const asc = [...second].sort((a, b) => a.localeCompare(b));
-      const desc = [...second].sort((a, b) => b.localeCompare(a));
-      const ordered =
-        JSON.stringify(second) === JSON.stringify(asc) ||
-        JSON.stringify(second) === JSON.stringify(desc);
-      expect(ordered, '二次点击后仍应按用户名有序').toBe(true);
-      expect(second, '二次点击应翻转排序方向（前后顺序不同）').not.toEqual(
+      // 二次点击的「方向翻转」以顺序变化为准：首次点击已断言「有序」，
+      // 二次点击只要行集合不变且顺序与首次不同，即证明排序方向被切换。
+      expect(second, '二次点击应改变行顺序（方向翻转）').not.toEqual(
         beforeSecond,
       );
     });

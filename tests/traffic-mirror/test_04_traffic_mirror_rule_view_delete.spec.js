@@ -461,8 +461,11 @@ test.describe('流量镜像规则 - 查看详情', () => {
 test('TM-CV-01 接口数据与页面展示一致性（API 真集合基准）', async ({ page }) => {
   const clusters = await utils.fetchClusterNamesViaApi(page);
   expect(clusters.length, '环境中应有可用集群').toBeGreaterThan(0);
+  const ruleName = utils.generateTestRuleName('tm_cv01_');
   const rule = utils.buildTestRule({
-    name: utils.generateTestRuleName('tm_cv01_'),
+    name: ruleName,
+    // cond 全局唯一：集合级 PUT 对重复 cond 返回 422，固定模板会与残留/并发用例冲突
+    cond: 'req_path_prefix_in("/tm_cv01/' + ruleName + '", true)',
     mirror_cluster: clusters[0],
   });
 
