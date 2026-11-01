@@ -67,7 +67,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── epp-pool/                      # 4 个 spec
 │   ├── ai-cache/                      # 7 个 spec
 │   ├── traffic-mirror/                # 7 个 spec
-│   ├── intent-config/                 # 7 个 spec
+│   ├── intent-config/                 # 8 个 spec
 │   ├── ai-context/                    # 7 个 spec
 │   ├── report/                        # 7 个 spec
 │   ├── batch-tasks/                   # 4 个 spec
@@ -127,7 +127,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 | EPP 实例池与调度 | `docs/epp-pool/` | `tests/epp-pool/` | 4 | 实例池管理、调度分配、只读视角 |
 | AI 缓存规则 | `docs/ai-cache/` | `tests/ai-cache/` | 7 | 集合级规则双模式、语义缓存、语义设置、字段校验、拖拽排序、只读视角 |
 | 流量镜像规则 | `docs/traffic-mirror/` | `tests/traffic-mirror/` | 7 | 集合级规则双模式、KV/请求体/请求头注入、字段校验、拖拽排序、只读视角 |
-| 意图配置 | `docs/intent-config/` | `tests/intent-config/` | 7 | 全局最小置信度、问题集、发布流程、离开拦截、只读视角 |
+| 意图配置 | `docs/intent-config/` | `tests/intent-config/` | 8 | 全局最小置信度、问题集、发布流程（含编辑/删除到发布闭环与并发覆盖）、离开拦截、只读视角 |
 | AI 上下文压缩 | `docs/ai-context/` | `tests/ai-context/` | 7 | 压缩规则、全局设置、字段校验、拖拽排序、只读视角 |
 | 数据报表 | `docs/report/` | `tests/report/` | 7 | 总览指标卡、时序、维度排行/分布下钻、明细与过滤、只读视角 |
 | 批量任务 | `docs/batch-tasks/` | `tests/batch-tasks/` | 4 | 列表、详情、取消、只读视角 |
