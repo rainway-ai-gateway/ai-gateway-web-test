@@ -45,10 +45,15 @@ const SESSION_ERROR_TEXTS = [
   'Session Key Not Exist',
 ];
 
-// 同一根因（会话/登录态失效）导致的前端模态框：401 时产品提示后跳转登录页
+// 登录态/角色异常导致的前端模态框：401 提示后跳转登录页；0.11 起角色不可用
+// 或前后端版本不一致也走这里（后者点「确定」是刷新页面，不会停在 /login）
 const SESSION_EXPIRED_TEXTS = [
   '当前未登录或者登录已过期请前往登录',
+  // 0.11 之前的文案（老构建仍可能命中）
   '当前url非法',
+  // 0.11 起守卫失败按原因区分文案
+  '当前账号没有控制台访问权限',
+  '控制台前端与后端版本不一致',
 ];
 
 const ALL_AUTH_ALERT_TEXTS = SESSION_ERROR_TEXTS.concat(SESSION_EXPIRED_TEXTS);

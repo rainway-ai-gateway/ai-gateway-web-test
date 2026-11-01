@@ -410,7 +410,8 @@ async function expectRouteReachable(page, slug, options = {}) {
   expect(page.url(), `路由应停留在 /${slug}`).toContain(`/${slug}`);
   await expect(
     page.locator('.ivu-modal-wrap').filter({ visible: true }).filter({
-      hasText: /当前url非法|当前未登录或者登录已过期|Session Key/,
+      hasText:
+        /当前url非法|当前账号没有控制台访问权限|控制台前端与后端版本不一致|当前未登录或者登录已过期|Session Key/,
     }),
     `路由 /${slug} 不应出现会话/URL 异常弹窗`,
   ).toHaveCount(0);
