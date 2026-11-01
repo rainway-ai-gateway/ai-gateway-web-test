@@ -220,6 +220,41 @@ async function expectEntityTypeNotVisible(page, typeName, timeout) {
   await entityTypeTable(page).expectRowHidden(typeName, timeout);
 }
 
+/**
+ * EM-T-17：按级别筛选 Entity 类型（列表「级别」列 searchType=select，选项 1~5）
+ * pageTable 搜索区是表格行（无 .ivu-form-item 包裹），按占位符「请选择级别」定位
+ */
+async function filterEntityTypeByLevel(page, level) {
+  const searchArea = entityTypeTable(page).searchArea();
+  const selects = searchArea.locator('.ivu-select');
+  await expect(selects.first()).toBeVisible({ timeout: 15000 });
+  let target = selects.first();
+  const count = await selects.count();
+  for (let i = 0; i < count; i += 1) {
+    const text = ((await selects.nth(i).innerText()) || '').replace(/\s+/g, '');
+    if (text.includes('级别')) {
+      target = selects.nth(i);
+      break;
+    }
+  }
+  if (level === '全部' || level === undefined || level === null) {
+    await target.hover();
+    const clear = target.locator('.ivu-select-arrow.ivu-icon-ios-close-circle');
+    if ((await clear.count()) > 0) {
+      await clear.first().click();
+    }
+    await page.waitForTimeout(500);
+    return;
+  }
+  await target.click();
+  await page
+    .locator('.ivu-select-dropdown:visible .ivu-select-item')
+    .filter({ hasText: new RegExp('^' + level + '$') })
+    .first()
+    .click();
+  await page.waitForTimeout(500);
+}
+
 async function expectEntityTypeVisibleInAllPages(
   page,
   typeName,
@@ -1527,6 +1562,7 @@ module.exports = {
   openCreateEntityTypeDrawer,
   openEditEntityTypeDrawer,
   fillEntityTypeForm,
+  filterEntityTypeByLevel,
   selectEntityTypeLevel,
   submitEntityTypeForm,
   createEntityTypeViaUI,
