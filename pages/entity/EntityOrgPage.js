@@ -34,6 +34,7 @@ const {
   ENTITY_SEARCH_PLACEHOLDER_TYPE,
   ENTITY_SEARCH_PLACEHOLDER_PARENT,
   ENTITY_SEARCH_PLACEHOLDER_QUOTA,
+  ENTITY_SEARCH_PLACEHOLDER_ID,
   ENTITY_SEARCH_PLACEHOLDER_DESCRIPTION,
   ENTITY_DETAIL_DRAWER_PARTS,
   ivuDrawer,
@@ -155,6 +156,8 @@ async function openCreateEntityDrawer(page) {
 }
 
 async function openEditEntityDrawer(page, entityName) {
+  // 单页 20 条且默认不按新建排序：先按名称搜索+翻页兜底，避免数据量增长后行不在当前页
+  await ensureEntityRowVisible(page, entityName);
   await entityOrgTable(page).rowAction(entityName, '编辑').click();
   await page.waitForTimeout(500);
   await ivuDrawer(page).expectOpen(DRAWER_TITLE.editEntity);
@@ -162,6 +165,7 @@ async function openEditEntityDrawer(page, entityName) {
 
 async function openEntityDetail(page, entityName) {
   const table = entityOrgTable(page);
+  await ensureEntityRowVisible(page, entityName);
   await table.rowByText(entityName).click();
   await page.waitForTimeout(500);
   await expectEntityDetailDrawerOpen(page);
@@ -216,6 +220,38 @@ async function expectEntityAllowModelsDefault(
     '允许模型',
     model,
   );
+}
+
+/**
+ * EM-E-63/64：清空「允许模型」默认的「全部模型（`*`）」标签后再选具体模型。
+ * 多选 el-select 直接追加会保留 `*`（前端提交时不会归一化多值），故必须先摘标签。
+ */
+async function replaceEntityAllowModelsSelection(
+  page,
+  models,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const cmp = ElSelectComponent.fromFormItem(
+    page,
+    ivuDrawer(page).withTitle(drawerTitle),
+    '允许模型',
+  );
+  const trigger = cmp.rootLocator();
+  await expect(trigger).toBeVisible({ timeout: 15000 });
+  for (let i = 0; i < 5; i++) {
+    const close = trigger.locator('.el-tag__close').first();
+    if ((await close.count()) === 0) {
+      break;
+    }
+    await close.click();
+    await page.waitForTimeout(200);
+  }
+  const list = Array.isArray(models) ? models : [models];
+  for (const model of list) {
+    await cmp.selectOptionFilterable(model);
+    await page.waitForTimeout(200);
+  }
+  return list;
 }
 
 async function fillEntityFormBasic(
@@ -1149,6 +1185,14 @@ async function fillEntityQuotaForm(
   if (quota.resetCycle !== undefined) {
     await selectEntityQuotaResetCycle(page, quota.resetCycle, drawerTitle);
   }
+  if (quota.passWhenNoQuota !== undefined) {
+    await selectEntityFormSelect(
+      page,
+      '配额不足时放行',
+      quota.passWhenNoQuota ? '是' : '否',
+      drawerTitle,
+    );
+  }
 }
 
 async function fillEntityRateLimitForm(
@@ -1417,12 +1461,13 @@ async function searchEntityByQuota(page, keyword) {
 }
 
 async function searchEntityById(page, entityId) {
-  // 在 ID 搜索框输入（th 内除 ID 外还含排序图标，不能用 ^ID$ 精确匹配）
-  const idSearchInput = page
-    .locator('th')
-    .filter({ hasText: /^ID/ })
-    .locator('input');
-  await idSearchInput.fill(entityId);
+  // 搜索框在 pageTable 的 searchTable 行（placeholder「请输入ID查询」），不在表头 th 内
+  const input = entityOrgTable(page).searchInput(
+    ENTITY_SEARCH_PLACEHOLDER_ID,
+  );
+  await input.click({ clickCount: 3 });
+  await page.keyboard.press('Backspace');
+  await input.pressSequentially(String(entityId), { delay: 30 });
   await page.waitForTimeout(1000);
 }
 
@@ -1443,15 +1488,7 @@ async function filterEntityByRateLimitStatus(page, status) {
   }
   // 如果选择"全部"，点击清除图标
   if (status === '全部') {
-    await waitForEntitiesListResponse(page, async () => {
-      const clearIcon = trigger.locator('.ivu-icon-ios-close');
-      if ((await clearIcon.count()) > 0) {
-        await clearIcon.click();
-      } else {
-        await trigger.click();
-        await page.keyboard.press('Escape');
-      }
-    });
+    await clearIvuSearchSelect(page, trigger);
     return;
   }
   await trigger.click();
@@ -1463,6 +1500,58 @@ async function filterEntityByRateLimitStatus(page, status) {
   await waitForEntitiesListResponse(page, async () => {
     await page.waitForTimeout(500);
   });
+}
+
+/**
+ * 清空 iView 搜索区下拉（Select clearable）：
+ * 清除图标仅在 hover 后渲染，且类名为 `ivu-select-arrow ivu-icon-ios-close-circle`
+ * （旧写法 `.ivu-icon-ios-close` 永不命中 → 静默失效，2026-11-01 审计修正）
+ */
+async function clearIvuSearchSelect(page, trigger) {
+  await trigger.hover();
+  await page.waitForTimeout(200);
+  const clearIcon = trigger.locator(
+    '.ivu-select-arrow.ivu-icon-ios-close-circle',
+  );
+  if ((await clearIcon.count()) > 0) {
+    await clearIcon.first().click();
+    await waitForPageSettled(page, 800);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * EM-E-67：级别筛选（列表「级别」列 searchType=select，下拉 1~5）
+ * 定位方式：搜索区 placeholder「请选择级别」（com.tipSelectX + 列标题）
+ */
+async function filterEntityByLevel(page, level) {
+  const searchArea = entityOrgTable(page).searchArea();
+  const selects = searchArea.locator('.ivu-select');
+  await expect(selects.first()).toBeVisible({ timeout: 15000 });
+  // 搜索区有「级别」「限流状态」两个下拉；按占位符文本定位，找不到时回退首个
+  let target = selects.first();
+  const count = await selects.count();
+  for (let i = 0; i < count; i += 1) {
+    const text = ((await selects.nth(i).innerText()) || '').replace(/\s+/g, '');
+    if (text.includes('级别')) {
+      target = selects.nth(i);
+      break;
+    }
+  }
+  // pageTable 为纯前端过滤（serverPagination=false），不触发 GET /entities，
+  // 故不包 waitForEntitiesListResponse（会白等 15s 超时）
+  if (level === '全部' || level === undefined || level === null) {
+    await clearIvuSearchSelect(page, target);
+    return;
+  }
+  await target.click();
+  await page
+    .locator('.ivu-select-dropdown:visible .ivu-select-item')
+    .filter({ hasText: new RegExp(`^${level}$`) })
+    .first()
+    .click();
+  await waitForPageSettled(page, 800);
 }
 
 async function expectEntityVisible(page, entityName, timeout) {
@@ -1719,6 +1808,16 @@ async function expectEntityDetailDescriptionRow(page, expected) {
   const row = entityDetailDrawer(page)
     .locator('.info-row')
     .filter({ hasText: '描述' })
+    .first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  await expect(row.locator('.info-value')).toHaveText(expected);
+}
+
+/** EM-E-63/64/65/66：详情抽屉「基本信息/配额信息」区按 label 读取展示值 */
+async function expectEntityDetailInfoRow(page, label, expected) {
+  const row = entityDetailDrawer(page)
+    .locator('.info-row')
+    .filter({ has: page.locator('.info-label', { hasText: label }) })
     .first();
   await expect(row).toBeVisible({ timeout: 15000 });
   await expect(row.locator('.info-value')).toHaveText(expected);
@@ -2238,6 +2337,7 @@ module.exports = {
   selectEntityAllowModels,
   selectEntityBlockModels,
   expectEntityAllowModelsDefault,
+  replaceEntityAllowModelsSelection,
   fillEntityFormBasic,
   expectEntityNamePlaceholder,
   expectEntityNameFormTip,
@@ -2309,6 +2409,7 @@ module.exports = {
   searchEntityByQuota,
   searchEntityById,
   filterEntityByRateLimitStatus,
+  filterEntityByLevel,
   expectEntityVisible,
   expectEntityNotVisible,
   clickDeleteEntityBtn,
@@ -2335,6 +2436,7 @@ module.exports = {
   expectEntityEditDescriptionValue,
   submitEntityEditAndCapturePatchBody,
   expectEntityDetailDescriptionRow,
+  expectEntityDetailInfoRow,
   expectEntityDetailDescriptionRowOrder,
   readEntityDescriptionColumnTexts,
   sortEntityByDescriptionColumn,

@@ -1159,8 +1159,9 @@ async function createEntityWithTypeViaApi(
 ) {
   await umUtils.handleUrlInvalidAlert(page);
 
-  // 支持对象参数 { name, type, parentName, quotaPlan, rateLimitPolicy, description } 或分开参数
-  let entityName, type, parent, quotaPlan, rateLimitPolicy, description;
+  // 支持对象参数 { name, type, parentName, quotaPlan, rateLimitPolicy, description,
+  // allowModels, blockModels } 或分开参数
+  let entityName, type, parent, quotaPlan, rateLimitPolicy, description, extra;
   if (typeof entityNameOrObj === 'object' && entityNameOrObj !== null) {
     entityName = entityNameOrObj.name;
     type = entityNameOrObj.type;
@@ -1168,6 +1169,13 @@ async function createEntityWithTypeViaApi(
     quotaPlan = entityNameOrObj.quotaPlan;
     rateLimitPolicy = entityNameOrObj.rateLimitPolicy;
     description = entityNameOrObj.description;
+    extra = { ...(entityNameOrObj.extra || {}) };
+    if (entityNameOrObj.allowModels !== undefined) {
+      extra.allow_models = entityNameOrObj.allowModels;
+    }
+    if (entityNameOrObj.blockModels !== undefined) {
+      extra.block_models = entityNameOrObj.blockModels;
+    }
   } else {
     entityName = entityNameOrObj;
     type = typeName;
@@ -1182,6 +1190,7 @@ async function createEntityWithTypeViaApi(
     quotaPlan,
     rateLimitPolicy,
     description,
+    extra,
   );
   if (!entityData) {
     // Session 过期时 API 常直接失败，强制走一遍弹框/重登后再试
@@ -1194,6 +1203,7 @@ async function createEntityWithTypeViaApi(
       quotaPlan,
       rateLimitPolicy,
       description,
+      extra,
     );
   }
   if (!entityData) {

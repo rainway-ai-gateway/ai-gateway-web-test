@@ -157,6 +157,7 @@ const DOC_ENTITY_ORG = {
   tpmRuleNameRequiredMsgTemplate: '第{index}条TPM规则请输入规则名称',
   tpmStepMinutesRangeMsgTemplate: '第{index}条TPM规则滑动步长范围为1-360分钟',
   tpmStepMinutesRequiredMsgTemplate: '第{index}条TPM规则滑动步长不能为空',
+  tpmStepMinutesInvalidMsgTemplate: '第{index}条TPM规则滑动步长不能超过时间窗口',
   tpmMaxTokensMinErrorMsgTemplate: '第{index}条TPM规则最大Token数必须大于0',
   tpmMaxTokensMaxErrorMsgTemplate: '第{index}条TPM规则最大Token数超出允许范围',
   tpmMaxTokensRequiredMsgTemplate: '第{index}条TPM规则最大Token数不能为空',
