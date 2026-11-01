@@ -239,13 +239,29 @@ async function navigateToRouteTableList(page) {
   const submenuLabels = ['路由管理', 'Route Manage'];
   let expanded = false;
 
-  for (const label of submenuLabels) {
-    if ((await sidebar.submenuTitle(label).count()) > 0) {
-      await sidebar.submenuTitle(label).click();
-      await page.waitForTimeout(500);
-      expanded = true;
-      break;
+  // 子菜单已展开时不要再点标题（iView 的标题点击是 toggle，会把已展开的菜单收起来，
+  // 随后菜单项不可见 → `locator.click` 超时）。2026-11-01 审计修正。
+  const submenuTitles = page
+    .locator('.bfe-sidebar .ivu-menu-submenu')
+    .filter({ hasText: /路由管理|Route Manage/ });
+  const alreadyOpen =
+    (await submenuTitles.count()) > 0 &&
+    (await submenuTitles
+      .first()
+      .evaluate((el) => el.classList.contains('ivu-menu-opened'))
+      .catch(() => false));
+
+  if (!alreadyOpen) {
+    for (const label of submenuLabels) {
+      if ((await sidebar.submenuTitle(label).count()) > 0) {
+        await sidebar.submenuTitle(label).click();
+        await page.waitForTimeout(500);
+        expanded = true;
+        break;
+      }
     }
+  } else {
+    expanded = true;
   }
 
   const menuLabels = ['路由表', 'Advance Route Rule Manage'];

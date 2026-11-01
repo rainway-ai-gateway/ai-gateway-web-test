@@ -114,12 +114,30 @@ async function getGlobalRouteRulesViaApi(page) {
 }
 
 async function getRouteTablesViaApi(page) {
-  const body = await requestOpenApi(page, 'get', '/route-tables?page_size=200');
-  if (body.ErrNum !== 200) {
-    return [];
+  // 后端 page_size 上限 100，且路由表数量会随环境增长（实测已 107 条）；
+  // 只取第一页会漏掉新行（新 owner 的 id 最大 → 落在最后一页），必须分页拉全。
+  const pageSize = 100;
+  let pageNum = 1;
+  const all = [];
+  while (true) {
+    const body = await requestOpenApi(
+      page,
+      'get',
+      `/route-tables?page=${pageNum}&page_size=${pageSize}`,
+    );
+    if (body.ErrNum !== 200) {
+      break;
+    }
+    const data = body.Data || {};
+    const list = Array.isArray(data.list) ? data.list : [];
+    all.push(...list);
+    const total = data.pagination && data.pagination.total;
+    if (!list.length || all.length >= (total || 0)) {
+      break;
+    }
+    pageNum += 1;
   }
-  const data = body.Data || {};
-  return Array.isArray(data.list) ? data.list : [];
+  return all;
 }
 
 async function setGlobalRouteRulesViaApi(page, { enabled, rules }) {

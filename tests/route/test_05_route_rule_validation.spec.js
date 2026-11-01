@@ -226,9 +226,22 @@ test.describe('路由管理 - RT-V-10 表达式非法语法', () => {
       await utils.fillRuleExpression(page, 'default_t(');
     });
 
-    await test.step('等待表达式校验（通过表单提交触发）', async () => {
-      // 表达式校验结果存储在 formData.condErrmsg 中，不直接显示在 UI
-      // 提交时校验失败会阻止表单提交，抽屉不会关闭
+    await test.step('等待表达式校验（on-change 触发 PATCH expression/verify）', async () => {
+      // 2026-11-01 审计修正：verify 结果经 RuleForm.condErrmsg → validateField('cond')
+      // 落到「表达式」FormItem 的内联错误（此前注释「不直接显示在 UI」已过时）
+      const drawer = page.locator('.ivu-drawer').filter({ hasText: '添加规则' }).first();
+      const exprItem = drawer
+        .locator('.ivu-form-item')
+        .filter({
+          has: page.locator('.ivu-form-item-label', { hasText: '表达式' }),
+        })
+        .first();
+      await expect(exprItem).toHaveClass(/ivu-form-item-error/, {
+        timeout: 15000,
+      });
+      const tip = exprItem.locator('.ivu-form-item-error-tip');
+      await expect(tip).toHaveCount(1);
+      expect((await tip.innerText()).trim().length, '应展示表达式语法错误提示').toBeGreaterThan(0);
     });
 
     await test.step('点击本地保存，抽屉不关闭', async () => {
