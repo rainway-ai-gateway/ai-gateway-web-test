@@ -332,3 +332,15 @@ await page.locator('.ivu-drawer-wrap').click()
 - [iView 测试陷阱](.trae/skills/ivue-playwright-test-patterns/SKILL.md)
 - [全量回归报告归档索引](regression-reports/README.md)
 - Web 侧 UI 变更记录：`ai-gateway-web/design-docs/modifications/`
+## 分模块运行（2026-11-02）
+
+后端每用户仅 1 个 Session Key，**多 worker 会互相顶号**，因此所有 `test:<module>` 脚本默认 `PW_WORKERS=1`：
+
+```bash
+npm run test:<module>        # 例：npm run test:report / test:user / test:route
+npm run test:all             # 全量（PW_WORKERS=1，长批次约 2~3 小时）
+```
+
+- 想并行可显式 `PW_WORKERS=2 npx playwright test tests/<module>/`，仅推荐用于**无写操作、无二次登录**的 spec（如 report / operation-logs 的读路径）；一旦出现「重新登录后仍未取得 session key」类失败，先降回 1 再复跑（坑位 4.2）。
+- 会话自愈（`utils/session.js`）默认重试 3 次、400ms×n 退避，可用 `PW_SESSION_RETRIES` 调整；禁用守卫用 `SESSION_GUARD_DISABLED=1`。
+- 覆盖映射核对：`node scripts/check-coverage-mapping.js`；映射表里**声明了 spec 但文件不存在**会以 ⚠ 警告单列（规划中条目请把生命周期写「待实现」）。

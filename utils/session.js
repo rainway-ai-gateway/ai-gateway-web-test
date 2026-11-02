@@ -603,24 +603,50 @@ async function ensureSessionHealthy(page, options = {}) {
     return false;
   }
 
-  const recovered = await recoverFromSessionError(page, options);
+  // #25：单会话环境下「登录成功但 Key 立刻被别的上下文顶掉」是常态抖动。
+  // 一次失败不再直接中断用例：按退避重试（默认 3 次），仍失败才抛错并带上诊断。
+  const attempts = Number(process.env.PW_SESSION_RETRIES || 3);
+  let recovered = false;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    recovered = await recoverFromSessionError(page, options);
 
-  if (await isLoginPage(page)) {
-    common.log('会话自愈后仍停留在登录页，执行 UI 登录兜底');
-    if (!uiLoginHandler) {
-      throw new Error('会话自愈失败：仍停留在登录页（未注册 UI 登录兜底）');
+    if (await isLoginPage(page)) {
+      common.log(
+        `会话自愈后仍停留在登录页（第 ${attempt}/${attempts} 次），执行 UI 登录兜底`,
+      );
+      if (!uiLoginHandler) {
+        throw new Error('会话自愈失败：仍停留在登录页（未注册 UI 登录兜底）');
+      }
+      await uiLoginHandler(page);
+      await reloadAppPage(page, options.retryUrl);
     }
-    await uiLoginHandler(page);
-    await reloadAppPage(page, options.retryUrl);
+
+    const onLoginPage = await isLoginPage(page);
+    const modal = await isSessionErrorModalVisible(page);
+    if (!onLoginPage && !modal) {
+      return recovered;
+    }
+
+    if (attempt < attempts) {
+      const backoff = 400 * attempt;
+      common.log(
+        `会话自愈未稳定（登录页=${onLoginPage}、模态框=${modal}），${backoff}ms 后重试`,
+      );
+      await page.waitForTimeout(backoff);
+    }
   }
 
-  if (await isLoginPage(page)) {
-    throw new Error('会话自愈失败：仍停留在登录页');
-  }
-  if (await isSessionErrorModalVisible(page)) {
-    throw new Error('会话自愈失败：仍存在「Session Key 错误」模态框');
-  }
-  return recovered;
+  const onLoginPage = await isLoginPage(page);
+  const modal = await isSessionErrorModalVisible(page);
+  throw new Error(
+    '会话自愈失败（已重试 ' +
+      attempts +
+      ' 次）：登录页=' +
+      onLoginPage +
+      '、「Session Key 错误」模态框=' +
+      modal +
+      '（可用 PW_SESSION_RETRIES 调整重试次数）',
+  );
 }
 
 /**

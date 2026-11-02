@@ -124,6 +124,7 @@ function scanModule(moduleDir, exceptions) {
   let inMapping = false;
   const problems = [];
   const skipped = [];
+  const missing = [];
   for (const line of lines) {
     if (/^#{2,3}\s+.*(自动化映射|自动化文件映射)/.test(line)) {
       inMapping = true;
@@ -135,7 +136,9 @@ function scanModule(moduleDir, exceptions) {
     if (!row) continue;
     const abs = path.join(ROOT, row.specPath);
     if (!fs.existsSync(abs)) {
-      skipped.push({ spec: row.specPath, reason: 'spec 文件不存在' });
+      // #76：声明了 spec 但文件不存在，单独记入 missing（会以警告形式打印），
+      // 避免像 route RT-E-01~07 那样长期「被跳过」而不被任何人看到。
+      missing.push({ spec: row.specPath });
       continue;
     }
     if (isPendingLifecycle(row.lifecycle)) {
@@ -152,7 +155,7 @@ function scanModule(moduleDir, exceptions) {
       problems.push({ spec: row.specPath, caseId });
     }
   }
-  return { problems, skipped };
+  return { problems, skipped, missing };
 }
 
 function main() {
@@ -170,23 +173,36 @@ function main() {
 
   const report = {};
   let totalProblems = 0;
+  let totalMissing = 0;
   for (const mod of modules) {
     const result = scanModule(mod, exceptions);
     if (!result) continue;
     report[mod] = result;
     totalProblems += result.problems.length;
+    totalMissing += result.missing.length;
   }
 
   if (json) {
-    console.log(JSON.stringify({ totalProblems, report }, null, 2));
+    console.log(JSON.stringify({ totalProblems, totalMissing, report }, null, 2));
     process.exit(totalProblems > 0 ? 1 : 0);
   }
 
   for (const [mod, result] of Object.entries(report)) {
-    if (result.problems.length === 0 && result.skipped.length === 0) continue;
+    if (
+      result.problems.length === 0 &&
+      result.skipped.length === 0 &&
+      result.missing.length === 0
+    ) {
+      continue;
+    }
     console.log(`\n## ${mod}`);
     for (const p of result.problems) {
       console.log(`  ✗ ${p.caseId} 声明于映射表，但 ${p.spec} 中未出现该用例号`);
+    }
+    for (const m of result.missing) {
+      console.log(
+        `  ⚠ 警告：映射表声明了 ${m.spec}，但文件不存在（规划中条目请把生命周期标注为「待实现」）`,
+      );
     }
     for (const s of result.skipped) {
       console.log(`  - 跳过 ${s.spec}（${s.reason}）`);
@@ -194,7 +210,8 @@ function main() {
   }
   console.log(
     `\n${totalProblems === 0 ? '✅' : '❌'} 覆盖映射核对：${totalProblems} 个声明失真的用例映射` +
-      `（例外 ${Object.keys(exceptions).length} 条，见 ${path.basename(EXCEPTIONS_FILE)}）`,
+      `（例外 ${Object.keys(exceptions).length} 条，见 ${path.basename(EXCEPTIONS_FILE)}）` +
+      (totalMissing > 0 ? `；另有 ${totalMissing} 处「声明了 spec 但文件不存在」警告` : ''),
   );
   process.exit(totalProblems > 0 ? 1 : 0);
 }

@@ -226,3 +226,79 @@ entityOrgDescribe('Entity组织管理 - EM-E-69 TPM滑动步长不得大于时�
     await utils.cancelEntityForm(page);
   });
 });
+
+// ==================== EM-E-70 规则名字符集（与接口文档对齐）====================
+//
+// 接口文档 `00-common.md` §10/§11 规定 TPM/RPM 规则 name：必填、1–128 字符、
+// 字符集 `[a-zA-Z0-9_-]`、同策略内不重复。此前 Entity 表单只校验必填/长度/重复，
+// 缺字符集校验（api-key 侧已有）；2026-11-02 已按接口文档补齐前端校验，本用例固化。
+
+entityOrgDescribe(
+  'Entity组织管理 - EM-E-70 规则名字符集（接口文档对齐）',
+  (cleanup) => {
+    test('含点号 / 中文 / 空格的规则名被拦截，合法名可保存', async ({ page }) => {
+      const entityName = await utils.generateTestEntityName();
+      const typeName = await utils.generateTestEntityTypeName();
+      cleanup.trackEntityName(entityName);
+      cleanup.trackTypeName(typeName);
+      await utils.gotoEntityTypeManagementPage(page);
+      await utils.createEntityTypeViaUI(page, typeName, 'EM 规则名字符集类型', 1);
+      await utils.gotoEntityOrgManagementPage(page);
+      await utils.waitForEntityManagementShell(page);
+      await utils.waitForPageSettled(page, 800);
+      await utils.openCreateEntityDrawer(page);
+      await utils.setupEntityCreateWithRateLimit(page, entityName, typeName);
+
+      const MSG = '规则名称字符集为 [a-zA-Z0-9_-]，长度 1–128';
+
+      await test.step('含点号 tpm.rule 被拦截', async () => {
+        await utils.addEntityRateLimitRule(page, 'TPM', {
+          name: 'tpm.rule',
+          window: 1,
+          maxTokens: 100,
+          step: 1,
+        });
+        await utils.submitEntityFormExpectRateLimitError(page, MSG);
+      });
+
+      await test.step('含中文被拦截', async () => {
+        await utils.fillEntityRateLimitRuleFieldRaw(
+          page,
+          'TPM',
+          '规则名称',
+          '规则一',
+        );
+        await utils.submitEntityFormExpectRateLimitError(page, MSG);
+      });
+
+      await test.step('含空格被拦截', async () => {
+        await utils.fillEntityRateLimitRuleFieldRaw(
+          page,
+          'TPM',
+          '规则名称',
+          'tpm rule',
+        );
+        await utils.submitEntityFormExpectRateLimitError(page, MSG);
+      });
+
+      await test.step('合法名 tpm_rule-1 可通过校验并创建成功', async () => {
+        await utils.fillEntityRateLimitRuleFieldRaw(
+          page,
+          'TPM',
+          '规则名称',
+          'tpm_rule-1',
+        );
+        await utils.selectEntityMaxConcurrencyOption(page, '不限制');
+        await utils.submitEntityFormAndWaitForSuccess(
+          page,
+          utils.DRAWER_TITLE.createEntity,
+        );
+        await utils.expectCreateEntityDrawerHidden(page);
+        await utils.searchEntityByName(page, entityName);
+        await utils.expectEntityVisible(page, entityName);
+      });
+
+      await utils.cancelEntityForm(page).catch(() => {});
+    });
+  },
+);

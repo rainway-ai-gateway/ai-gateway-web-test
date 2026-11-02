@@ -52,7 +52,9 @@ const config = {
     launchOptions: {},
   },
   //scope: 'worker',
-  workers: 1,
+  // #24：默认仍是 1（后端每用户单 Session Key，多 worker 会互相顶号）；
+  // 需要并行时显式 PW_WORKERS=2/3 开启，仅推荐用于无写操作/无登录的 spec。
+  workers: Number(process.env.PW_WORKERS || 1),
   retries: process.env.CI ? 1 : 0,
 };
 
