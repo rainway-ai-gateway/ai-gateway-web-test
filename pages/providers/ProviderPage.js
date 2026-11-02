@@ -20,6 +20,7 @@ const path = require('path');
 const rc = require('../resource/ResourcePageCommon');
 const sessionUtils = require('../../utils/session');
 const readonly = require('../../utils/readonly');
+const providerApi = require('../../api/provider-api-utils');
 const { PageTableComponent } = require('../../components/layout');
 const {
   IvuMessageComponent,
@@ -1282,10 +1283,15 @@ async function filterListByName(page, keyword) {
 async function expectListFilterCleared(page, title) {
   await expect(searchInput(page, title)).toHaveValue('');
   const pageNumbers = await providerTable(page).pageNumberCount();
+  // 2026-11-02 环境清理后（providers 7 条 < 20/页）暴露：原断言「页码 > 1」依赖
+  // 环境数据量 >20，属数据规模依赖（坑位 28 同类）。改为与 API 全量总数核对：
+  // 分页页数应等于 ceil(total/20)（至少 1 页），与环境数据量解耦。
+  const total = (await providerApi.fetchProvidersViaApi(page)).length;
+  const expectedPages = Math.max(1, Math.ceil(total / 20));
   expect(
     pageNumbers,
-    '清空「' + title + '」筛选后应恢复全量分页（页码 > 1）',
-  ).toBeGreaterThan(1);
+    `清空「${title}」筛选后应恢复全量分页（API 总数 ${total} → 期望 ${expectedPages} 页，实际 ${pageNumbers} 页）`,
+  ).toBe(expectedPages);
 }
 
 /**
