@@ -77,48 +77,6 @@ async function createProviderWithCleanup(page, cleanup, overrides = {}) {
   return name;
 }
 
-/** API 创建 llm_config.provider 引用指定服务商的集群（后端校验 provider 存在且模型属于该服务商） */
-async function createReferencingCluster(page, cleanup, clusterName, providerName, models) {
-  const created = await resourceApi.createCluster(page, {
-    name: clusterName,
-    description: '自动化测试-长链路场景-引用集群',
-    basic: {
-      protocol: 'https',
-      connection: { max_idle_conn_per_rs: 2, cancel_on_client_close: false },
-      retries: { max_retry_in_cluster: 2 },
-      buffers: { req_write_buffer_size: 512 },
-      timeouts: {
-        timeout_conn_serv: 2000,
-        timeout_response_header: 60000,
-        timeout_readbody_client: 30000,
-        timeout_read_client_again: 60000,
-        timeout_write_client: 60000,
-      },
-    },
-    llm_config: {
-      provider: providerName,
-      model_endpoint: { schema: 'https', uri: '/v1/models', headers: {} },
-      models,
-      model_mappings: [],
-      keys: [],
-      key_policy: {
-        strategy: 'weighted_random',
-        max_retries: 0,
-        retry_backoff_initial: 500,
-        retry_backoff_max: 5000,
-      },
-      key_affinity: {
-        enabled: false,
-        ttl: 600,
-        redis_prefix: 'bfe:ai:key_affinity',
-        penalty_enable: true,
-      },
-    },
-  });
-  expect(created, 'API 造数引用集群应成功').toBe(true);
-  return created;
-}
-
 /** 全局路由规则「读-改-写」：在现有规则集上追加/替换一条指向目标集群的规则 */
 async function upsertGlobalRuleTargeting(page, ruleName, clusterName, model) {
   const current = await routeApi.getGlobalRouteRulesViaApi(page);
@@ -166,7 +124,14 @@ test.describe('长链路场景 - 服务商/集群/路由配置链 @journey', () 
     const ruleName = 'scl01_rule_' + Date.now().toString(36);
 
     await test.step('前置：引用集群 + 全局规则指向该集群', async () => {
-      await createReferencingCluster(page, resourceCleanup, clusterName, providerName, [MODEL_CHAT]);
+      expect(
+        await resourceApi.createProviderReferencingCluster(page, {
+          name: clusterName,
+          provider: providerName,
+          models: [MODEL_CHAT],
+        }),
+        'API 造数引用集群应成功',
+      ).toBe(true);
       await upsertGlobalRuleTargeting(page, ruleName, clusterName, MODEL_CHAT);
     });
 
@@ -231,7 +196,14 @@ test.describe('长链路场景 - 服务商/集群/路由配置链 @journey', () 
     await test.step('前置：服务商←集群←全局规则三层引用', async () => {
       // 先导航到产品页（确立会话域，后续 raw DELETE 才能读 localStorage 取 session）
       await pp.gotoProvidersPage(page);
-      await createReferencingCluster(page, resourceCleanup, clusterName, providerName, [MODEL_CHAT]);
+      expect(
+        await resourceApi.createProviderReferencingCluster(page, {
+          name: clusterName,
+          provider: providerName,
+          models: [MODEL_CHAT],
+        }),
+        'API 造数引用集群应成功',
+      ).toBe(true);
       await upsertGlobalRuleTargeting(page, ruleName, clusterName, MODEL_CHAT);
     });
 

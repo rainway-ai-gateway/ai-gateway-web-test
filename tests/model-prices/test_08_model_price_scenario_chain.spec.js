@@ -85,41 +85,11 @@ test.describe('长链路场景 - SC-L-04 模型定价配置传播链 @journey', 
     expect(data, 'API 造数服务商应成功').not.toBeNull();
     providerCleanup.trackName(providerName);
 
-    const created = await resourceApi.createCluster(page, {
+    const created = await resourceApi.createProviderReferencingCluster(page, {
       name: clusterName,
+      provider: providerName,
+      models: [MODEL_CHAT],
       description: '自动化测试-长链路场景-定价链集群',
-      basic: {
-        protocol: 'https',
-        connection: { max_idle_conn_per_rs: 2, cancel_on_client_close: false },
-        retries: { max_retry_in_cluster: 2 },
-        buffers: { req_write_buffer_size: 512 },
-        timeouts: {
-          timeout_conn_serv: 2000,
-          timeout_response_header: 60000,
-          timeout_readbody_client: 30000,
-          timeout_read_client_again: 60000,
-          timeout_write_client: 60000,
-        },
-      },
-      llm_config: {
-        provider: providerName,
-        model_endpoint: { schema: 'https', uri: '/v1/models', headers: {} },
-        models: [MODEL_CHAT],
-        model_mappings: [],
-        keys: [],
-        key_policy: {
-          strategy: 'weighted_random',
-          max_retries: 0,
-          retry_backoff_initial: 500,
-          retry_backoff_max: 5000,
-        },
-        key_affinity: {
-          enabled: false,
-          ttl: 600,
-          redis_prefix: 'bfe:ai:key_affinity',
-          penalty_enable: true,
-        },
-      },
     });
     expect(created, 'API 造数引用集群应成功').toBe(true);
   });

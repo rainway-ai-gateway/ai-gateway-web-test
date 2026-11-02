@@ -56,14 +56,14 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── markdown-report-reporter.js    # Playwright reporter（自动出报告）
 │   └── capture-user-manual.spec.js    # 用户手册截图
 ├── tests/                             # 测试用例（只放 .spec.js）
-│   ├── user/                          # 12 个 spec
+│   ├── user/                          # 13 个 spec
 │   ├── entity-type/                   # 6 个 spec
 │   ├── entity-management/             # 15 个 spec
-│   ├── api-key/                       # 8 个 spec
+│   ├── api-key/                       # 9 个 spec
 │   ├── cluster/                       # 18 个 spec（含 BC-J/BC-E/BC-C 场景用例）
-│   ├── providers/                     # 9 个 spec
+│   ├── providers/                     # 10 个 spec
 │   ├── model-prices/                  # 9 个 spec
-│   ├── route/                         # 16 个 spec
+│   ├── route/                         # 17 个 spec
 │   ├── epp-pool/                      # 5 个 spec
 │   ├── ai-cache/                      # 9 个 spec
 │   ├── traffic-mirror/                # 9 个 spec
@@ -116,14 +116,14 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 
 | 模块 | 文档目录 | 测试目录 | spec 数 | 说明 |
 | ------ | ---------- | ---------- | ------ | ------ |
-| 用户管理 | `docs/user-management/` | `tests/user/` | 12 | 用户 CRUD、Token、登录认证、角色与只读视角 |
+| 用户管理 | `docs/user-management/` | `tests/user/` | 13 | 用户 CRUD、Token、登录认证、角色与只读视角 |
 | Entity 类型 | `docs/entity-type/` | `tests/entity-type/` | 6 | 类型列表、编辑、删除、只读视角 |
 | Entity 组织 | `docs/entity-management/` | `tests/entity-management/` | 15 | 组织 CRUD、配额/限流校验、跨模块串联、描述字段、只读视角、模型白名单/黑名单、配额周期与级别筛选 |
-| API-Key | `docs/api-key/` | `tests/api-key/` | 8 | Key CRUD、配额与限流校验、详情一致性、名称校验、只读视角 |
+| API-Key | `docs/api-key/` | `tests/api-key/` | 9 | Key CRUD、配额与限流校验、详情一致性、名称校验、只读视角 |
 | AI 业务集群 | `docs/business-cluster/` | `tests/cluster/` | 18 | 5 步向导、大模型配置、Key 亲和、EPP 均衡模式、字段校验、只读视角；跨模块闭环（02g）、交互边界与引用保护（02h）、并发与竞态（02i） |
-| 模型服务商 | `docs/providers/` | `tests/providers/` | 9 | 实例来源、模型发现、Keys、分段计价、引用保护、只读视角 |
-| 模型定价 | `docs/model-prices/` | `tests/model-prices/` | 9 | 定价 CRUD、YAML 导入、分时段价格、精度与键级合并、只读视角 |
-| 路由管理 | `docs/route-management/` | `tests/route/` | 16 | 路由表、路由规则、表达式条件、条件原语面板、只读视角 |
+| 模型服务商 | `docs/providers/` | `tests/providers/` | 10 | 实例来源、模型发现、Keys、分段计价、引用保护、只读视角 |
+| 模型定价 | `docs/model-prices/` | `tests/model-prices/` | 10 | 定价 CRUD、YAML 导入、分时段价格、精度与键级合并、只读视角 |
+| 路由管理 | `docs/route-management/` | `tests/route/` | 17 | 路由表、路由规则、表达式条件、条件原语面板、只读视角 |
 | EPP 实例池与调度 | `docs/epp-pool/` | `tests/epp-pool/` | 5 | 实例池管理、调度分配、只读视角 |
 | AI 缓存规则 | `docs/ai-cache/` | `tests/ai-cache/` | 9 | 集合级规则双模式、语义缓存、语义设置、字段校验、拖拽排序、只读视角 |
 | 流量镜像规则 | `docs/traffic-mirror/` | `tests/traffic-mirror/` | 9 | 集合级规则双模式、KV/请求体/请求头注入、字段校验、拖拽排序、只读视角 |

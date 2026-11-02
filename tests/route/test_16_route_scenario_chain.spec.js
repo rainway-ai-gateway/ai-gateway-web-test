@@ -65,42 +65,13 @@ test.describe('长链路场景 - SC-L-05 路由目标集群失效切换链 @jour
     resourceCleanup.trackBusinessCluster(clusterName);
     const ruleName = 'scl05_rule_' + Date.now().toString(36);
 
-    const clusterPayload = (name) => ({
-      name,
-      description: '自动化测试-长链路场景-失效切换',
-      basic: {
-        protocol: 'https',
-        connection: { max_idle_conn_per_rs: 2, cancel_on_client_close: false },
-        retries: { max_retry_in_cluster: 2 },
-        buffers: { req_write_buffer_size: 512 },
-        timeouts: {
-          timeout_conn_serv: 2000,
-          timeout_response_header: 60000,
-          timeout_readbody_client: 30000,
-          timeout_read_client_again: 60000,
-          timeout_write_client: 60000,
-        },
-      },
-      llm_config: {
+    const createNamedCluster = (name) =>
+      resourceApi.createProviderReferencingCluster(page, {
+        name,
         provider: providerName,
-        model_endpoint: { schema: 'https', uri: '/v1/models', headers: {} },
         models: [MODEL],
-        model_mappings: [],
-        keys: [],
-        key_policy: {
-          strategy: 'weighted_random',
-          max_retries: 0,
-          retry_backoff_initial: 500,
-          retry_backoff_max: 5000,
-        },
-        key_affinity: {
-          enabled: false,
-          ttl: 600,
-          redis_prefix: 'bfe:ai:key_affinity',
-          penalty_enable: true,
-        },
-      },
-    });
+        description: '自动化测试-长链路场景-失效切换',
+      });
 
     const putRules = async (mutate) => {
       const current = await routeApi.getGlobalRouteRulesViaApi(page);
@@ -125,7 +96,7 @@ test.describe('长链路场景 - SC-L-05 路由目标集群失效切换链 @jour
       expect(data, 'API 造数服务商应成功').not.toBeNull();
       providerCleanup.trackName(providerName);
 
-      const created = await resourceApi.createCluster(page, clusterPayload(clusterName));
+      const created = await createNamedCluster(clusterName);
       expect(created, 'API 造数集群应成功').toBe(true);
 
       await putRules((rules) => [
@@ -186,7 +157,7 @@ test.describe('长链路场景 - SC-L-05 路由目标集群失效切换链 @jour
     });
 
     await test.step('4.（cluster 恢复）重建同名集群：规则零修改自动重新命中', async () => {
-      const created = await resourceApi.createCluster(page, clusterPayload(clusterName));
+      const created = await createNamedCluster(clusterName);
       expect(created, '重建同名集群应成功').toBe(true);
 
       // 规则 targets 未变（last-write-wins / 名字松耦合引用）
