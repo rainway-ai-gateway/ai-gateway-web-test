@@ -144,9 +144,13 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
     });
   });
 
-  test('RT-D-28 列排序激活时拖拽：按源下标移动正确的规则', async ({ page }) => {
+  // 2026-11-02（#79 决策 ①）：排序/列筛选激活时**禁用拖拽**——视图顺序 ≠ 优先级顺序，
+  // 允许拖拽会改错行。产品已在 pageTable 层统一实现（canDrag = draggable && 无排序 && 无列筛选）。
+  test('RT-D-28 列排序激活时拖拽被禁用：顺序不变、清除排序后恢复', async ({
+    page,
+  }) => {
     let baseline = [];
-    let visualOrder = [];
+    let sortedOrder = [];
 
     await test.step('前置：进入编辑模式并记录基线顺序', async () => {
       await enterGlobalRulesEditMode(page);
@@ -155,49 +159,31 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
         baseline.length,
         `Global 路由表规则不足 ${MIN_RULES_FOR_DRAG} 条，无法验证排序态拖拽`,
       ).toBeGreaterThanOrEqual(MIN_RULES_FOR_DRAG);
+      await utils.expectRuleRowsDraggable(page, true);
     });
 
-    await test.step('1. 按「规则名」倒序排序，记录可视顺序', async () => {
+    await test.step('1. 按「规则名」倒序：可视顺序改变且行不再可拖拽', async () => {
       await utils.sortRuleTableByColumn(page, RULE_NAME_COLUMN, 'desc');
-      visualOrder = await utils.getRuleNamesInOrder(page);
-      expect(
-        visualOrder.slice().sort().join('|'),
-        '列排序未改变可视顺序，无法验证排序态拖拽',
-      ).toBe(baseline.slice().sort().join('|'));
-      expect(visualOrder).not.toEqual(baseline);
+      sortedOrder = await utils.getRuleNamesInOrder(page);
+      expect(sortedOrder.slice().sort()).toEqual(baseline.slice().sort());
+      expect(sortedOrder).not.toEqual(baseline);
+      await utils.expectRuleRowsDraggable(page, false);
     });
 
-    await test.step('2. 拖拽可视首行到可视末行：按源下标落到可视末行的原下标处', async () => {
-      const sourceIndexOfFirst = baseline.indexOf(visualOrder[0]);
-      const sourceIndexOfLast = baseline.indexOf(
-        visualOrder[visualOrder.length - 1],
-      );
-      const expectedOrder = utils.moveRuleToIndex(
-        baseline,
-        sourceIndexOfFirst,
-        sourceIndexOfLast,
-      );
-      const visuallyIndexedOrder = utils.moveRuleToIndex(
-        baseline,
-        0,
-        visualOrder.length - 1,
-      );
-
-      await utils.dragRuleRow(page, 0, visualOrder.length - 1);
-      await utils.expectRuleNamesInOrder(page, expectedOrder);
-
-      if (
-        JSON.stringify(expectedOrder) !== JSON.stringify(visuallyIndexedOrder)
-      ) {
-        // 负向对照：若按可视下标派发，移动的将是另一条规则
-        expect(
-          await utils.getRuleNamesInOrder(page),
-          '排序态下移动的规则不是可视首行对应的规则',
-        ).not.toEqual(visuallyIndexedOrder);
-      }
+    await test.step('2. 尝试拖拽：顺序保持不变', async () => {
+      await utils.dragRuleRow(page, 0, sortedOrder.length - 1);
+      await page.waitForTimeout(500);
+      await utils.expectRuleNamesInOrder(page, sortedOrder);
+      await utils.expectSubmitAndEffectDisabled(page, true);
     });
 
-    await test.step('3. 退出编辑模式放弃本地修改，后端 Global 路由规则未变化', async () => {
+    await test.step('3. 清除排序（再次点击同一排序图标）：恢复可拖拽与原始顺序', async () => {
+      await utils.sortRuleTableByColumn(page, RULE_NAME_COLUMN, 'desc');
+      await utils.expectRuleRowsDraggable(page, true);
+      await utils.expectRuleNamesInOrder(page, baseline);
+    });
+
+    await test.step('4. 退出编辑模式，后端 Global 路由规则未变化', async () => {
       await utils.clickExitEditMode(page);
       await utils.expectRouteRulesViewMode(page);
       await utils.expectRuleRowsDraggable(page, false);
@@ -205,7 +191,7 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
     });
   });
 
-  test('RT-D-28 列搜索筛选激活时拖拽：按源下标移动正确的规则', async ({
+  test('RT-D-28 列搜索筛选激活时拖拽被禁用：清空搜索后顺序不变', async ({
     page,
   }) => {
     let baseline = [];
@@ -219,53 +205,31 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
       ).toBeGreaterThanOrEqual(MIN_RULES_FOR_DRAG);
     });
 
-    await test.step('1. 按规则名子串搜索，仅展示命中的行', async () => {
+    await test.step('1. 列搜索激活：仅展示命中行且行不可拖拽', async () => {
       const keyword = pickFilterableKeyword(baseline);
       expect(
         keyword,
         '规则名之间无可用作筛选的子串，无法构造列搜索场景',
       ).toBeTruthy();
       await utils.searchRuleTableByColumn(page, RULE_NAME_COLUMN, keyword);
-      await utils.expectRuleNamesInOrder(
-        page,
-        filterNamesByKeyword(baseline, keyword),
-      );
-    });
-
-    await test.step('2. 拖拽可视首行到可视末行：按源下标落到可视末行的原下标处', async () => {
       const visualOrder = await utils.getRuleNamesInOrder(page);
       expect(visualOrder.length).toBeGreaterThanOrEqual(2);
-      const sourceIndexOfFirst = baseline.indexOf(visualOrder[0]);
-      const sourceIndexOfLast = baseline.indexOf(
-        visualOrder[visualOrder.length - 1],
-      );
-      const expectedOrder = utils.moveRuleToIndex(
-        baseline,
-        sourceIndexOfFirst,
-        sourceIndexOfLast,
-      );
-      const visuallyIndexedOrder = utils.moveRuleToIndex(
-        baseline,
-        0,
-        visualOrder.length - 1,
-      );
-
-      await utils.dragRuleRow(page, 0, visualOrder.length - 1);
-      await utils.searchRuleTableByColumn(page, RULE_NAME_COLUMN, '');
-      await utils.expectRuleNamesInOrder(page, expectedOrder);
-
-      if (
-        JSON.stringify(expectedOrder) !== JSON.stringify(visuallyIndexedOrder)
-      ) {
-        // 负向对照：若按可视下标派发，移动的将是另一条规则
-        expect(
-          await utils.getRuleNamesInOrder(page),
-          '筛选态下移动的规则不是可视首行对应的规则',
-        ).not.toEqual(visuallyIndexedOrder);
-      }
+      await utils.expectRuleRowsDraggable(page, false);
     });
 
-    await test.step('3. 退出编辑模式放弃本地修改，后端 Global 路由规则未变化', async () => {
+    await test.step('2. 尝试拖拽并清空搜索：顺序与基线一致（未发生移动）', async () => {
+      const visualOrder = await utils.getRuleNamesInOrder(page);
+      await utils.dragRuleRow(page, 0, visualOrder.length - 1);
+      await page.waitForTimeout(500);
+      await utils.searchRuleTableByColumn(page, RULE_NAME_COLUMN, '');
+      await utils.expectRuleNamesInOrder(page, baseline);
+    });
+
+    await test.step('3. 清除搜索后恢复可拖拽', async () => {
+      await utils.expectRuleRowsDraggable(page, true);
+    });
+
+    await test.step('4. 退出编辑模式，后端 Global 路由规则未变化', async () => {
       await utils.clickExitEditMode(page);
       await utils.expectRouteRulesViewMode(page);
       await utils.expectRuleRowsDraggable(page, false);
