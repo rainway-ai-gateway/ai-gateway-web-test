@@ -77,8 +77,8 @@ const LABEL = {
   name: '名称',
   description: '描述',
   instanceSource: '实例来源',
-  // 2026-10-27 下拉改造后，编辑抽屉与详情页的字段/只读标签统一为「K8s 实例池」
-  k8sPoolName: 'K8s 实例池',
+  // 2026-10-26「bugfix」改为 iView Select + 标签「K8s 池名称」（原 el-select「K8s 实例池」作废）
+  k8sPoolName: 'K8s 池名称',
   instanceMode: '实例形态',
   instanceList: '实例IP列表',
   domain: '服务商域名',
@@ -142,14 +142,14 @@ const DOC = {
   instanceSourceManual: '人工维护实例池（instance_pool）',
   instanceSourceK8s: 'K8s 实例池（k8s_pool）',
   k8sPoolSelectPlaceholder: '请选择 K8s 实例池',
-  k8sPoolNameRequired: '请选择 K8s 实例池',
+  k8sPoolNameRequired: '请填写 K8s 池名称',
   k8sPoolNoOptions: '暂无可用的 K8s 实例池',
   k8sPoolNotExistSuffix: '池不存在',
   // PR-D-04/05：详情页 K8s 分支只读标签与实例表（数据源 GET /k8s_pools/{name}）
-  k8sPoolReadonlyLabel: 'K8s 实例池',
+  k8sPoolReadonlyLabel: 'K8s 池名称',
   k8sPoolInstanceHeaders: ['实例地址', '端口', '权重'],
   // 空池（200 + instances: []）与池不存在（404）两种降级文案
-  k8sPoolEmpty: '当前池暂无实例（空池为合法状态）',
+  k8sPoolEmpty: '暂无镜像实例（池不存在 ≡ 零实例）',
   k8sPoolNotFound: 'K8s 池不存在（≡ 零实例）',
   instanceCreateButton: '创建',
 };

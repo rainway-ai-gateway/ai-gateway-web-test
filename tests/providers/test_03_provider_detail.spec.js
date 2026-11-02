@@ -23,10 +23,10 @@
  *   未配置展示「未配置」提示、不渲染空表；Card 仅展示不含编辑入口）
  * - PR-D-03：详情页协议路径映射卡片展示（已配置展示映射，未配置不展示）
  * - PR-D-04：详情页 K8s 分支展示（实例来源 = K8s 实例池（k8s_pool）、只读标签
- *   「K8s 实例池」、实例表「实例地址/端口/权重」数据源为 GET /k8s_pools/{name}
+ *   「K8s 池名称」、实例表「实例地址/端口/权重」数据源为 GET /k8s_pools/{name}
  *   的实时 instances，逐行一致；只读卡片形态）
  * - PR-D-05：详情页 K8s 池实例列表实时读取与降级（场景 ① 池实例变更后重新打开详情
- *   即为最新数据；场景 ② 空池文案「当前池暂无实例（空池为合法状态）」；
+ *   即为最新数据；场景 ② 空池文案「暂无镜像实例（池不存在 ≡ 零实例）」；
  *   场景 ③ 池不存在（404）文案「K8s 池不存在（≡ 零实例）」）
  *
  * 文档偏差记录（docs/providers/02 验收优先，已保留 02 验收断言）：
@@ -57,7 +57,7 @@
  * `src/utils/request.js` 的响应拦截器把错误响应 `return error.response`（**resolve**，
  * 不 reject），因此 `then(res => { if (res.status !== 200) return; })` 直接返回，
  * catch 永不执行 → `k8sPoolState` 恒为空 → 实例区始终显示空池文案
- * 「当前池暂无实例（空池为合法状态）」。实测：GET /k8s_pools/{name} 返回 404，
+ * 「暂无镜像实例（池不存在 ≡ 零实例）」。实测：GET /k8s_pools/{name} 返回 404，
  * 详情实例区文案仍为空池文案（见 PR-D-05 场景 ③ 失败截图）。
  *
  * 运行：npx playwright test tests/providers/test_03_provider_detail.spec.js
@@ -525,7 +525,7 @@ test.describe('模型服务商 - PR-D-04 详情页 K8s 分支展示', () => {
     await poolCleanup.cleanup(page);
   });
 
-  test('详情进入 K8s 分支：实例来源、只读标签「K8s 实例池」、实例表与 GET /k8s_pools/{name} 逐行一致', async ({
+  test('详情进入 K8s 分支：实例来源、只读标签「K8s 池名称」、实例表与 GET /k8s_pools/{name} 逐行一致', async ({
     page,
   }) => {
     const response = await pp.openViewDrawerWaitingK8sPool(
@@ -535,7 +535,7 @@ test.describe('模型服务商 - PR-D-04 详情页 K8s 分支展示', () => {
     );
     await pp.expectViewScopeVisible(page);
 
-    await test.step('预期 1/2/3：进入 K8s 分支，实例来源与只读标签「K8s 实例池」正确', async () => {
+    await test.step('预期 1/2/3：进入 K8s 分支，实例来源与只读标签「K8s 池名称」正确', async () => {
       expect(response.status()).toBe(200);
       await pp.expectViewK8sPool(page, poolName);
     });
@@ -628,7 +628,7 @@ test.describe('模型服务商 - PR-D-05 详情页 K8s 池实例列表实时读�
     });
   });
 
-  test('场景 ②：空池（200 + instances: []）展示「当前池暂无实例（空池为合法状态）」', async ({
+  test('场景 ②：空池（200 + instances: []）展示「暂无镜像实例（池不存在 ≡ 零实例）」', async ({
     page,
   }) => {
     const { providerName, poolName } = await setupK8sProvider({

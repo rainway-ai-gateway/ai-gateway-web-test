@@ -46,9 +46,9 @@
  * - PR-C-19 协议路径映射-清空映射须显式提交空对象：删除全部映射行后 PATCH 请求体
  *   显式含 protocol_paths:{}（不得省略或为 null）；重开保持空态，未修改再提交仍为 {}。
  * - PR-C-20 实例来源单选切换：默认 `instance_pool`；下拉仅两项（人工维护 / K8s 池）；
- *   切 k8s 渲染「K8s 实例池」可搜索下拉（带必填 *）、人工实例表格隐藏；切回后表格恢复；
+ *   切 k8s 渲染「K8s 池名称」可搜索下拉（带必填 *）、人工实例表格隐藏；切回后表格恢复；
  *   提交体 instance_source 与所选一致。
- * - PR-C-21 K8s 池模式不展示镜像实例列表：k8s 模式仅「K8s 实例池」下拉，无实例表格 /
+ * - PR-C-21 K8s 池模式不展示镜像实例列表：k8s 模式仅「K8s 池名称」下拉，无实例表格 /
  *   无「+ 创建」/ 无删除入口；下拉选池后提交成功，提交体含 k8s_pool_name、不含
  *   k8s_instance_pool（**编辑既有 instance_pool 服务商后切换来源提交**，即 2026-10-26 缺陷的回归用例）。
  * - PR-C-22 切回人工维护实例池原值保留：人工模式填两行 → 切 k8s 并选池 → 切回，行值与可编辑性保留，
@@ -59,7 +59,7 @@
  *   池不存在 ≡ 零实例的接口层覆盖见 PR-C-23，编辑回显见 PR-C-25 场景 ③）。
  * - PR-C-25 K8s 实例池下拉选项与接口一致及空池降级：场景 ① 选项与 GET /k8s_pools 完全一致、
  *   可搜索、无辅助小字；场景 ② 系统无池时下拉为禁用项「暂无可用的 K8s 实例池」、留空提交
- *   提示「请选择 K8s 实例池」；场景 ③ 已保存池名不存在时追加「<名>(池不存在)」并保持选中，
+ *   提示「请填写 K8s 池名称」；场景 ③ 已保存池名不存在时追加「<名>(池不存在)」并保持选中，
  *   提交体仍含原 k8s_pool_name。
  *
  * 数据隔离：K8s 池经 InnerAPI 造数（`api/k8s-pool-api-utils.js`，命名前缀 qa_pool_），
@@ -1362,7 +1362,7 @@ test.describe('模型服务商 - PR-C-20 实例来源单选切换', () => {
       ]);
     });
 
-    await test.step('预期 2：切 k8s → 渲染「K8s 实例池」可搜索下拉、人工实例表格隐藏', async () => {
+    await test.step('预期 2：切 k8s → 渲染「K8s 池名称」可搜索下拉、人工实例表格隐藏', async () => {
       await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
       await pp.expectK8sPoolNameVisible(page);
       await pp.expectK8sPoolRequired(page);
@@ -1588,7 +1588,7 @@ test.describe('模型服务商 - PR-C-23 提交体不含 k8s_instance_pool', () 
 
 test.describe('模型服务商 - PR-C-24 k8s_pool_name 引用池无需预先存在（跳过）', () => {
   // 跳过原因（docs/providers/02-功能测试用例/02-创建与编辑.md PR-C-24，2026-10-28 判定）：
-  // UI 已无手填入口 —— 「K8s 实例池」改为下拉选择（选项来自 GET /k8s_pools），
+  // UI 已无手填入口 —— 「K8s 池名称」为下拉选择（选项来自 GET /k8s_pools），
   // 「填写不存在的池名」在 UI 层不可达；后端「池不存在 ≡ 零实例」契约未变，
   // 该场景的接口层覆盖见 PR-C-23，编辑已保存但池被删除的回显见 PR-C-25 场景 ③。
   // 恢复条件：重新开放手填入口。
@@ -1690,7 +1690,7 @@ test.describe('模型服务商 - PR-C-25 K8s 实例池下拉选项与接口一�
         await pp.expectK8sPoolNoOptions(page);
       });
 
-      await test.step('预期：留空提交被拦截，提示「请选择 K8s 实例池」', async () => {
+      await test.step('预期：留空提交被拦截，提示「请填写 K8s 池名称」', async () => {
         await expectSubmitBlocked(page);
         await pp.expectK8sPoolValidationError(
           page,

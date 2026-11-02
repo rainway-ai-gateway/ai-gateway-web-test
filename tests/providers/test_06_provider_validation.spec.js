@@ -1236,8 +1236,9 @@ test.describe('模型服务商 - PR-V-17 protocol_paths 路径格式校验', () 
 // ===================================================================
 // PR-V-19 ~ PR-V-21：K8s 实例池相关校验
 // 设计见 docs/providers/02-功能测试用例/06-字段校验矩阵.md
-// 2026-10-27 变更：池名由手填输入框改为可搜索下拉（选项来自 GET /k8s_pools），
-// 留空提示「请选择 K8s 实例池」，长度上限 128（`K8sPoolNameRegCheck`）。
+// 2026-10-26「bugfix」：池名为 iView Select 可搜索下拉（选项来自 GET /k8s_pools），
+// 字段标签「K8s 池名称」，留空提示「请填写 K8s 池名称」；UI 长度规则 1–64
+//（`k8sPoolNameRule`，仅前端）；接口层上限 128 不变（下方经 API 验证）。
 // ===================================================================
 
 const k8sPoolApi = require('../../api/k8s-pool-api-utils');
@@ -1277,12 +1278,12 @@ test.describe('模型服务商 - PR-V-19 k8s_pool_name 校验', () => {
     await poolCleanup.cleanup(page);
   });
 
-  test('k8s 模式留空拦截「请选择 K8s 实例池」；长度上限 128；选项来自接口；切回人工模式不校验', async ({
+  test('k8s 模式留空拦截「请填写 K8s 池名称」；UI 规则 1–64 / 接口上限 128；选项来自接口；切回人工模式不校验', async ({
     page,
   }) => {
     const poolName = await createK8sPool(page, poolCleanup);
 
-    await test.step('预期 1：k8s 模式留空提交被拦截，提示「请选择 K8s 实例池」', async () => {
+    await test.step('预期 1：k8s 模式留空提交被拦截，提示「请填写 K8s 池名称」', async () => {
       await openCreateAndFillBasic(
         page,
         uniqueName('provider'),
