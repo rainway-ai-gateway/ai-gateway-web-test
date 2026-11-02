@@ -285,7 +285,8 @@ async function expectEntityTypeVisibleInAllPages(
 }
 
 async function clickDeleteEntityTypeBtn(page, typeName) {
-  await entityTypeTable(page).rowAction(typeName, '删除').click();
+  // 数据量增长后新类型可能不在第 1 页：clickRowAction 内部逐页查找后再点
+  await entityTypeTable(page).clickRowAction(typeName, '删除');
   await page.waitForTimeout(500);
 }
 

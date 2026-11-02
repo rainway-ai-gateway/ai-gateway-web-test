@@ -59,6 +59,15 @@ class PageTableComponent {
   rowAction(rowText, buttonName) {
     return this.rowByText(rowText).getByRole('button', { name: buttonName });
   }
+  /**
+   * 行内按钮点击（分页无关，2026-11-02）：先按 expectRowVisible 逐页找到行，
+   * 再点击其行内按钮。数据量增长后新行可能不在第 1 页，直接 rowAction().click()
+   * 会在第 1 页超时（EM-T-12 实测）。
+   */
+  async clickRowAction(text, buttonName, timeout = 10000) {
+    await this.expectRowVisible(text, timeout);
+    await this.rowAction(text, buttonName).click();
+  }
   /** 读取某行的单元格文本（按列顺序）；OL-L-13 等「接口 ↔ 列表逐字段比对」用 */
   async rowCellTexts(rowText) {
     const cells = this.rowByText(rowText).locator('td');
@@ -167,17 +176,44 @@ class PageTableComponent {
       ).toBeVisible();
     }
   }
+  /**
+   * 断言行在表格中可见（分页无关）。
+   *
+   * 2026-11-02 数据量增长后暴露的潜伏缺陷：前端分页 20 条/页且新建数据排在末位，
+   * 「先筛选再断言」在筛选命中 >20 行时目标可能落在第 2 页起，第 1 页断言必然超时
+   * （EM-E-10 / EM-T-01b 等用例因此随环境数据积累从绿转红，与产品无关）。
+   * 改为：当前页未命中则点「下一页」继续找，直到超时；断言强度不变（仍要求可见）。
+   */
   async expectRowVisible(text, timeout = 15000) {
-    try {
-      await (0, test_1.expect)(this.rowByText(text)).toBeVisible({ timeout });
-    } catch (error) {
+    const deadline = Date.now() + timeout;
+    let lastError = null;
+    while (Date.now() < deadline) {
       try {
-        error.message += await this.describeRowLookupFailure(text);
-      } catch (diagnoseError) {
-        // 诊断补充失败不影响原始断言错误
+        await (0, test_1.expect)(this.rowByText(text)).toBeVisible({
+          timeout: 2000,
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        const nextBtn = this.pagination().locator('.btn-next');
+        const hasNext =
+          (await nextBtn.count()) > 0 &&
+          (await nextBtn.isEnabled().catch(() => false));
+        if (hasNext) {
+          await nextBtn.click();
+          await this.page.waitForTimeout(800);
+        } else {
+          // 已在末页：等待数据刷新后重试（保留原断言的收敛语义）
+          await this.page.waitForTimeout(500);
+        }
       }
-      throw error;
     }
+    try {
+      lastError.message += await this.describeRowLookupFailure(text);
+    } catch (diagnoseError) {
+      // 诊断补充失败不影响原始断言错误
+    }
+    throw lastError;
   }
   /**
    * 行定位失败时的现场补充：rowByText 用 .or() 联合两个 locator，
