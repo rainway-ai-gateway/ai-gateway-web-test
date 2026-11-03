@@ -130,7 +130,7 @@ test.describe('模型定价 - MP-D-01 详情页全字段与接口数据一致性
  * 断言极小价格（7.6234102728e-08）不被截成 0、不拉成超长十进制，且与接口数值相等。
  */
 test.describe('模型定价 - MP-D-02 详情页极小价格按量级展示', () => {
-  const TINY_PRICE = 7.6234102728e-8;
+  const TINY_PRICE = 7.6234102728e-11; // 2026-11-03 单位口径：×1e6 = 7.6e-5 < 1e-4，展示走科学计数法
   const provider = 'qa_tiny_' + Date.now();
   const model = 'qa-tiny-model';
   let createdId;
@@ -163,12 +163,16 @@ test.describe('模型定价 - MP-D-02 详情页极小价格按量级展示', () 
     const entry = entries.find((e) => e.key === 'output_cost_per_token');
     expect(entry, '详情价格表应含 output_cost_per_token').toBeTruthy();
 
-    const text = String(entry.value).replace(/^¥/, '').trim();
+    // 2026-11-03 单位口径：token 计价项展示为「¥<百万单位> / 百万tokens」，取打头数值
+    const cell = String(entry.value).trim();
+    const m = cell.match(/^[¥]?\s*([\d.eE+-]+)/);
+    expect(m, '详情价格单元格应含数值').toBeTruthy();
+    const text = m[1];
     // 1. 不得被截成 0，也不得拉成超长十进制（toFixed(20) 类）
     expect(text, '不应被截成 0').not.toMatch(/^0(\.0*)?$/);
     expect(text.length, '不应是超长十进制').toBeLessThan(24);
-    // 2. 与接口数值相等（相对误差 1e-6 内）
-    expect(Number(text) / TINY_PRICE).toBeCloseTo(1, 6);
+    // 2. 与接口数值等价：展示为「元/百万 tokens」= 存储值 ×1e6（相对误差 1e-6 内）
+    expect(Number(text) / (TINY_PRICE * 1e6)).toBeCloseTo(1, 6);
     // 3. 量级展示：科学计数法（文档预期 1）
     expect(text, '极小价格应以科学计数法展示').toMatch(/e/i);
   });
