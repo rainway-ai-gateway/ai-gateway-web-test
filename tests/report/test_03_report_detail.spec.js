@@ -30,7 +30,8 @@ const { test, expect } = require('@playwright/test');
 const rp = require('../../pages/report/ReportPage');
 
 /**
- * 构造一条明细 fixture（字段口径与 GET report/logs 返回的 item 一致，共 49 字段）
+ * 构造一条明细 fixture（字段口径与 GET report/logs 返回的 item 一致，共 51 字段；
+ * 2026-11-03 issue #1479 新增 ai_price_miss / ai_price_warn）
  */
 function buildDetailItem(overrides = {}) {
   return {
@@ -74,6 +75,8 @@ function buildDetailItem(overrides = {}) {
     req_headers: '[{"X-Test":["1"]}]',
     res_headers: '[{"Server":["nginx"]}]',
     ai_cache_status: 'hit',
+    ai_price_miss: null,
+    ai_price_warn: null,
     mirror_hit: true,
     mirror_cluster: 'mirror-bj',
     ai_intent_question: 'task_type',
@@ -134,7 +137,7 @@ function orDash(value) {
 }
 
 /**
- * 由 item 推导详情抽屉 38 个字段项的期望展示值
+ * 由 item 推导详情抽屉 40 个字段项的期望展示值（2026-11-03 起含缺价两项）
  */
 function expectedDetailValues(item) {
   return {
@@ -169,6 +172,16 @@ function expectedDetailValues(item) {
     'Header Host': orDash(item.header_host),
     原始URI: orDash(item.origin_uri),
     缓存状态: fmtCacheStatus(item.ai_cache_status),
+    是否缺价:
+      item.ai_price_miss == null
+        ? '-'
+        : item.ai_price_miss
+          ? '是'
+          : '否',
+    缺价形态:
+      item.ai_price_warn == null
+        ? '-'
+        : rp.DOC.priceWarnTexts[item.ai_price_warn] || String(item.ai_price_warn),
     镜像命中: fmtMirrorHitDetail(item),
     意图问题: orDash(item.ai_intent_question),
     意图答案: orDash(item.ai_intent_answer),
@@ -495,7 +508,7 @@ test.describe('数据报表 - RP-L-15 缓存状态空串展示未启用', () => 
 });
 
 test.describe('数据报表 - RP-L-21 详情抽屉全字段展示', () => {
-  test('验证抽屉覆盖接口 49 字段：38 个字段项 + 4 个 JSON 区块', async ({
+  test('验证抽屉覆盖接口 51 字段：40 个字段项 + 4 个 JSON 区块（2026-11-03 起含缺价两项）', async ({
     page,
   }) => {
     const item = buildDetailItem();
@@ -506,24 +519,24 @@ test.describe('数据报表 - RP-L-21 详情抽屉全字段展示', () => {
       await rp.expectDetailDrawerOpen(page);
     });
 
-    await test.step('38 个字段项按模板顺序渲染，无缺失无多余', async () => {
+    await test.step('40 个字段项按模板顺序渲染，无缺失无多余', async () => {
       const labels = await rp.getDetailFieldLabels(page);
       expect(labels).toEqual(rp.DETAIL_FIELD_LABELS);
-      expect(labels.length).toBe(38);
+      expect(labels.length).toBe(40);
     });
 
     await test.step('4 个 JSON 区块按固定顺序渲染', async () => {
       expect(await rp.getDetailJsonLabels(page)).toEqual(rp.DETAIL_JSON_FIELDS);
     });
 
-    await test.step('接口 49 字段与抽屉渲染项一一对应', async () => {
-      // 49 = 38 个字段项承载的 45 个 key（费用 / 镜像 / 一级~五级归类为 name+value 成对合并）
+    await test.step('接口 51 字段与抽屉渲染项一一对应', async () => {
+      // 51 = 40 个字段项承载的 47 个 key（费用 / 镜像 / 一级~五级归类为 name+value 成对合并）
       //      + 4 个 JSON 区块 key
       const keys = Object.keys(item);
-      expect(keys.length).toBe(49);
+      expect(keys.length).toBe(51);
       const pairedExtraKeys = 7; // ai_cost_currency + mirror_cluster + level2Name~level5Name 共 5
-      expect(rp.DETAIL_FIELD_LABELS.length + pairedExtraKeys).toBe(45);
-      expect(45 + rp.DETAIL_JSON_FIELDS.length).toBe(keys.length);
+      expect(rp.DETAIL_FIELD_LABELS.length + pairedExtraKeys).toBe(47);
+      expect(47 + rp.DETAIL_JSON_FIELDS.length).toBe(keys.length);
       for (const field of rp.DETAIL_JSON_FIELDS) {
         expect(keys).toContain(field);
       }
@@ -694,7 +707,7 @@ test.describe('数据报表 - RP-L-24 明细列表与详情展示数据同接口
       ]);
     });
 
-    await test.step('首行详情：38 字段展示值与该 item 逐字段一致（含格式化口径）', async () => {
+    await test.step('首行详情：40 字段展示值与该 item 逐字段一致（含格式化口径；2026-11-03 起含缺价两项）', async () => {
       await rp.openDetailByRowIndex(page, 0);
       await expectDetailMatchesItem(page, items[0]);
       await expectDetailMatchesItem(page, items[0], {

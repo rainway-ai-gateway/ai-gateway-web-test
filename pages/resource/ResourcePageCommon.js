@@ -156,6 +156,19 @@ const DOC_BUSINESS_CLUSTER = {
   kvCacheUtilizationMaxLabel: 'KV 缓存利用率上限',
   waitingQueueMaxLabel: '排队长度过滤阈值',
   runningRequestsMaxLabel: '执行中请求数过滤阈值',
+  // 2026-11-03 issue #1479：缺价处置动作（llm_config.price_miss_action 三态，默认 fallback_chat）
+  priceMissActionLabel: '缺价处置动作',
+  priceMissActionOptions: {
+    fallback_chat: 'fallback_chat（回退 chat 价计费，默认）',
+    bill_zero: 'bill_zero（按 0 计费）',
+    reject: 'reject（转发前拒绝）',
+  },
+  priceMissActionShort: {
+    fallback_chat: '回退 chat 价计费',
+    bill_zero: '按 0 计费',
+    reject: '转发前拒绝',
+  },
+  defaultPriceMissAction: 'fallback_chat',
   fallbackOnEmptyLabel: '无端点时回退派发',
   metricsStalenessThresholdMsLabel: '指标失效剔除阈值（ms）',
   flowControlCard: '流控配置',

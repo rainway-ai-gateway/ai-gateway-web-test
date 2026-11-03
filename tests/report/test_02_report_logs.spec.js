@@ -395,10 +395,11 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
     ];
     await loadMockedLogs(page, items);
 
-    await test.step('「缓存」列存在且位于「费用」之后、「镜像」之前', async () => {
+    await test.step('「缓存」列存在且位于「费用」之后、「缺价」之前（2026-11-03 起「缺价」列插入缓存与镜像之间）', async () => {
       await rp.reportLogsTable(page).waitForLoaded();
       await expectColumnOrder(page, '费用', '缓存');
-      await expectColumnOrder(page, '缓存', '镜像');
+      await expectColumnOrder(page, '缓存', '缺价');
+      await expectColumnOrder(page, '缺价', '镜像');
     });
 
     await test.step('单元格展示缓存状态原值，空串展示占位符 -', async () => {
@@ -414,9 +415,9 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
     ];
     await loadMockedLogs(page, items);
 
-    await test.step('「镜像」列存在且位于「缓存」之后、「意图答案」之前', async () => {
+    await test.step('「镜像」列存在且位于「缺价」之后、「意图答案」之前（2026-11-03 起「缺价」列插入缓存与镜像之间）', async () => {
       await rp.reportLogsTable(page).waitForLoaded();
-      await expectColumnOrder(page, '缓存', '镜像');
+      await expectColumnOrder(page, '缺价', '镜像');
       await expectColumnOrder(page, '镜像', '意图答案');
     });
 
@@ -820,7 +821,7 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
     await loadMockedLogs(page, items);
     await rp.reportLogsTable(page).waitForLoaded();
 
-    await test.step('表格按固定顺序渲染 15 列', async () => {
+    await test.step('表格按固定顺序渲染 16 列（2026-11-03 起新增「缺价」列，位于「缓存」与「镜像」之间）', async () => {
       const headers = await rp.getLogsHeaderTexts(page);
       expect(headers.slice(0, rp.LOG_TABLE_COLUMNS_15.length)).toEqual(
         rp.LOG_TABLE_COLUMNS_15,
@@ -859,7 +860,7 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
       expect(row2[7]).toBe('-'); // tokens null
       expect(row2[8]).toBe('-'); // TTFT null
       expect(row2[9]).toBe('-'); // 成本 null
-      expect(row2[13]).toBe('-'); // err_msg 空串
+      expect(row2[14]).toBe('-'); // err_msg 空串（2026-11-03 起「错误」列右移一位：缺价列插入）
     });
   });
 
@@ -924,6 +925,8 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
         ai_cost_value: 0.98,
         ai_cost_currency: 'RMB',
         ai_cache_status: 'skip',
+        ai_price_miss: true,
+        ai_price_warn: 'fallback',
         mirror_hit: 1,
         mirror_cluster: 'mirror-sh',
         ai_intent_answer: 'unknown',
@@ -948,7 +951,7 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
       expect(row1[0]).toBe(rp.formatTimestamp(items[1].log_time));
     });
 
-    await test.step('首行 15 列展示值与 item 逐字段一致（含格式化口径）', async () => {
+    await test.step('首行 16 列展示值与 item 逐字段一致（含格式化口径；2026-11-03 起含「缺价」列）', async () => {
       const expected = [
         rp.formatTimestamp(items[0].log_time), // 时间
         items[0].ai_apikey_id, // API Key
@@ -961,6 +964,7 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
         `${(items[0].ai_ttft_us / 1000).toFixed(1)} ms`, // TTFT fmtUs
         `${items[0].ai_cost_value} ${items[0].ai_cost_currency}`, // 费用
         items[0].ai_cache_status, // 缓存
+        rp.DOC.priceWarnTexts.fallback, // 缺价（ai_price_miss=true 时展示形态文案）
         `命中（${items[0].mirror_cluster}）`, // 镜像
         items[0].ai_intent_answer, // 意图答案
         items[0].err_msg.length > 20
@@ -969,7 +973,7 @@ test.describe('数据报表 - 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-1
       ];
       const row0 = await rp.getLogsRowCellTexts(page, 0);
       expect(row0.slice(0, expected.length)).toEqual(expected);
-      expect(row0[14]).toBe('详情'); // 操作列
+      expect(row0[15]).toBe('详情'); // 操作列
     });
 
     await test.step('次行空值字段统一展示占位 -，无 undefined/null 明文外露', async () => {
