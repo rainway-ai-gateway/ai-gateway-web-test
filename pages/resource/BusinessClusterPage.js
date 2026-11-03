@@ -2573,6 +2573,32 @@ function eppRuntimeCard(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) 
     });
 }
 
+// ===== 2026-11-02 流控卡片（RM-BC-124）=====
+// 「流控配置」与「EPP 运行时参数」同为 EPP 配置区内层 Card（外层「均衡模式配置」Card 的
+// body 内），外层 hasText 也包含该标题，故同样按「自有 card-head 标题」过滤。
+function flowControlCard(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.llm-section-card')
+    .filter({
+      has: page.locator(
+        ':scope > .ivu-card-head:has-text("' +
+          DOC_BUSINESS_CLUSTER.flowControlCard +
+          '")',
+      ),
+    });
+}
+
+// 填写流控卡片内 InputNumber 字段（队列 TTL / 无端点队列 TTL / 最大请求数）
+async function fillFlowControlNumber(
+  page,
+  label,
+  value,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  await fillEppNumberInput(flowControlCard(page, drawerTitle), label, value);
+  await waitAfterResourceMutation(page, 200);
+}
+
 function eppRuntimeCardHead(page, drawerTitle = DRAWER_TITLE.createBusinessCluster) {
   return eppRuntimeCard(page, drawerTitle).locator(':scope > .ivu-card-head');
 }
@@ -3460,6 +3486,9 @@ module.exports = {
   expectEppRuntimeToast,
   expectToast,
   watchClusterCreateRequests,
+  // 2026-11-02 调用超时 vs 队列 TTL 跨字段校验（RM-BC-124）
+  flowControlCard,
+  fillFlowControlNumber,
   // 只读管理员视角（docs/business-cluster/…/02f-只读视角.md）
   BUSINESS_CLUSTER_PATH,
   RO_CLUSTER_LABEL,

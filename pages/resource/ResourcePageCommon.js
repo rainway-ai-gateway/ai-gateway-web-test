@@ -155,10 +155,10 @@ const DOC_BUSINESS_CLUSTER = {
     '亲和强度为 off 时会话亲和性不生效；请先将亲和强度切回 low/medium/high 填写 Header，或关闭会话亲和性',
   kvCacheUtilizationMaxLabel: 'KV 缓存利用率上限',
   waitingQueueMaxLabel: '排队长度过滤阈值',
-  runningRequestsMaxLabel: '在飞请求数过滤阈值',
+  runningRequestsMaxLabel: '执行中请求数过滤阈值',
   fallbackOnEmptyLabel: '无端点时回退派发',
   metricsStalenessThresholdMsLabel: '指标失效剔除阈值（ms）',
-  flowControlCard: '流控',
+  flowControlCard: '流控配置',
   maxRequestsLabel: '最大请求数',
   queueTtlLabel: '队列 TTL（秒）',
   noEndpointQueueTtlLabel: '无端点队列 TTL（秒）',
@@ -174,7 +174,7 @@ const DOC_BUSINESS_CLUSTER = {
   defaultFallbackOnEmpty: false,
   defaultMetricsStalenessThresholdMs: 200,
   waitingQueueMaxInvalidMsg: '排队长度过滤阈值须为 >= 0 的数',
-  runningRequestsMaxInvalidMsg: '在飞请求数过滤阈值须为 >= 0 的数',
+  runningRequestsMaxInvalidMsg: '执行中请求数过滤阈值须为 >= 0 的数',
   metricsStalenessThresholdMsInvalidMsg: '指标失效剔除阈值须为 > 0 的整数（ms）',
   enableEvictionDisabledHint: '当前不支持开启，保持关闭',
   defaultFlowControl: { max_requests: -1, queue_ttl: 60, no_endpoint_queue_ttl: 60, enable_eviction: false },
@@ -216,6 +216,10 @@ const DOC_BUSINESS_CLUSTER = {
   eppCooldownInvalidMsg: '冷却时长须为合法的 Go duration 且 > 0（如 45s）',
   eppConnectTimeoutInvalidMsg: '连接超时须为合法的 Go duration 且 > 0（如 500ms）',
   eppCallTimeoutInvalidMsg: '调用超时须为合法的 Go duration 且 > 0（如 3s）',
+  // 2026-11-02 跨字段校验（RM-BC-124）：仅 balance_mode=EPP 时生效；
+  // {max} 为队列 TTL（秒）与无端点队列 TTL（秒）的最大值；两者均为 0（禁用驱逐）时不约束
+  eppCallTimeoutVsQueueTtlMsgTemplate:
+    '调用超时需大于队列 TTL（秒）与无端点队列 TTL（秒）的最大值（{max} 秒）',
   eppFailThresholdInvalidMsg: '失败次数阈值须为 >= 1 的整数',
   eppSuccessThresholdInvalidMsg: '成功次数阈值须为 >= 1 的整数',
 };
