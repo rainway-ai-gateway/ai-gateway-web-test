@@ -25,7 +25,7 @@
  * 3. Clusters UI：5 步向导创建集群（引用该服务商 + 模型 + Key 权重 100）
  * 4. 操作日志 UI：按资源名搜索 → 存在 create 记录（审计核对 ②）
  * 5. Route UI：默认路由表进入编辑 → 新增规则引用该集群 → 本地保存 → 提交并生效
- * 6. 引用约束：删除集群被拦截、弹窗展示引用规则名（跨模块反向验证）
+ * 6. 引用约束：删除集群被拦截、toast 后端错误消息含引用规则名（跨模块反向验证；2026-11-04 起无引用弹窗）
  * 7. 解除引用：Route UI 删除该规则并提交生效 → Clusters UI 删除集群成功（清理顺序）
  * 8. Providers UI：删除服务商成功
  * 9. 操作日志 UI：集群删除记录可见（审计闭环）
@@ -200,15 +200,12 @@ test.describe('AI业务集群 - BC-J-01 从零到可路由（全 UI 闭环）', 
       await utils.ensureBusinessClusterRowVisible(page, clusterName);
       const result = await utils.attemptDeleteBusinessCluster(page, clusterName);
       expect(result.ok, '被路由规则引用的集群应删除失败').toBe(false);
-      const deleteErrorModal = page
-        .locator('.ivu-modal-wrap')
-        .filter({ hasText: /删除失败|deleteFailed/ })
+      // 2026-11-04 起无引用弹窗：删除失败直接 toast 后端错误消息（含规则名）
+      const errorToast = page
+        .locator('.ivu-message')
+        .filter({ hasText: ruleName })
         .first();
-      await expect(deleteErrorModal).toBeVisible({ timeout: 30000 });
-      await expect(deleteErrorModal).toContainText(ruleName);
-      // 关闭弹窗（不点「前往处理」，由本用例自行回路由页解除引用）
-      await page.keyboard.press('Escape');
-      await expect(deleteErrorModal).toBeHidden({ timeout: 10000 });
+      await expect(errorToast).toBeVisible({ timeout: 15000 });
     });
 
     await test.step('7. 解除引用并反序清理：删除规则 → 删除集群', async () => {

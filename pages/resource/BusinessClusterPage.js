@@ -133,9 +133,12 @@ async function fillBasicStep(
     await form.fillInput('集群说明', description);
   }
   if (protocol !== undefined) {
+    // 精确匹配「协议」label，避免与第 4 步「推理内容补齐协议」表单项歧义（2026-11-04）
     const protocolSelect = body
       .locator('.ivu-form-item')
-      .filter({ hasText: '协议' })
+      .filter({
+        has: page.locator('.ivu-form-item-label', { hasText: /^\s*协议\s*$/ }),
+      })
       .locator('.ivu-select-selection');
     await protocolSelect.click();
     await page
@@ -1218,7 +1221,7 @@ function keyAffinityCard(
 // 启用开关（el-select：停用/启用）+ 条件字段（空闲超时/Key 惩罚/Redis 前缀）
 async function fillKeyAffinityStep(
   page,
-  { enabled, ttl, penaltyEnable, redisPrefix },
+  { enabled, ttl, penaltyEnable, penaltyTtl429, penaltyTtlAuth, redisPrefix },
   drawerTitle = DRAWER_TITLE.createBusinessCluster,
 ) {
   const card = keyAffinityCard(page, drawerTitle);
@@ -1258,6 +1261,26 @@ async function fillKeyAffinityStep(
     );
     await waitAfterResourceMutation(page, 200);
   }
+  if (penaltyTtl429 !== undefined) {
+    const input = card
+      .locator('.ivu-form-item')
+      .filter({ hasText: DOC_BUSINESS_CLUSTER.keyAffinityPenaltyTtl429Label })
+      .locator('.ivu-input-number-input');
+    await input.fill('');
+    await input.fill(String(penaltyTtl429));
+    await input.blur();
+    await waitAfterResourceMutation(page, 200);
+  }
+  if (penaltyTtlAuth !== undefined) {
+    const input = card
+      .locator('.ivu-form-item')
+      .filter({ hasText: DOC_BUSINESS_CLUSTER.keyAffinityPenaltyTtlAuthLabel })
+      .locator('.ivu-input-number-input');
+    await input.fill('');
+    await input.fill(String(penaltyTtlAuth));
+    await input.blur();
+    await waitAfterResourceMutation(page, 200);
+  }
   if (redisPrefix !== undefined) {
     const input = card
       .locator('.ivu-form-item')
@@ -1289,6 +1312,8 @@ async function getKeyAffinityValues(
   const enabled = enabledValue === DOC_BUSINESS_CLUSTER.keyAffinityEnabledOn;
   let ttl = '';
   let penaltyEnable = null;
+  let penaltyTtl429 = '';
+  let penaltyTtlAuth = '';
   let redisPrefix = '';
   if (enabled) {
     ttl = await card
@@ -1307,6 +1332,18 @@ async function getKeyAffinityValues(
       .first()
       .inputValue();
     penaltyEnable = penaltyValue === DOC_BUSINESS_CLUSTER.keyAffinityEnabledOn;
+    if (penaltyEnable) {
+      penaltyTtl429 = await card
+        .locator('.ivu-form-item')
+        .filter({ hasText: DOC_BUSINESS_CLUSTER.keyAffinityPenaltyTtl429Label })
+        .locator('.ivu-input-number-input')
+        .inputValue();
+      penaltyTtlAuth = await card
+        .locator('.ivu-form-item')
+        .filter({ hasText: DOC_BUSINESS_CLUSTER.keyAffinityPenaltyTtlAuthLabel })
+        .locator('.ivu-input-number-input')
+        .inputValue();
+    }
     redisPrefix = await card
       .locator('.ivu-form-item')
       .filter({ hasText: DOC_BUSINESS_CLUSTER.keyAffinityRedisPrefixLabel })
@@ -1314,7 +1351,7 @@ async function getKeyAffinityValues(
       .first()
       .inputValue();
   }
-  return { enabled, ttl, penaltyEnable, redisPrefix };
+  return { enabled, ttl, penaltyEnable, penaltyTtl429, penaltyTtlAuth, redisPrefix };
 }
 
 async function expectKeyAffinityFieldsVisible(
@@ -1394,6 +1431,11 @@ async function setKeyAffinityFieldViaModel(
               current.formData.key_affinity.redis_prefix = payload.value;
             } else if (payload.field === 'enabled') {
               current.formData.key_affinity.enabled = payload.value;
+            } else if (
+              payload.field === 'penalty_ttl_429' ||
+              payload.field === 'penalty_ttl_auth'
+            ) {
+              current.formData.key_affinity[payload.field] = payload.value;
             }
             current.$forceUpdate();
             if (current.$refs.formData) {
@@ -1950,7 +1992,9 @@ async function expectEditWizardProtocolMatches(
   await expect(
     body
       .locator('.ivu-form-item')
-      .filter({ hasText: '协议' })
+      .filter({
+        has: page.locator('.ivu-form-item-label', { hasText: /^\s*协议\s*$/ }),
+      })
       .locator('.ivu-select-selected-value'),
   ).toContainText(expectedProtocol);
   await closeBusinessClusterEditDrawer(page);
@@ -3388,6 +3432,7 @@ module.exports = {
   expectKeyPolicyStrategyOptions,
   fillKeyAffinityStep,
   getKeyAffinityValues,
+  keyAffinityCard,
   setKeyAffinityFieldViaModel,
   expectKeyAffinityFieldsVisible,
   expectKeyAffinityError,

@@ -112,6 +112,11 @@ const DOC_BUSINESS_CLUSTER = {
   keyAffinityTtlLabel: '空闲超时(秒)',
   keyAffinityPenaltyLabel: 'Key 惩罚',
   keyAffinityRedisPrefixLabel: 'Redis Key 前缀',
+  // 2026-11-04 issue #1448：Key 惩罚时长（labels/校验文案与 i18n zh.js 逐字一致，含 en dash –）
+  keyAffinityPenaltyTtl429Label: '429 惩罚时长（秒）',
+  keyAffinityPenaltyTtlAuthLabel: '401/402/403 惩罚时长（秒）',
+  keyAffinityPenaltyTtl429InvalidMsg: '429 惩罚时长须为 10–600 的整数（秒）',
+  keyAffinityPenaltyTtlAuthInvalidMsg: '401/402/403 惩罚时长须为 60–1800 的整数（秒）',
   keyAffinityTtlInvalidMsg: '须为大于 0 的整数',
   keyAffinityRedisPrefixRequiredMsg: 'Redis Key 前缀不能为空',
   defaultRedisPrefix: 'bfe:ai:key_affinity',
