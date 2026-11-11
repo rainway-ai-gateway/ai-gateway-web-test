@@ -580,7 +580,12 @@ async function recoverFromSessionError(page, options = {}) {
     await injectSessionIntoPage(page, user);
   }
 
-  const current = await readStoredUser(page);
+  // 注入后页面侧 localStorage 偶有写入可见性延迟（全量长跑实测偶发），短暂轮询再判定
+  let current = await readStoredUser(page);
+  for (let i = 0; i < 5 && (!current || !current.sessionKey); i += 1) {
+    await page.waitForTimeout(200);
+    current = await readStoredUser(page);
+  }
   if (!current || !current.sessionKey) {
     throw new Error(
       '会话自愈失败：重新登录后仍未取得 session key（请检查 conf.json 凭证）',
