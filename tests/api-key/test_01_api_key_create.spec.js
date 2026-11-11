@@ -405,7 +405,8 @@ test.describe('API-Key管理 - EM-K-09 创建API-Key表单默认值', () => {
       await expect(drawer.getByPlaceholder('默认"*"表示不限制')).toHaveValue(
         '*',
       );
-      await utils.expectApiKeyFormSelectValue(page, '无限配额', '是');
+      // issue #139：「无限配额」改为「配额限制」，默认否（=无限配额）
+      await utils.expectApiKeyFormSelectValue(page, '配额限制', '否');
       await utils.expectApiKeyFormSelectValue(page, '启用限流', '否');
       await expect(drawer.getByRole('button', { name: '提交' })).toBeVisible();
       await expect(drawer.getByRole('button', { name: '取消' })).toBeVisible();
@@ -652,7 +653,7 @@ test.describe('API-Key管理 - EM-K-26 创建API-Key-有限配额总量必填', 
 test.describe('API-Key管理 - EM-K-27 创建API-Key-配额总量小数校验', () => {
   let description;
 
-  test('验证无限配额=否时配额总量不可为小数', async ({ page }) => {
+  test('验证配额限制=是时配额总量允许 2 位小数（百万Token 口径）', async ({ page }) => {
     description = DOC.createSuccess.description + '_decimal_' + Date.now();
 
     await test.step('1. 点击"添加"按钮', async () => {
@@ -660,21 +661,30 @@ test.describe('API-Key管理 - EM-K-27 创建API-Key-配额总量小数校验', 
       await utils.openAddApiKeyDrawer(page);
     });
 
-    await test.step('2-4. 填写描述并输入小数配额总量', async () => {
+    await test.step('2-4. 填写描述并输入 2 位小数配额总量', async () => {
+      // issue #139：百万Token 口径允许 2 位小数；存储 5,300,000 token = 5.3 百万Token
       await utils.fillApiKeyDescription(page, description);
       await utils.selectApiKeyUnlimitedQuota(page, '否');
-      await utils.fillApiKeyQuotaTotalAndBlur(page, DOC.quotaDecimal);
+      await utils.fillApiKeyQuotaTotalAndBlur(page, 5300000);
     });
 
-    await test.step('5. 提交并验证错误提示', async () => {
-      await utils.submitApiKeyForm(page);
-      await utils.waitAfterApiKeyAction(page, 500);
-      await utils.expectAddApiKeyDrawerOpen(page);
-      await utils.expectApiKeyQuotaIntegerError(page);
+    await test.step('5. 提交并验证创建成功', async () => {
+      await utils.submitApiKeyFormAndWaitForSuccess(page);
+      await utils.expectAddApiKeyDrawerHidden(page);
+      await utils.searchApiKeyByDescription(page, description);
+      await utils.expectApiKeyVisible(page, description);
     });
 
-    await test.step('6. 关闭抽屉', async () => {
-      await utils.cancelApiKeyForm(page);
+    await test.step('清理测试数据', async () => {
+      await utils.searchApiKeyByDescription(page, description);
+      const row = page
+        .locator('.show-iView-Table .ivu-table tbody tr')
+        .filter({ hasText: description })
+        .first();
+      const apiKeyId = await row.getAttribute('data-row-key');
+      if (apiKeyId) {
+        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      }
     });
   });
 });
@@ -682,7 +692,7 @@ test.describe('API-Key管理 - EM-K-27 创建API-Key-配额总量小数校验', 
 test.describe('API-Key管理 - EM-K-28 创建API-Key-配额总量上界校验', () => {
   let description;
 
-  test('验证无限配额=否时配额总量不可超过 9999999999', async ({ page }) => {
+  test('验证配额限制=是时配额总量不可超过 9999.99 百万Token', async ({ page }) => {
     description = DOC.createSuccess.description + '_max_' + Date.now();
 
     await test.step('1. 点击"添加"按钮', async () => {
@@ -815,7 +825,7 @@ test.describe('Entity 管理 - EM-K-18b API-Key 管理路由规则按钮跳转',
 test.describe('API-Key管理 - EM-K-52 创建API-Key-RMB配额小数校验', () => {
   let description;
 
-  test('验证RMB单位下配额总量允许小数（最多4位）', async ({ page }) => {
+  test('验证RMB单位下配额总量允许小数（最多2位）', async ({ page }) => {
     description = DOC.createSuccess.description + '_rmb_dec_' + Date.now();
 
     await test.step('1. 点击"添加"按钮', async () => {
@@ -854,7 +864,7 @@ test.describe('API-Key管理 - EM-K-52 创建API-Key-RMB配额小数校验', () 
 test.describe('API-Key管理 - EM-K-53 创建API-Key-RMB配额4位小数边界', () => {
   let description;
 
-  test('验证4位小数合法、5位小数被拦截', async ({ page }) => {
+  test('验证2位小数合法、5位小数被拦截', async ({ page }) => {
     description = DOC.createSuccess.description + '_rmb_prec_' + Date.now();
 
     await test.step('1. 点击"添加"按钮', async () => {
@@ -862,10 +872,11 @@ test.describe('API-Key管理 - EM-K-53 创建API-Key-RMB配额4位小数边界',
       await utils.openAddApiKeyDrawer(page);
     });
 
-    await test.step('5-6. 4位小数配额提交成功', async () => {
+    await test.step('5-6. 2位小数配额提交成功（3 位以上输入被截断）', async () => {
       await utils.fillApiKeyDescription(page, description);
       await utils.selectApiKeyUnlimitedQuota(page, '否');
       await utils.selectApiKeyQuotaUnit(page, 'RMB');
+      // issue #139：组件按 2 位小数截断，100.1234 → 100.12
       await utils.fillApiKeyQuotaTotal(page, 100.1234);
       await utils.submitApiKeyFormAndWaitForSuccess(page);
       await utils.expectAddApiKeyDrawerHidden(page);
@@ -874,7 +885,7 @@ test.describe('API-Key管理 - EM-K-53 创建API-Key-RMB配额4位小数边界',
     });
 
     await test.step('7-8. 5位小数写模型触发精度校验', async () => {
-      // InputNumber :precision=4 界面截断，自动化经 Vue 模型注入
+      // 组件界面截断为 2 位，自动化经 Vue 模型注入触发精度校验
       const overPrecisionDescription =
         DOC.createSuccess.description + '_rmb_prec_over_' + Date.now();
       await utils.openAddApiKeyDrawer(page);
@@ -904,33 +915,42 @@ test.describe('API-Key管理 - EM-K-53 创建API-Key-RMB配额4位小数边界',
   });
 });
 
-test.describe('API-Key管理 - EM-K-54 创建API-Key-total_token配额必须整数', () => {
+test.describe('API-Key管理 - EM-K-54 创建API-Key-total_token配额小数（百万Token 口径）', () => {
   let description;
 
-  test('验证total_token单位下配额总量不可为小数', async ({ page }) => {
-    description = DOC.createSuccess.description + '_int_' + Date.now();
+  test('验证total_token单位下配额总量允许 2 位小数', async ({ page }) => {
+    description = DOC.createSuccess.description + '_dec_' + Date.now();
 
     await test.step('1. 点击"添加"按钮', async () => {
       await utils.gotoApiKeyManagementPage(page);
       await utils.openAddApiKeyDrawer(page);
     });
 
-    await test.step('2-4. 选择total_token并写入小数配额总量', async () => {
+    await test.step('2-4. 选择total_token并写入 2 位小数配额总量', async () => {
+      // issue #139：百万Token 口径允许 2 位小数；存储 5,300,000 token = 5.3 百万Token
       await utils.fillApiKeyDescription(page, description);
       await utils.selectApiKeyUnlimitedQuota(page, '否');
       await utils.selectApiKeyQuotaUnit(page, 'total_token');
-      await utils.setApiKeyQuotaTotalModel(page, DOC.quotaDecimal);
-      await utils.expectApiKeyQuotaIntegerError(page);
+      await utils.fillApiKeyQuotaTotal(page, 5300000);
     });
 
-    await test.step('5. 再次触发校验并确认 tip 仍在', async () => {
-      await utils.setApiKeyQuotaTotalModel(page, DOC.quotaDecimal);
-      await utils.expectAddApiKeyDrawerOpen(page);
-      await utils.expectApiKeyQuotaIntegerError(page);
+    await test.step('5. 提交并验证创建成功', async () => {
+      await utils.submitApiKeyFormAndWaitForSuccess(page);
+      await utils.expectAddApiKeyDrawerHidden(page);
+      await utils.searchApiKeyByDescription(page, description);
+      await utils.expectApiKeyVisible(page, description);
     });
 
-    await test.step('6. 关闭抽屉', async () => {
-      await utils.cancelApiKeyForm(page);
+    await test.step('清理测试数据', async () => {
+      await utils.searchApiKeyByDescription(page, description);
+      const row = page
+        .locator('.show-iView-Table .ivu-table tbody tr')
+        .filter({ hasText: description })
+        .first();
+      const apiKeyId = await row.getAttribute('data-row-key');
+      if (apiKeyId) {
+        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      }
     });
   });
 });
@@ -947,7 +967,7 @@ test.describe('API-Key管理 - EM-K-57 创建API-Key-RMB配额总量9000万上�
     });
 
     await test.step('2-4. 选择RMB并写入超过9000万元的配额总量', async () => {
-      // InputNumber :max=90000000 会钳制界面输入，自动化经 Vue 模型注入
+      // 组件不钳制，直接注入模型触发校验
       await utils.fillApiKeyDescription(page, description);
       await utils.selectApiKeyUnlimitedQuota(page, '否');
       await utils.selectApiKeyQuotaUnit(page, 'RMB');
@@ -1129,7 +1149,7 @@ test.describe('API-Key管理 - EM-K-61 重置配额弹窗-total_token 上界校�
     await test.step('前置：创建 unit=total_token 的API-Key', async () => {
       await utils.gotoApiKeyManagementPage(page);
       await utils.createApiKeyWithQuotaViaUI(page, description, {
-        total: 1000,
+        total: 1000000,
         unit: 'total_token',
       });
       await utils.ensureApiKeyRowVisible(page, description);
@@ -1141,7 +1161,7 @@ test.describe('API-Key管理 - EM-K-61 重置配额弹窗-total_token 上界校�
       await utils.expectResetQuotaDrawerOpen(page);
     });
 
-    await test.step('2. 写入超过 9999999999 的配额总量并点击"确认"', async () => {
+    await test.step('2. 写入超过 9999.99 百万Token 的配额总量并点击"确认"', async () => {
       await utils.setResetQuotaTotalModel(page, DOC.quotaOverMax);
       await utils.submitResetQuotaForm(page);
     });
@@ -1151,7 +1171,7 @@ test.describe('API-Key管理 - EM-K-61 重置配额弹窗-total_token 上界校�
       await utils.expectResetQuotaDrawerOpen(page);
     });
 
-    await test.step('3. 修改为边界值 9999999999 并提交成功', async () => {
+    await test.step('3. 修改为边界值 9999.99 并提交成功', async () => {
       await utils.setResetQuotaTotalModel(page, DOC.quotaTokenMax);
       await utils.submitResetQuotaFormAndWaitForSuccess(page);
       await utils.expectResetQuotaDrawerHidden(page);

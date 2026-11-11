@@ -58,6 +58,8 @@ const {
   RATE_LIMIT_FIELD,
   resolveRateLimitSection,
   resolveRateLimitFieldKey,
+  quotaUnitOptionLabel,
+  quotaStorageToInput,
 } = require('./entity-shared');
 const {
   getUserData,
@@ -411,7 +413,24 @@ async function selectEntityQuotaUnlimited(
   value,
   drawerTitle = DRAWER_TITLE.createEntity,
 ) {
-  await selectEntityFormSelect(page, '无限配额', value, drawerTitle);
+  // issue #139：「无限配额」改为「配额限制」，选项语义反转（是=有限配额，否=无限配额）
+  const quotaLimitedValue = value === '是' ? '否' : '是';
+  await selectEntityFormSelect(page, '配额限制', quotaLimitedValue, drawerTitle);
+}
+
+/** 读取表单当前「配额单位」的存储口径（total_token | RMB） */
+async function readEntityQuotaUnit(
+  page,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  const trigger = drawer
+    .locator('.ivu-form-item')
+    .filter({ hasText: '配额单位' })
+    .locator('.ivu-select-selection')
+    .first();
+  const text = ((await trigger.textContent()) || '').trim();
+  return text.indexOf('元') >= 0 && text.indexOf('Token') < 0 ? 'RMB' : 'total_token';
 }
 
 async function entityQuotaTotalInput(
@@ -484,6 +503,7 @@ async function setEntityQuotaTotalModel(
         });
       });
     });
+    // issue #139：formData.quota_plan.quota 为录入单位（百万Token/元），直接注入
   }, value);
   if (!result || !result.ok) {
     throw new Error(
@@ -499,20 +519,22 @@ async function fillEntityQuotaTotal(
   total,
   drawerTitle = DRAWER_TITLE.createEntity,
 ) {
-  const num = Number(total);
-  // InputNumber：:min=0 拦负数，:precision=0 拦小数；须写 Vue 模型 + FormItem.validate
-  // 超大上界值由用例经 setEntityQuotaTotalModel 注入，避免 InputNumber :max 钳制
-  if (Number.isFinite(num) && (num < 0 || !Number.isInteger(num))) {
-    return setEntityQuotaTotalModel(page, num, drawerTitle);
+  // 负数无法经键盘输入（组件清洗会去掉负号），按原始入参判断后走模型注入触发校验
+  const rawNum = Number(total);
+  if (Number.isFinite(rawNum) && rawNum < 0) {
+    return setEntityQuotaTotalModel(page, total, drawerTitle);
   }
+  // issue #139：入参为存储值（token 数/元），按当前单位换算为录入值（百万Token/元）
+  const unit = await readEntityQuotaUnit(page, drawerTitle);
+  const inputValue = quotaStorageToInput(total, unit);
   const input = await entityQuotaTotalInput(page, drawerTitle);
   await expect(input).toBeVisible({ timeout: 15000 });
   await input.click({ clickCount: 3 });
   await page.keyboard.press('Backspace');
-  await input.pressSequentially(String(total), { delay: 30 });
+  await input.pressSequentially(String(inputValue), { delay: 30 });
   await input.blur();
   await page.waitForTimeout(300);
-  return { ok: true, quota: total };
+  return { ok: true, quota: inputValue };
 }
 
 async function fillEntityQuotaTotalAndBlur(
@@ -542,7 +564,10 @@ async function selectEntityQuotaUnit(
     .filter({ hasText: '配额单位' })
     .locator('.ivu-select')
     .first();
-  await new IvuSelectComponent(page, trigger).selectOptionExact(unit);
+  // issue #139：选项文案改为「百万Token / 元」，入参仍收存储口径 total_token / RMB
+  await new IvuSelectComponent(page, trigger).selectOptionExact(
+    quotaUnitOptionLabel(unit),
+  );
 }
 
 async function selectEntityQuotaResetCycle(
@@ -774,8 +799,10 @@ async function clearEntityRateLimitRuleField(
     .filter({ hasText: fieldLabel })
     .first();
   const input = formItem.locator('input').first();
-  await input.fill('');
-  await input.dispatchEvent('blur');
+  // issue #139：NumberInput 基于 iView Input，其 isOnComposition 守卫会吞掉 fill('') 的 input 事件，
+  // 键盘三击选中+退格清除更稳
+  await input.click({ clickCount: 3 });
+  await input.press('Backspace');
   await page.waitForTimeout(300);
 }
 
@@ -1945,7 +1972,8 @@ function resetQuotaTotalInput(page) {
 
 async function fillResetQuotaForm(page, total, reason) {
   const modal = resetQuotaModal(page);
-  await expect(modal.getByText('新的配额总量', { exact: true })).toBeVisible();
+  // issue #139：标签变为「新的配额总量（百万Token / 元）」，不再是精确文本
+  await expect(modal.getByText('新的配额总量', { exact: false }).first()).toBeVisible();
   let quotaInput = resetQuotaTotalInput(page);
   if ((await quotaInput.count()) === 0) {
     quotaInput = modal
@@ -1954,7 +1982,10 @@ async function fillResetQuotaForm(page, total, reason) {
       .locator('input')
       .first();
   }
-  await quotaInput.fill(String(total));
+  // issue #139：入参为存储值（token 数/元），按弹窗单位换算为录入值
+  await quotaInput.fill(
+    String(quotaStorageToInput(total, await readResetQuotaUnit(page))),
+  );
   if (reason !== undefined) {
     let reasonInput = modal
       .locator('.info-row')
@@ -1984,8 +2015,7 @@ async function clearResetQuotaTotal(page) {
   }
   await input.click({ clickCount: 3 });
   await input.press('Backspace');
-  await input.fill('');
-  await input.blur();
+  await page.waitForTimeout(200);
 }
 
 async function submitResetQuotaForm(page) {
@@ -2013,59 +2043,38 @@ async function expectResetQuotaDrawerHidden(page) {
 }
 
 /**
- * 直接写入重置配额弹窗 Vue 模型 newQuota，绕过 InputNumber :max=90000000 钳制。
- * iView InputNumber 只在用户输入（setValue）时钳制，watch value 仅同步不钳制，
- * 因此注入超限值后点击「确认」时 confirmResetQuota 读到的即注入值。
- * EntityView / ApiKeyView 共用（两处弹窗标题一致、newQuota 均为详情组件 data）。
+ * 在重置配额弹窗中键入新配额总量（录入单位：百万Token / 元）。
+ * issue #139：组件不再有 max 钳制，超限值可直接键盘输入，点击「确认」时由校验拦截；
+ * 不再依赖 Vue 模型注入（iView Modal teleport 后 __vue__ 链不可达）。
  */
 async function setResetQuotaTotalModel(page, value) {
   const modal = resetQuotaModal(page);
   await expect(modal).toBeVisible({ timeout: 15000 });
-  const result = await modal.evaluate((modalEl, quotaValue) => {
-    // 优先从 modal 根节点 Vue 实例向上找持有 newQuota 的详情组件
-    let vm = modalEl.__vue__ || null;
-    while (
-      vm &&
-      !(vm.$data && Object.prototype.hasOwnProperty.call(vm.$data, 'newQuota'))
-    ) {
-      vm = vm.$parent;
-    }
-    if (!vm) {
-      // 回退：从弹窗内 InputNumber 实例向上找
-      const inputEl = modalEl.querySelector('.ivu-input-number');
-      if (inputEl && inputEl.__vue__) {
-        vm = inputEl.__vue__;
-        while (
-          vm &&
-          !(
-            vm.$data &&
-            Object.prototype.hasOwnProperty.call(vm.$data, 'newQuota')
-          )
-        ) {
-          vm = vm.$parent;
-        }
-      }
-    }
-    if (!vm) {
-      return { ok: false, reason: 'no-newQuota-vm' };
-    }
-    if (typeof vm.$set === 'function') {
-      vm.$set(vm.$data, 'newQuota', quotaValue);
-    } else {
-      vm.$data.newQuota = quotaValue;
-    }
-    if (vm.$forceUpdate) {
-      vm.$forceUpdate();
-    }
-    return { ok: true, newQuota: vm.$data.newQuota };
-  }, value);
-  if (!result || !result.ok) {
-    throw new Error(
-      `未能写入重置配额总量到 Vue 模型: ${JSON.stringify(result || {})}`,
-    );
+  let input = resetQuotaTotalInput(page);
+  if ((await input.count()) === 0) {
+    input = modal
+      .locator('.modal-form-item')
+      .filter({ hasText: '新的配额总量' })
+      .locator('input')
+      .first();
   }
+  await input.click({ clickCount: 3 });
+  await input.press('Backspace');
+  await input.pressSequentially(String(value), { delay: 30 });
+  await input.blur();
   await page.waitForTimeout(300);
-  return result;
+  return { ok: true, newQuota: value };
+}
+
+async function readResetQuotaUnit(page) {
+  const modal = resetQuotaModal(page);
+  const label = await modal
+    .locator('.modal-label')
+    .first()
+    .textContent()
+    .catch(() => '');
+  const text = label || '';
+  return text.indexOf('元') >= 0 && text.indexOf('Token') < 0 ? 'RMB' : 'total_token';
 }
 
 /** Entity 详情抽屉：配额单位行显示指定单位（unit=RMB 场景前置断言） */
@@ -2076,7 +2085,8 @@ async function expectEntityDetailQuotaUnit(page, unit) {
     .filter({ hasText: '配额单位' })
     .first();
   await expect(row).toBeVisible({ timeout: 15000 });
-  await expect(row).toContainText(unit);
+  // issue #139：详情「配额单位」行展示「百万Token / 元」，入参仍收 total_token / RMB
+  await expect(row).toContainText(quotaUnitOptionLabel(unit));
 }
 
 async function resetEntityQuota(page, total, reason) {
@@ -2222,7 +2232,8 @@ function entityDetailQuotaCard(page) {
 
 /** EM-E-RO-03 预期 1：详情配额信息区应正常只读展示的字段 label */
 const ENTITY_DETAIL_QUOTA_READONLY_LABELS = [
-  '无限配额',
+  // issue #139：「无限配额」改为「配额限制」（是=有限，否=无限）
+  '配额限制',
   '配额总量',
   '配额单位',
   '已使用',
@@ -2352,6 +2363,8 @@ module.exports = {
   expectParentEntityOptionVisible,
   selectEntityQuotaUnlimited,
   entityQuotaTotalInput,
+  readEntityQuotaUnit,
+  readResetQuotaUnit,
   setEntityQuotaTotalModel,
   fillEntityQuotaTotal,
   fillEntityQuotaTotalAndBlur,

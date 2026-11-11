@@ -72,7 +72,7 @@ entityOrgDescribe('Entity组织管理 - EM-E-66 重置周期与配额不足放�
       await utils.fillEntityFormBasic(page, { name: entityName, typeName });
       await utils.fillEntityQuotaForm(page, {
         unlimited: false,
-        total: 1000,
+        total: 1000000,
         unit: 'total_token',
         resetCycle: '每周',
         passWhenNoQuota: true,
@@ -90,7 +90,8 @@ entityOrgDescribe('Entity组织管理 - EM-E-66 重置周期与配额不足放�
       const apiData = await findEntityByNameViaApi(page, entityName);
       expect(apiData, '接口应能查到新建 Entity').toBeTruthy();
       expect(apiData.quota_plan).toBeTruthy();
-      expect(apiData.quota_plan.quota).toBe(1000);
+      // issue #139：录入 1.00 百万Token = 存储 1,000,000 token
+      expect(apiData.quota_plan.quota).toBe(1000000);
       expect(apiData.quota_plan.unit).toBe('total_token');
       expect(apiData.quota_plan.reset_period).toBe('weekly');
       expect(apiData.quota_plan.pass_when_no_enough_quota).toBe(true);

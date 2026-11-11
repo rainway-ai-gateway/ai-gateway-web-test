@@ -48,6 +48,9 @@ const {
   RATE_LIMIT_FIELD,
   resolveRateLimitSection,
   resolveRateLimitFieldKey,
+  quotaUnitOptionLabel,
+  quotaStorageToInput,
+  quotaInputToStorage,
 } = require('./entity-shared');
 const {
   getUserData,
@@ -430,7 +433,24 @@ async function selectApiKeyUnlimitedQuota(
   value,
   drawerTitle = DRAWER_TITLE.addApiKey,
 ) {
-  await selectApiKeyFormSelect(page, '无限配额', value, drawerTitle);
+  // issue #139：「无限配额」改为「配额限制」，选项语义反转（是=有限配额，否=无限配额）
+  const quotaLimitedValue = value === '是' ? '否' : '是';
+  await selectApiKeyFormSelect(page, '配额限制', quotaLimitedValue, drawerTitle);
+}
+
+/** 读取表单当前「配额单位」的存储口径（total_token | RMB） */
+async function readApiKeyQuotaUnit(
+  page,
+  drawerTitle = DRAWER_TITLE.addApiKey,
+) {
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  const trigger = drawer
+    .locator('.ivu-form-item')
+    .filter({ hasText: '配额单位' })
+    .locator('.ivu-select-selection')
+    .first();
+  const text = ((await trigger.textContent()) || '').trim();
+  return text.indexOf('元') >= 0 && text.indexOf('Token') < 0 ? 'RMB' : 'total_token';
 }
 
 async function fillApiKeyQuotaTotal(
@@ -438,7 +458,12 @@ async function fillApiKeyQuotaTotal(
   total,
   drawerTitle = DRAWER_TITLE.addApiKey,
 ) {
-  await apiKeyForm(page, drawerTitle).fillInput('配额总量', String(total));
+  // issue #139：入参为存储值（token 数/元），按当前单位换算为录入值（百万Token/元）后填写
+  const unit = await readApiKeyQuotaUnit(page, drawerTitle);
+  await apiKeyForm(page, drawerTitle).fillInput(
+    '配额总量',
+    String(quotaStorageToInput(total, unit)),
+  );
 }
 
 /**
@@ -457,6 +482,7 @@ async function setApiKeyQuotaTotalModel(
     .filter({ hasText: '配额总量' })
     .first();
   await expect(quotaItem).toBeVisible({ timeout: 15000 });
+  // issue #139：formData.quota_plan.quota 为录入单位（百万Token/元），直接注入
   const result = await drawer.evaluate((drawerEl, quotaValue) => {
     const formEl = drawerEl.querySelector('.ivu-form');
     if (!formEl || !formEl.__vue__) {
@@ -521,26 +547,17 @@ async function fillApiKeyQuotaTotalAndBlur(
   total,
   drawerTitle = DRAWER_TITLE.addApiKey,
 ) {
-  const num = Number(total);
-  // 小数：InputNumber :precision=0 会在 blur 时自动取整，须直接写 Vue 模型
+  // issue #139：入参为存储值（token 数/元），先按当前单位换算为录入值（百万Token/元）
+  const unit = await readApiKeyQuotaUnit(page, drawerTitle);
+  const input = quotaStorageToInput(total, unit);
+  const num = Number(input);
   if (Number.isFinite(num) && !Number.isInteger(num)) {
-    await setApiKeyQuotaTotalModel(page, num, drawerTitle);
-    return;
-  }
-  // 大整数（超出 JS 安全范围）：使用 typeAndValidate 逐字输入，避免精度丢失
-  if (Number.isFinite(num) && num > Number.MAX_SAFE_INTEGER) {
-    await apiKeyForm(page, drawerTitle).typeAndValidate(
-      '配额总量',
-      String(total),
-    );
+    // 小数：走真实键盘输入（组件允许 2 位小数，逐键回传）
+    await apiKeyForm(page, drawerTitle).typeAndValidate('配额总量', String(input));
     await page.waitForTimeout(300);
     return;
   }
-  // 普通整数：使用 typeAndValidate
-  await apiKeyForm(page, drawerTitle).typeAndValidate(
-    '配额总量',
-    String(total),
-  );
+  await apiKeyForm(page, drawerTitle).typeAndValidate('配额总量', String(input));
   await page.waitForTimeout(300);
 }
 
@@ -572,7 +589,10 @@ async function selectApiKeyQuotaUnit(
     .filter({ hasText: '配额单位' })
     .locator('.ivu-select')
     .first();
-  await new IvuSelectComponent(page, trigger).selectOptionExact(unit);
+  // issue #139：选项文案改为「百万Token / 元」，入参仍收存储口径 total_token / RMB
+  await new IvuSelectComponent(page, trigger).selectOptionExact(
+    quotaUnitOptionLabel(unit),
+  );
 }
 
 async function selectApiKeyResetCycle(
@@ -707,8 +727,10 @@ async function clearApiKeyRateLimitRuleField(
     .filter({ hasText: fieldLabel })
     .first();
   const input = formItem.locator('input').first();
-  await input.fill('');
-  await input.dispatchEvent('blur');
+  // issue #139：NumberInput 基于 iView Input，其 isOnComposition 守卫会吞掉 fill('') 的 input 事件，
+  // 键盘三击选中+退格清除更稳
+  await input.click({ clickCount: 3 });
+  await input.press('Backspace');
   await page.waitForTimeout(300);
 }
 
@@ -1540,7 +1562,8 @@ async function expectApiKeyDetailQuotaRmb(page) {
     .filter({ hasText: '配额总量' })
     .first();
   await expect(row).toBeVisible({ timeout: 15000 });
-  await expect(row).toContainText('¥');
+  // issue #139：详情配额总量按「元」展示
+  await expect(row).toContainText('元');
 }
 
 async function closeApiKeyDetail(page) {
@@ -1645,11 +1668,12 @@ async function createApiKeyWithQuotaViaUI(page, description, quota) {
   await openAddApiKeyDrawer(page);
   await fillApiKeyDescription(page, description);
   await selectApiKeyUnlimitedQuota(page, '否');
-  if (quota.total !== undefined) {
-    await fillApiKeyQuotaTotal(page, quota.total);
-  }
+  // issue #139：先选单位再填总量（fillApiKeyQuotaTotal 按当前单位做存储→录入换算）
   if (quota.unit !== undefined) {
     await selectApiKeyQuotaUnit(page, quota.unit);
+  }
+  if (quota.total !== undefined) {
+    await fillApiKeyQuotaTotal(page, quota.total);
   }
   if (quota.resetCycle !== undefined) {
     await selectApiKeyResetCycle(page, quota.resetCycle);
@@ -1718,11 +1742,12 @@ async function fillApiKeyBasicForm(
       drawerTitle,
     );
   }
-  if (formData.quotaTotal !== undefined) {
-    await fillApiKeyQuotaTotal(page, formData.quotaTotal, drawerTitle);
-  }
+  // issue #139：先选单位再填总量（fillApiKeyQuotaTotal 按当前单位做存储→录入换算）
   if (formData.quotaUnit !== undefined) {
     await selectApiKeyQuotaUnit(page, formData.quotaUnit, drawerTitle);
+  }
+  if (formData.quotaTotal !== undefined) {
+    await fillApiKeyQuotaTotal(page, formData.quotaTotal, drawerTitle);
   }
   if (formData.resetCycle !== undefined) {
     await selectApiKeyResetCycle(page, formData.resetCycle, drawerTitle);
@@ -1775,6 +1800,7 @@ module.exports = {
   selectApiKeyExpiryForever,
   selectApiKeyExpiryLimited,
   selectApiKeyStatus,
+  readApiKeyQuotaUnit,
   selectApiKeyQuotaCheck,
   selectApiKeyAllowedModel,
   fillApiKeyAllowedSubnets,
