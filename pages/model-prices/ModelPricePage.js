@@ -152,6 +152,16 @@ const PRICE_KEY_INPUT_COST = 'input_cost_per_token';
 // 依据：ai-gateway-web src/utils/price.js isTokenBasedPriceKey/tokenPriceToMillion。
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * 价格键归一化（issue #140）：中文界面展示为「英文键（中文备注）」，如
+ * `input_cost_per_token（输入）`；比较/查找一律用归一化后的英文键（接口契约键名）。
+ */
+function normalizePriceKey(label) {
+  const text = String(label === null || label === undefined ? '' : label).trim();
+  const idx = text.search(/[（(]/);
+  return idx > 0 ? text.slice(0, idx).trim() : text;
+}
+
 /** 计价键是否按 token 计价（与前端 isTokenBasedPriceKey 同口径：键名含 `_token`） */
 function isTokenBasedPriceKey(key) {
   return typeof key === 'string' && key.indexOf('_token') !== -1;
@@ -206,7 +216,7 @@ async function readPriceRowKey(row) {
       .first()
       .textContent()
       .catch(() => '')) || '';
-  return (keyFromInput || keyText || '').trim();
+  return normalizePriceKey(keyFromInput || keyText || '');
 }
 const PRICE_KEY_OUTPUT_COST = 'output_cost_per_token';
 const PRICE_KEY_CACHE_CREATION_1H = 'cache_creation_input_token_cost_1h';
@@ -836,7 +846,8 @@ async function getPriceKeyDropdownOptions(page) {
   // 关闭下拉，避免遮挡后续操作
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-  return result;
+  // issue #140：选项文案带中文备注，断言口径统一为英文键
+  return (result || []).map(normalizePriceKey);
 }
 
 // ---------- 价格配置块（默认价格 / 分时段价格 / 批量折扣系数） ----------
@@ -933,7 +944,7 @@ async function getTierPriceRowValues(page, index) {
     .locator('input')
     .first()
     .inputValue();
-  return { key: (keyFromInput || keyText || '').trim(), value };
+  return { key: normalizePriceKey(keyFromInput || keyText || ''), value };
 }
 
 async function findTierPriceRowIndexByKey(page, key) {
@@ -983,7 +994,8 @@ async function getTierPriceKeyDropdownOptions(page) {
   // 关闭下拉，避免遮挡后续操作
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-  return result;
+  // issue #140：选项文案带中文备注，断言口径统一为英文键
+  return (result || []).map(normalizePriceKey);
 }
 
 /**
@@ -1176,7 +1188,7 @@ async function getPriceRowValues(page, index) {
     .locator('input')
     .first()
     .inputValue();
-  return { key: (keyFromInput || keyText || '').trim(), value };
+  return { key: normalizePriceKey(keyFromInput || keyText || ''), value };
 }
 
 async function findPriceRowIndexByKey(page, key) {
@@ -1395,7 +1407,7 @@ async function viewKvEntries(page, cardTitle) {
   for (let i = 0; i < count; i += 1) {
     const tds = rows.nth(i).locator('td');
     entries.push({
-      key: ((await tds.nth(0).textContent()) || '').trim(),
+      key: normalizePriceKey((await tds.nth(0).textContent()) || ''),
       value: ((await tds.nth(1).textContent()) || '').trim(),
     });
   }
@@ -1423,7 +1435,7 @@ async function viewTierPriceGroups(page) {
     for (let j = 0; j < rowCount; j += 1) {
       const tds = rows.nth(j).locator('td');
       entries.push({
-        key: ((await tds.nth(0).textContent()) || '').trim(),
+        key: normalizePriceKey((await tds.nth(0).textContent()) || ''),
         value: ((await tds.nth(1).textContent()) || '').trim(),
       });
     }
@@ -1791,6 +1803,7 @@ module.exports = {
   PRICE_KEY_INPUT_AUDIO,
   PRICE_KEY_OUTPUT_AUDIO,
   NEW_PRICE_KEYS,
+  normalizePriceKey,
   CAPABILITY_OPTIONS,
   SUPPORTED_PARAMETER_OPTIONS,
   LIMIT_KEY_OPTIONS,
