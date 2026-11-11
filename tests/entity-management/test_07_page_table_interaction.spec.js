@@ -356,6 +356,21 @@ apiKeyDescribe('PageTable - PT-05 嵌套字段列排序应生效', (cleanup) => 
     });
 
     await test.step('前置：创建 3 条挂载不同 Entity、配额类型不同的 API-Key', async () => {
+      // 列表搜索/筛选只作用于当前页（2026-11-11 产品口径调整）：
+      // 先补齐到页边界，让接下来创建的 3 条造数正好落在最后一页的前 3 行，
+      // 保证「按前缀过滤后 3 行同页可见」而不依赖库里的历史数据量
+      const PAGE_SIZE = 20;
+      const existing = await utils.fetchAllApiKeysViaApi(page);
+      const padCount = (PAGE_SIZE - (existing.length % PAGE_SIZE)) % PAGE_SIZE;
+      for (let i = 0; i < padCount; i++) {
+        const padKey = await utils.createApiKeyViaApi(page, {
+          description: `${DOC.searchDescription}_pt05pad_${stamp}_${i}`,
+        });
+        if (padKey?.id) {
+          cleanup.trackApiKeyId(padKey.id);
+        }
+      }
+
       for (let i = 0; i < 3; i++) {
         const entity = await utils.findEntityByNameViaApi(page, entityNames[i]);
         const apiKey = await utils.createApiKeyViaApi(page, {
@@ -374,8 +389,19 @@ apiKeyDescribe('PageTable - PT-05 嵌套字段列排序应生效', (cleanup) => 
     await test.step('前置：进入 API-Key 管理页并筛选出造数数据', async () => {
       await utils.gotoApiKeyManagementPage(page);
       await utils.reloadApiKeyManagementPage(page);
+      const table = new PageTableComponent(page);
+      // 3 条造数是最后创建的，补位后正好是最后一页的前 3 行；
+      // 列表只按当前页过滤，所以先翻到最后一页再输入前缀
+      const nextBtn = table.pagination().locator('.btn-next');
+      for (let i = 0; i < 100; i++) {
+        if ((await nextBtn.count()) === 0 || !(await nextBtn.isEnabled())) {
+          break;
+        }
+        await nextBtn.click();
+        await page.waitForTimeout(1200);
+      }
       await utils.searchApiKeyByDescription(page, prefix);
-      const rows = new PageTableComponent(page).dataRows();
+      const rows = table.dataRows();
       await expect(rows).toHaveCount(3, { timeout: 5000 });
     });
 
