@@ -292,6 +292,7 @@ registerEppRuntimeDescribe(
         await utils.toggleEppRuntimeSwitch(page);
         await utils.expectEppRuntimeSwitchState(page, true);
         await fillProviderAndModels(page, providerName);
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         await utils.expectReviewEppRuntimeValues(page, {
@@ -375,7 +376,7 @@ registerEppRuntimeDescribe(
         }
       });
 
-      await test.step('5. 改回合法值 2s/45s/500ms/3s 与 3/2：校验通过并进入复查页', async () => {
+      await test.step('5. 改回合法值 2s/45s/500ms/11s 与 3/2：校验通过并进入复查页', async () => {
         await utils.fillEppRuntimeDuration(page, DOC.eppCheckIntervalLabel, {
           value: '2',
           unit: 's',
@@ -389,7 +390,7 @@ registerEppRuntimeDescribe(
           unit: 'ms',
         });
         await utils.fillEppRuntimeDuration(page, DOC.eppCallTimeoutLabel, {
-          value: '3',
+          value: '11',
           unit: 's',
         });
         await utils.fillEppRuntimeThreshold(page, DOC.eppFailThresholdLabel, '3');
@@ -404,6 +405,7 @@ registerEppRuntimeDescribe(
         ]) {
           await utils.expectEppRuntimeFieldErrorHidden(page, label);
         }
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
       });
@@ -413,6 +415,7 @@ registerEppRuntimeDescribe(
         await utils.expectWizardStep(page, '大模型配置');
         await utils.typeEppRuntimeDuration(page, DOC.eppCheckIntervalLabel, '1.');
         await utils.expectEppRuntimeFieldErrorHidden(page, DOC.eppCheckIntervalLabel);
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         await utils.expectReviewEppRuntimeValues(page, {
@@ -423,6 +426,7 @@ registerEppRuntimeDescribe(
         await utils.expectWizardStep(page, '大模型配置');
         await utils.typeEppRuntimeDuration(page, DOC.eppCheckIntervalLabel, '.5');
         await utils.expectEppRuntimeFieldErrorHidden(page, DOC.eppCheckIntervalLabel);
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         await utils.expectReviewEppRuntimeValues(page, {
@@ -457,6 +461,7 @@ registerEppRuntimeDescribe(
         await utils.expectWizardStep(page, '大模型配置');
         await utils.fillEppRuntimeDuration(page, DOC.eppCheckIntervalLabel, { value: '' });
         await utils.expectEppRuntimeFieldErrorHidden(page, DOC.eppCheckIntervalLabel);
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -491,6 +496,7 @@ registerEppRuntimeDescribe(
         });
         await utils.fillEppRuntimeThreshold(page, DOC.eppFailThresholdLabel, '5');
         await fillProviderAndModels(page, providerName);
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -508,7 +514,7 @@ registerEppRuntimeDescribe(
             cooldown: '45s',
             success_threshold: 2,
           },
-          timeout: { connect: '500ms', call: '3s' },
+          timeout: { connect: '500ms', call: '11s' },
         });
         expect(createdBody.balance_mode).toBe(EPP_MODE);
         expect(createdBody.epp_config, 'epp_runtime 与 epp_config 相互独立').toBeDefined();
@@ -527,6 +533,7 @@ registerEppRuntimeDescribe(
           { value: '' },
           EDIT_DRAWER,
         );
+        await utils.ensureEppFlowTtlZero(page, EDIT_DRAWER);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查', EDIT_DRAWER);
         const request = await utils.waitForClusterPatchRequest(page, () =>
@@ -545,6 +552,7 @@ registerEppRuntimeDescribe(
         });
         await utils.refreshBusinessClusterList(page);
         await navigateToEditModelStep(page, wrrCluster);
+        await utils.ensureEppFlowTtlZero(page, EDIT_DRAWER);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查', EDIT_DRAWER);
         const request = await utils.waitForClusterPatchRequest(page, () =>
@@ -641,6 +649,7 @@ registerEppRuntimeDescribe(
 
       await test.step('2. 修改子字段后提交，再次 GET 回读一致', async () => {
         await utils.fillEppRuntimeThreshold(page, DOC.eppFailThresholdLabel, '7', EDIT_DRAWER);
+        await utils.ensureEppFlowTtlZero(page, EDIT_DRAWER);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查', EDIT_DRAWER);
         const request = await utils.waitForClusterPatchRequest(page, () =>
@@ -666,6 +675,7 @@ registerEppRuntimeDescribe(
           unit: 's',
           raw: false,
         });
+        await utils.ensureEppFlowTtlZero(page, EDIT_DRAWER);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查', EDIT_DRAWER);
         const request = await utils.waitForClusterPatchRequest(page, () =>
@@ -778,6 +788,7 @@ registerEppRuntimeDescribe(
           EDIT_DRAWER,
         );
         await utils.setBalanceMode(page, WRR_MODE, EDIT_DRAWER);
+        await utils.ensureEppFlowTtlZero(page, EDIT_DRAWER);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查', EDIT_DRAWER);
         const request = await utils.waitForClusterPatchRequest(page, () =>
@@ -842,12 +853,13 @@ registerEppRuntimeDescribe(
           unit: 'ms',
         });
         await utils.fillEppRuntimeDuration(page, DOC.eppCallTimeoutLabel, {
-          value: '3',
+          value: '11',
           unit: 's',
         });
         await utils.fillEppRuntimeThreshold(page, DOC.eppFailThresholdLabel, '5');
         await utils.fillEppRuntimeThreshold(page, DOC.eppSuccessThresholdLabel, '2');
         await utils.toggleEppRuntimeSwitch(page);
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         await utils.expectReviewEppRuntimeValues(page, {
@@ -857,7 +869,7 @@ registerEppRuntimeDescribe(
           [DOC.eppCooldownLabel]: '45s',
           [DOC.eppSuccessThresholdLabel]: '2',
           [DOC.eppConnectTimeoutLabel]: '300ms',
-          [DOC.eppCallTimeoutLabel]: '3s',
+          [DOC.eppCallTimeoutLabel]: '11s',
         });
       });
 
@@ -871,6 +883,7 @@ registerEppRuntimeDescribe(
           unit: 's',
           raw: false,
         });
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         await utils.expectReviewEppRuntimeValues(page, {
@@ -998,6 +1011,7 @@ registerEppRuntimeDescribe(
         );
         expect(afterLetters, '字母不进入输入框（BUG-BC-02 修复：清洗后即时回写 DOM）').toBe('');
         await utils.expectEppRuntimeFieldErrorHidden(page, DOC.eppCheckIntervalLabel);
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         await utils.expectReviewEppRuntimeValues(page, {
@@ -1012,6 +1026,7 @@ registerEppRuntimeDescribe(
       });
 
       await test.step('6. 提交体 4 个 duration 字段均为 duration 字符串', async () => {
+        await utils.ensureEppFlowTtlZero(page);
         await utils.clickWizardNext(page);
         await utils.expectWizardStep(page, '复查&检查');
         const request = await utils.waitForClusterCreateRequest(page, () =>

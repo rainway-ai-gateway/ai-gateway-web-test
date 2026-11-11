@@ -178,6 +178,9 @@ test.describe('AI业务集群 - RM-BC-123 大模型配置条件项隐藏后自�
         DOC.keyAffinityRedisPrefixLabel,
         DOC.keyAffinityTtlLabel,
         DOC.keyAffinityPenaltyLabel,
+        // dc9d7fc（11/4）：Key 惩罚启用后新增 429 / 401-403 惩罚时长
+        DOC.keyAffinityPenaltyTtl429Label,
+        DOC.keyAffinityPenaltyTtlAuthLabel,
       ]);
 
       await utils.fillKeyAffinityStep(page, { enabled: false });
@@ -195,7 +198,8 @@ test.describe('AI业务集群 - RM-BC-123 大模型配置条件项隐藏后自�
         keyGrid,
         'Key 亲和性网格（重新启用）',
       );
-      expect(labelsOf(layout)).toHaveLength(4);
+      // dc9d7fc（11/4）：重新启用后 4 项条件字段 + 2 个惩罚时长 = 6 项
+      expect(labelsOf(layout)).toHaveLength(6);
     });
   });
 
@@ -319,6 +323,7 @@ test.describe('AI业务集群 - RM-BC-123 大模型配置条件项隐藏后自�
 
     await test.step('4. off 状态提交：epp_config 三个字段均不丢值（后端在 off 时忽略亲和）', async () => {
       await utils.fillEppConfig(page, { cacheAffinity: 'off' });
+      await utils.ensureEppCallTimeoutAboveQueueTtl(page);
       await utils.clickWizardNext(page);
       await utils.expectWizardStep(page, '复查&检查');
 

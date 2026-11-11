@@ -2807,7 +2807,7 @@ async function getEppRuntimeValues(
   };
 }
 
-// 默认值：disabled=false、间隔 2+s、失败阈值 3、冷却 45+s、成功阈值 2、连接超时 500+ms、调用超时 3+s
+// 默认值：disabled=false、间隔 2+s、失败阈值 3、冷却 45+s、成功阈值 2、连接超时 500+ms、调用超时 11+s
 async function expectEppRuntimeDefaultValues(
   page,
   drawerTitle = DRAWER_TITLE.createBusinessCluster,
@@ -2836,8 +2836,8 @@ async function expectEppRuntimeDefaultValues(
     unit: 'ms',
     raw: false,
   });
-  expect(values.callTimeout, '调用超时默认 3 + s').toEqual({
-    value: '3',
+  expect(values.callTimeout, '调用超时默认 11 + s').toEqual({
+    value: '11',
     unit: 's',
     raw: false,
   });
@@ -2906,6 +2906,56 @@ async function fillEppRuntimeDuration(
   }
   await input.blur();
   await waitAfterResourceMutation(page, 150);
+}
+
+/**
+ * EPP 模式放行用（不改变 epp_runtime 默认值）：把流控「队列 TTL / 无端点队列 TTL」置 0
+ * （=显式禁用驱逐），此时「调用超时 > 队列 TTL」跨字段校验跳过。
+ * 适用于需要断言 epp_runtime.timeout.call 默认值/回读值的用例。
+ */
+async function ensureEppFlowTtlZero(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const card = flowControlCard(page, drawerTitle);
+  if (!(await card.isVisible().catch(() => false))) {
+    return;
+  }
+  await fillFlowControlNumber(
+    page,
+    DOC_BUSINESS_CLUSTER.queueTtlLabel,
+    0,
+    drawerTitle,
+  );
+  await fillFlowControlNumber(
+    page,
+    DOC_BUSINESS_CLUSTER.noEndpointQueueTtlLabel,
+    0,
+    drawerTitle,
+  );
+}
+
+/**
+ * EPP 模式放行用：把「调用超时」设为高于队列 TTL（默认 60s；前端校验要求严格大于）。
+ * 2026-11-02 起前端对 EPP 模式新增「调用超时 > max(队列TTL, 无端点队列TTL)」跨字段校验，
+ * 而默认组合为 call=3s / queue_ttl=60s，不调整则无法进入「复查&检查」。
+ */
+async function ensureEppCallTimeoutAboveQueueTtl(
+  page,
+  value = 70,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  // WRR 模式下 EPP 运行时参数卡片不渲染（v-if），此时无需处理
+  const card = eppRuntimeCard(page, drawerTitle);
+  if (!(await card.isVisible().catch(() => false))) {
+    return;
+  }
+  await fillEppRuntimeDuration(
+    page,
+    DOC_BUSINESS_CLUSTER.eppCallTimeoutLabel,
+    { value, unit: 's' },
+    drawerTitle,
+  );
 }
 
 // 逐字输入 duration 数字框（用于「仅接受数字与小数点」断言），返回输入框最终显示值
@@ -3520,6 +3570,8 @@ module.exports = {
   selectEppRuntimeDurationUnit,
   fillEppRuntimeDuration,
   typeEppRuntimeDuration,
+  ensureEppCallTimeoutAboveQueueTtl,
+  ensureEppFlowTtlZero,
   fillEppRuntimeThreshold,
   expectEppRuntimeSwitchState,
   toggleEppRuntimeSwitch,

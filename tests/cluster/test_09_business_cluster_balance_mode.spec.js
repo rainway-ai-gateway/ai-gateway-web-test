@@ -151,6 +151,7 @@ test.describe('AI业务集群 - RM-BC-93~103 均衡模式配置', () => {
 
     // 4. 提交时默认 balance_mode = WRR（无 epp_config）
     await fillProviderAndModels(page, providerName);
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -313,6 +314,7 @@ test.describe('AI业务集群 - RM-BC-93~103 均衡模式配置', () => {
         keyAffinityBefore,
       );
 
+      await utils.ensureEppCallTimeoutAboveQueueTtl(page);
       await utils.clickWizardNext(page);
       await utils.expectWizardStep(page, '复查&检查');
       const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -374,6 +376,7 @@ test.describe('AI业务集群 - RM-BC-93~103 均衡模式配置', () => {
 
     await test.step('4. 提交体为布尔值且不因隐藏丢值；会话亲和性关闭时不下发 Header', async () => {
       await utils.fillEppConfig(page, { cacheAffinity: 'off' });
+      await utils.ensureEppCallTimeoutAboveQueueTtl(page);
       await utils.clickWizardNext(page);
       await utils.expectWizardStep(page, '复查&检查');
       const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -455,6 +458,7 @@ test.describe('AI业务集群 - RM-BC-93~103 均衡模式配置', () => {
       expect(values.sessionAffinityHeader, 'Header 空值休眠保留').toBe('');
 
       await utils.fillEppConfig(page, { sessionAffinityHeader: 'x-session-id' });
+      await utils.ensureEppCallTimeoutAboveQueueTtl(page);
       await utils.clickWizardNext(page);
       await utils.expectWizardStep(page, '复查&检查');
       const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -481,6 +485,8 @@ test.describe('AI业务集群 - RM-BC-93~103 均衡模式配置', () => {
     await navigateToModelStep(page, clusterName);
     await utils.setBalanceMode(page, 'EPP');
     await fillProviderAndModels(page, providerName);
+    // 先让「调用超时 > 队列 TTL」跨字段校验通过，才能命中本用例要断言的 Header 提交级拦截
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
 
     await test.step('1. 开启会话亲和性、Header 留空，随后将 affinity 置为 off', async () => {
       await utils.fillEppConfig(page, { sessionAffinityEnabled: true });
@@ -506,6 +512,7 @@ test.describe('AI业务集群 - RM-BC-93~103 均衡模式配置', () => {
     await test.step('4. 按提示切回亲和强度并填写 Header 后可正常进入复查', async () => {
       await utils.fillEppConfig(page, { cacheAffinity: 'medium' });
       await utils.fillEppConfig(page, { sessionAffinityHeader: 'x-session-id' });
+      await utils.ensureEppCallTimeoutAboveQueueTtl(page);
       await utils.clickWizardNext(page);
       await utils.expectWizardStep(page, '复查&检查');
     });
@@ -575,6 +582,7 @@ test.describe('AI业务集群 - RM-BC-93~103 均衡模式配置', () => {
       kvCacheUtilizationMax: 0.9,
     });
 
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -814,6 +822,7 @@ test.describe('AI业务集群 - RM-BC-104~109 EPP 调度参数', () => {
     // 5. 正整数 100 合法，值正确反映在提交体中
     await utils.fillEppConfig(page, { waitingQueueMax: 100 });
     await fillProviderAndModels(page, providerName);
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -863,6 +872,7 @@ test.describe('AI业务集群 - RM-BC-104~109 EPP 调度参数', () => {
     // 5. 正整数 50 合法，值正确反映在提交体中
     await utils.fillEppConfig(page, { runningRequestsMax: 50 });
     await fillProviderAndModels(page, providerName);
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -901,6 +911,7 @@ test.describe('AI业务集群 - RM-BC-104~109 EPP 调度参数', () => {
     // 3. 重新开启后提交，提交体中值为布尔 true
     await utils.fillEppConfig(page, { fallbackOnEmpty: true });
     await fillProviderAndModels(page, providerName);
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -955,6 +966,7 @@ test.describe('AI业务集群 - RM-BC-104~109 EPP 调度参数', () => {
     await utils.fillEppConfig(page, { metricsStalenessThresholdMs: 200 });
     await expect(item).not.toContainText('须为 > 0 的整数');
     await fillProviderAndModels(page, providerName);
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -995,6 +1007,7 @@ test.describe('AI业务集群 - RM-BC-104~109 EPP 调度参数', () => {
 
     // 3. 提交体中 enable_eviction 恒为 false
     await fillProviderAndModels(page, providerName);
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     const request = await utils.waitForClusterCreateRequest(page, () =>
@@ -1040,6 +1053,7 @@ test.describe('AI业务集群 - RM-BC-104~109 EPP 调度参数', () => {
       sessionAffinityHeader: 'x-session-id',
       metricsStalenessThresholdMs: 300,
     });
+    await utils.ensureEppCallTimeoutAboveQueueTtl(page);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
     await utils.waitForClusterCreateRequest(page, () =>

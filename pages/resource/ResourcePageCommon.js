@@ -157,7 +157,8 @@ const DOC_BUSINESS_CLUSTER = {
   sessionAffinityEnabledLabel: '会话亲和性',
   sessionAffinityHeaderLabel: '会话亲和性 Header',
   sessionAffinityHeaderRequiredWhenOff:
-    '亲和强度为 off 时会话亲和性不生效；请先将亲和强度切回 low/medium/high 填写 Header，或关闭会话亲和性',
+    // 53014ac（11/4）文案调整：亲和强度以「关闭 / 低/中/高」表述
+    '亲和强度为「关闭」时会话亲和性不生效；如需填写 Header，请先把亲和强度调回低/中/高，或关闭会话亲和性',
   kvCacheUtilizationMaxLabel: 'KV 缓存利用率上限',
   waitingQueueMaxLabel: '排队长度过滤阈值',
   runningRequestsMaxLabel: '执行中请求数过滤阈值',
@@ -195,7 +196,8 @@ const DOC_BUSINESS_CLUSTER = {
   runningRequestsMaxInvalidMsg: '执行中请求数过滤阈值须为 >= 0 的数',
   metricsStalenessThresholdMsInvalidMsg: '指标失效剔除阈值须为 > 0 的整数（ms）',
   enableEvictionDisabledHint: '当前不支持开启，保持关闭',
-  defaultFlowControl: { max_requests: -1, queue_ttl: 60, no_endpoint_queue_ttl: 60, enable_eviction: false },
+  // 2026-11-11：默认排队预算 60→9（与调用超时默认 11s 搭配，满足 call > max(TTL)）
+  defaultFlowControl: { max_requests: -1, queue_ttl: 9, no_endpoint_queue_ttl: 9, enable_eviction: false },
   // 2026-10-13 EPP 运行时参数（RM-BC-115~122）
   // 分组子字段：关闭健康检查（switch）、健康检查间隔/冷却时长/连接超时/调用超时（duration
   // 复合控件：数字框 + 单位下拉 ms/s/m）、失败次数阈值/成功次数阈值（InputNumber，min=1）；
@@ -221,7 +223,7 @@ const DOC_BUSINESS_CLUSTER = {
       cooldown: '45s',
       success_threshold: 2,
     },
-    timeout: { connect: '500ms', call: '3s' },
+    timeout: { connect: '500ms', call: '11s' },
   },
   // duration 字段默认单位：间隔/冷却/调用超时 s，连接超时 ms
   defaultEppRuntimeUnits: {

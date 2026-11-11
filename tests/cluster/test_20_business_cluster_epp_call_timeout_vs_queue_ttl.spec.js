@@ -22,9 +22,12 @@
  * 2026-11-02-cluster-epp-ui-copy-and-call-timeout-check）：
  * - 仅 balance_mode=EPP 时生效，WRR（含休眠保留的 epp_runtime）不校验；
  * - 调用超时（按 Go duration 解析）须「严格大于」max(队列 TTL, 无端点队列 TTL) 秒；
- * - TTL 留空按默认 60 计，无端点 TTL 留空跟随队列 TTL；
+ * - TTL 留空按默认 9 计，无端点 TTL 留空跟随队列 TTL；
  * - 两个 TTL 均为 0（显式禁用驱逐）时不约束；
- * - 调用超时留空按默认 3s 参与比较；
+ * - 调用超时留空按默认 11s 参与比较；
+ * - 2026-11-11 默认值调整（api：queue_ttl/no_endpoint_queue_ttl 9s、timeout.call 11s）后，
+ *   默认组合本身合法（11 > 9），原「默认值被拦截」用例改为显式填入 TTL 60 构造拦截，
+ *   并新增「默认值组合可直接提交」用例；
  * - 修改任一 TTL 字段后立即重新校验调用超时（change 触发）。
  *
  * 本文件同时覆盖 2026-11-02 文案更名断言：「在飞请求数过滤阈值」→「执行中请求数过滤阈值」
@@ -233,7 +236,14 @@ test.describe('AI业务集群 - RM-BC-124 调用超时 vs 队列 TTL 跨字段�
       ).toHaveCount(0);
     });
 
-    await test.step('1. 默认值（TTL 60/60、调用超时 3s）：点下一步被拦截，提示最大值 60 秒', async () => {
+    await test.step('1. 显式填 TTL 60/60、调用超时 3s：点下一步被拦截，提示最大值 60 秒', async () => {
+      // 2026-11-11 起默认组合（9/9 + 11s）本身合法，这里显式构造非法组合验证拦截
+      await utils.fillFlowControlNumber(page, DOC.queueTtlLabel, 60);
+      await utils.fillFlowControlNumber(page, DOC.noEndpointQueueTtlLabel, 60);
+      await utils.fillEppRuntimeDuration(page, DOC.eppCallTimeoutLabel, {
+        value: '3',
+        unit: 's',
+      });
       await utils.clickWizardNext(page);
       await utils.expectWizardStep(page, '大模型配置');
       await utils.expectEppRuntimeFieldError(
@@ -307,6 +317,55 @@ test.describe('AI业务集群 - RM-BC-124 调用超时 vs 队列 TTL 跨字段�
       expect(body.epp_runtime.timeout.call, '提交体 timeout.call').toBe('3s');
       expect(body.epp_config.flow_control.queue_ttl).toBe(0);
       expect(body.epp_config.flow_control.no_endpoint_queue_ttl).toBe(0);
+    });
+  });
+
+  test('默认值组合（TTL 9/9、调用超时 11s）合法：不调参即可提交', async ({ page }) => {
+    test.setTimeout(240000);
+    const clusterName = utils.generateTestBusinessClusterName();
+    ctx.cleanup.trackBusinessCluster(clusterName);
+    const providerName = await createProvider({ page, cleanup: ctx.providerCleanup });
+    await navigateToModelStep(page, clusterName);
+    await utils.setBalanceMode(page, EPP_MODE);
+    await fillProviderAndModels(page, providerName);
+
+    const readFlow = async (label) => {
+      const item = utils
+        .flowControlCard(page)
+        .locator('.ivu-form-item')
+        .filter({ hasText: label })
+        .first();
+      return (await item.locator('input').first().inputValue()).trim();
+    };
+
+    await test.step('1. 默认值：队列 TTL / 无端点队列 TTL = 9，调用超时 = 11s', async () => {
+      expect(await readFlow(DOC.queueTtlLabel), '队列 TTL 默认 9').toBe('9');
+      expect(
+        await readFlow(DOC.noEndpointQueueTtlLabel),
+        '无端点队列 TTL 默认 9',
+      ).toBe('9');
+      const runtime = await utils.getEppRuntimeValues(page);
+      expect(runtime.callTimeout, '调用超时默认 11 + s').toEqual({
+        value: '11',
+        unit: 's',
+        raw: false,
+      });
+      await utils.expectEppRuntimeFieldErrorHidden(page, DOC.eppCallTimeoutLabel);
+    });
+
+    await test.step('2. 直接下一步：默认组合满足 11 > max(9,9)，进入复查页', async () => {
+      await utils.clickWizardNext(page);
+      await utils.expectWizardStep(page, '复查&检查');
+    });
+
+    await test.step('3. 提交体：queue_ttl=9、no_endpoint_queue_ttl=9、timeout.call=11s', async () => {
+      const request = await utils.waitForClusterCreateRequest(page, () =>
+        utils.clickWizardSubmit(page),
+      );
+      const body = request.postDataJSON();
+      expect(body.epp_config.flow_control.queue_ttl).toBe(9);
+      expect(body.epp_config.flow_control.no_endpoint_queue_ttl).toBe(9);
+      expect(body.epp_runtime.timeout.call).toBe('11s');
     });
   });
 
