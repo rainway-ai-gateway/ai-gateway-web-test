@@ -25,7 +25,8 @@
  * - RT-E-02 点击后默认参数分别为 8192 / 2048
  * - RT-E-04 合法表达式校验通过（无内联错误）
  * - RT-E-05 非法表达式校验失败（内联错误非空，抽屉不关闭）
- * - RT-E-06 错误提示单行展示（1 个 tip、无换行、单行高度）
+ * - RT-E-06 错误提示展示（1 个 tip；api 编译错误可多行，最多 3 行且不横向溢出；
+ *   2026-11-11 经确认放宽原「单行」要求）
  *
  * 未实现（已在文档标注）：
  * - RT-E-03 Tooltip 文案 → 同义覆盖于 RT-E-10（`body.req_body_larger_than` 的示例与 Content-Length 说明）
@@ -165,8 +166,8 @@ test.describe('路由管理 - RT-E-05 请求体大小条件非法输入校验', 
   });
 });
 
-test.describe('路由管理 - RT-E-06 请求体大小条件错误提示单行展示', () => {
-  test('错误提示为单个 tip、无换行、单行高度', async ({ page }) => {
+test.describe('路由管理 - RT-E-06 请求体大小条件错误提示展示', () => {
+  test('错误提示为单个 tip、可多行编译明细、≤3 行且不横向溢出', async ({ page }) => {
     await test.step('前置：进入编辑模式并打开添加规则抽屉', async () => {
       await enterAddRuleDrawer(page);
     });
@@ -176,26 +177,36 @@ test.describe('路由管理 - RT-E-06 请求体大小条件错误提示单行展
       await expect(expressionErrorTip(page)).toHaveCount(1, { timeout: 10000 });
     });
 
-    await test.step('提示文本单行：无换行符，高度等于单行行高', async () => {
+    await test.step('提示内容与布局：单个 tip、含编译错误摘要、≤3 行且不横向溢出', async () => {
       const tip = expressionErrorTip(page);
-      const text = await tip.innerText();
-      expect(text.includes('\n'), '错误提示不应包含换行').toBe(false);
+      const text = (await tip.innerText()).trim();
+      expect(text.length, '错误提示文本不应为空').toBeGreaterThan(0);
+      // api /expression/verify 的 message 带编译错误明细（语法错误 + 表达式行 + 插入符行）
+      expect(text).toMatch(/syntax error|unexpected token|compile error/i);
+
       const metrics = await tip.evaluate((el) => {
         const style = window.getComputedStyle(el);
         return {
           height: el.getBoundingClientRect().height,
           lineHeight: parseFloat(style.lineHeight) || 0,
           fontSize: parseFloat(style.fontSize) || 0,
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
         };
       });
-      const singleLineLimit = Math.max(
+      const lineHeight = Math.max(
         metrics.lineHeight || 0,
         metrics.fontSize * 1.6,
       );
+      // 2026-11-11 口径：允许 api 返回的多行编译错误，最多 3 行
       expect(
         metrics.height,
-        `提示高度 ${metrics.height}px 应不超过单行上限 ${singleLineLimit}px`,
-      ).toBeLessThanOrEqual(singleLineLimit + 1);
+        `提示高度 ${metrics.height}px 应不超过 3 行上限 ${lineHeight * 3}px`,
+      ).toBeLessThanOrEqual(lineHeight * 3 + 2);
+      expect(
+        metrics.scrollWidth,
+        '错误提示不应横向溢出（scrollWidth 超出 clientWidth）',
+      ).toBeLessThanOrEqual(metrics.clientWidth + 1);
     });
   });
 });

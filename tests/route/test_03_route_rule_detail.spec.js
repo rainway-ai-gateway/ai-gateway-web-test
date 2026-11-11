@@ -225,6 +225,21 @@ test.describe('路由管理 - RT-D-22b 点击返回按钮返回路由表列表',
 });
 
 test.describe('路由管理 - RT-D-23 规则详情字段与接口数据一致', () => {
+  // 失败路径也要兜底清理：历史 rt_detail_check_* 残留正是断言中断导致删除未执行，
+  // 残留会反过来让 RT-D-28 等用例的规则名失去可筛选子串
+  test.afterEach(async ({ page }) => {
+    const current = await utils.getGlobalRouteRulesViaApi(page);
+    const rest = (current?.rules || []).filter(
+      (r) => !(r.name || '').startsWith('rt_detail_check_'),
+    );
+    if (rest.length !== (current?.rules || []).length) {
+      await utils.setGlobalRouteRulesViaApi(page, {
+        enabled: current?.enabled === true,
+        rules: rest,
+      });
+    }
+  });
+
   test('RT-D-23 规则详情字段与接口数据一致', async ({ page }) => {
     const clusters = await utils.getAvailableClustersForRule(page);
     expect(clusters.length, '无可用集群').toBeGreaterThan(0);

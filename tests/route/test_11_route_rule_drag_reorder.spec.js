@@ -171,10 +171,16 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
     });
 
     await test.step('2. 尝试拖拽：顺序保持不变', async () => {
+      // 前置「复制规则」补齐行数会置脏，「提交并生效」此时本就可用；
+      // 这里断言的是「拖拽没有产生新的改动」——禁用态与拖拽前保持一致
+      const disabledBeforeDrag = await utils.isSubmitAndEffectDisabled(page);
       await utils.dragRuleRow(page, 0, sortedOrder.length - 1);
       await page.waitForTimeout(500);
       await utils.expectRuleNamesInOrder(page, sortedOrder);
-      await utils.expectSubmitAndEffectDisabled(page, true);
+      expect(
+        await utils.isSubmitAndEffectDisabled(page),
+        '拖拽不应产生新的改动（禁用态与拖拽前一致）',
+      ).toBe(disabledBeforeDrag);
     });
 
     await test.step('3. 清除排序（再次点击同一排序图标）：恢复可拖拽与原始顺序', async () => {
@@ -206,7 +212,15 @@ test.describe('路由管理 - RT-D-28 拖拽排序', () => {
     });
 
     await test.step('1. 列搜索激活：仅展示命中行且行不可拖拽', async () => {
-      const keyword = pickFilterableKeyword(baseline);
+      let keyword = pickFilterableKeyword(baseline);
+      if (!keyword) {
+        // 现有规则名之间筛不出「只命中部分行」的子串（如历史残留规则互不为子串）：
+        // 复制两条同规则（-copy 后缀），用 '-copy' 构造可筛选场景（复制仅作用于本地表单，不落库）
+        await utils.clickCopyRuleButtonByIndex(page, 0);
+        await utils.clickCopyRuleButtonByIndex(page, 0);
+        baseline = await utils.getRuleNamesInOrder(page);
+        keyword = pickFilterableKeyword(baseline);
+      }
       expect(
         keyword,
         '规则名之间无可用作筛选的子串，无法构造列搜索场景',
