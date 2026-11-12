@@ -34,6 +34,7 @@ const {
   ENTITY_SEARCH_PLACEHOLDER_TYPE,
   ENTITY_SEARCH_PLACEHOLDER_PARENT,
   ENTITY_SEARCH_PLACEHOLDER_QUOTA,
+  ENTITY_SEARCH_PLACEHOLDER_ID,
   ENTITY_SEARCH_PLACEHOLDER_DESCRIPTION,
   ENTITY_DETAIL_DRAWER_PARTS,
   ivuDrawer,
@@ -57,6 +58,8 @@ const {
   RATE_LIMIT_FIELD,
   resolveRateLimitSection,
   resolveRateLimitFieldKey,
+  quotaUnitOptionLabel,
+  quotaStorageToInput,
 } = require('./entity-shared');
 const {
   getUserData,
@@ -155,6 +158,8 @@ async function openCreateEntityDrawer(page) {
 }
 
 async function openEditEntityDrawer(page, entityName) {
+  // 单页 20 条且默认不按新建排序：先按名称搜索+翻页兜底，避免数据量增长后行不在当前页
+  await ensureEntityRowVisible(page, entityName);
   await entityOrgTable(page).rowAction(entityName, '编辑').click();
   await page.waitForTimeout(500);
   await ivuDrawer(page).expectOpen(DRAWER_TITLE.editEntity);
@@ -162,6 +167,7 @@ async function openEditEntityDrawer(page, entityName) {
 
 async function openEntityDetail(page, entityName) {
   const table = entityOrgTable(page);
+  await ensureEntityRowVisible(page, entityName);
   await table.rowByText(entityName).click();
   await page.waitForTimeout(500);
   await expectEntityDetailDrawerOpen(page);
@@ -216,6 +222,38 @@ async function expectEntityAllowModelsDefault(
     '允许模型',
     model,
   );
+}
+
+/**
+ * EM-E-63/64：清空「允许模型」默认的「全部模型（`*`）」标签后再选具体模型。
+ * 多选 el-select 直接追加会保留 `*`（前端提交时不会归一化多值），故必须先摘标签。
+ */
+async function replaceEntityAllowModelsSelection(
+  page,
+  models,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const cmp = ElSelectComponent.fromFormItem(
+    page,
+    ivuDrawer(page).withTitle(drawerTitle),
+    '允许模型',
+  );
+  const trigger = cmp.rootLocator();
+  await expect(trigger).toBeVisible({ timeout: 15000 });
+  for (let i = 0; i < 5; i++) {
+    const close = trigger.locator('.el-tag__close').first();
+    if ((await close.count()) === 0) {
+      break;
+    }
+    await close.click();
+    await page.waitForTimeout(200);
+  }
+  const list = Array.isArray(models) ? models : [models];
+  for (const model of list) {
+    await cmp.selectOptionFilterable(model);
+    await page.waitForTimeout(200);
+  }
+  return list;
 }
 
 async function fillEntityFormBasic(
@@ -375,7 +413,24 @@ async function selectEntityQuotaUnlimited(
   value,
   drawerTitle = DRAWER_TITLE.createEntity,
 ) {
-  await selectEntityFormSelect(page, '无限配额', value, drawerTitle);
+  // issue #139：「无限配额」改为「配额限制」，选项语义反转（是=有限配额，否=无限配额）
+  const quotaLimitedValue = value === '是' ? '否' : '是';
+  await selectEntityFormSelect(page, '配额限制', quotaLimitedValue, drawerTitle);
+}
+
+/** 读取表单当前「配额单位」的存储口径（total_token | RMB） */
+async function readEntityQuotaUnit(
+  page,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  const trigger = drawer
+    .locator('.ivu-form-item')
+    .filter({ hasText: '配额单位' })
+    .locator('.ivu-select-selection')
+    .first();
+  const text = ((await trigger.textContent()) || '').trim();
+  return text.indexOf('元') >= 0 && text.indexOf('Token') < 0 ? 'RMB' : 'total_token';
 }
 
 async function entityQuotaTotalInput(
@@ -448,6 +503,7 @@ async function setEntityQuotaTotalModel(
         });
       });
     });
+    // issue #139：formData.quota_plan.quota 为录入单位（百万Token/元），直接注入
   }, value);
   if (!result || !result.ok) {
     throw new Error(
@@ -463,20 +519,22 @@ async function fillEntityQuotaTotal(
   total,
   drawerTitle = DRAWER_TITLE.createEntity,
 ) {
-  const num = Number(total);
-  // InputNumber：:min=0 拦负数，:precision=0 拦小数；须写 Vue 模型 + FormItem.validate
-  // 超大上界值由用例经 setEntityQuotaTotalModel 注入，避免 InputNumber :max 钳制
-  if (Number.isFinite(num) && (num < 0 || !Number.isInteger(num))) {
-    return setEntityQuotaTotalModel(page, num, drawerTitle);
+  // 负数无法经键盘输入（组件清洗会去掉负号），按原始入参判断后走模型注入触发校验
+  const rawNum = Number(total);
+  if (Number.isFinite(rawNum) && rawNum < 0) {
+    return setEntityQuotaTotalModel(page, total, drawerTitle);
   }
+  // issue #139：入参为存储值（token 数/元），按当前单位换算为录入值（百万Token/元）
+  const unit = await readEntityQuotaUnit(page, drawerTitle);
+  const inputValue = quotaStorageToInput(total, unit);
   const input = await entityQuotaTotalInput(page, drawerTitle);
   await expect(input).toBeVisible({ timeout: 15000 });
   await input.click({ clickCount: 3 });
   await page.keyboard.press('Backspace');
-  await input.pressSequentially(String(total), { delay: 30 });
+  await input.pressSequentially(String(inputValue), { delay: 30 });
   await input.blur();
   await page.waitForTimeout(300);
-  return { ok: true, quota: total };
+  return { ok: true, quota: inputValue };
 }
 
 async function fillEntityQuotaTotalAndBlur(
@@ -506,7 +564,10 @@ async function selectEntityQuotaUnit(
     .filter({ hasText: '配额单位' })
     .locator('.ivu-select')
     .first();
-  await new IvuSelectComponent(page, trigger).selectOptionExact(unit);
+  // issue #139：选项文案改为「百万Token / 元」，入参仍收存储口径 total_token / RMB
+  await new IvuSelectComponent(page, trigger).selectOptionExact(
+    quotaUnitOptionLabel(unit),
+  );
 }
 
 async function selectEntityQuotaResetCycle(
@@ -738,8 +799,10 @@ async function clearEntityRateLimitRuleField(
     .filter({ hasText: fieldLabel })
     .first();
   const input = formItem.locator('input').first();
-  await input.fill('');
-  await input.dispatchEvent('blur');
+  // issue #139：NumberInput 基于 iView Input，其 isOnComposition 守卫会吞掉 fill('') 的 input 事件，
+  // 键盘三击选中+退格清除更稳
+  await input.click({ clickCount: 3 });
+  await input.press('Backspace');
   await page.waitForTimeout(300);
 }
 
@@ -793,6 +856,117 @@ async function fillEntityBatchLimitField(
       `批量限流字段 ${label} 未写入表单模型: ${JSON.stringify(actual)}`,
     );
   }
+}
+
+/**
+ * 直接把批量限流维度写入 Vue 表单模型并触发该 FormItem 校验。
+ * 负数无法经键盘输入（NumberInput 清洗会去掉负号，issue #139），
+ * 校验「不能为负数」等负值场景必须走模型注入（与 setEntityQuotaTotalModel 同口径）。
+ */
+async function setEntityBatchLimitModel(
+  page,
+  key,
+  value,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const label = ENTITY_BATCH_LIMIT_LABELS[key];
+  if (!label) {
+    throw new Error(`未知的批量限流维度: ${key}`);
+  }
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  await expect(drawer).toBeVisible({ timeout: 15000 });
+  const result = await drawer.evaluate(
+    (drawerEl, payload) => {
+      const { fieldKey, fieldValue } = payload;
+      const formEl = drawerEl.querySelector('.ivu-form');
+      if (!formEl || !formEl.__vue__) {
+        return { ok: false, reason: 'no-form-vue' };
+      }
+      let vm = formEl.__vue__;
+      while (vm && !vm.formData) {
+        vm = vm.$parent;
+      }
+      const batch =
+        vm &&
+        vm.formData &&
+        vm.formData.rate_limit_policy &&
+        vm.formData.rate_limit_policy.rules &&
+        vm.formData.rate_limit_policy.rules.batch_limits;
+      if (!batch) {
+        return { ok: false, reason: 'no-batch_limits' };
+      }
+      const formRef = (vm.$refs && (vm.$refs.formData || vm.$refs.form)) || null;
+      if (!formRef || !Array.isArray(formRef.fields)) {
+        return { ok: false, reason: 'no-form-fields' };
+      }
+      const prop = `rate_limit_policy.rules.batch_limits.${fieldKey}`;
+      if (typeof vm.$set === 'function') {
+        vm.$set(batch, fieldKey, fieldValue);
+      } else {
+        batch[fieldKey] = fieldValue;
+      }
+      const field = formRef.fields.find((f) => f.prop === prop);
+      if (!field || typeof field.validate !== 'function') {
+        return {
+          ok: false,
+          reason: 'no-batch-limit-form-item',
+          props: formRef.fields.map((f) => f.prop),
+        };
+      }
+      return new Promise((resolve) => {
+        // 再次写入，尽量赶在组件钳制前触发校验
+        if (typeof vm.$set === 'function') {
+          vm.$set(batch, fieldKey, fieldValue);
+        } else {
+          batch[fieldKey] = fieldValue;
+        }
+        field.validate('change', (errorMessage) => {
+          resolve({
+            ok: true,
+            validated: true,
+            errorMessage: errorMessage || null,
+            value: batch[fieldKey],
+            validateState: field.validateState,
+            validateMessage: field.validateMessage,
+          });
+        });
+      });
+    },
+    { fieldKey: key, fieldValue: value },
+  );
+  if (!result || !result.ok) {
+    throw new Error(
+      `未能写入批量限流字段 ${label} 到 Vue formData: ${JSON.stringify(result || {})}`,
+    );
+  }
+  await page.waitForTimeout(300);
+  return result;
+}
+
+/**
+ * 读取「批量限流」维度输入值（EM-E-61 接口 ↔ 编辑回显一致性用；数字框带千分位，按数值比较）
+ * @param {string} key max_create_rpm | max_active_batches | max_file_bytes | max_file_lines
+ */
+async function readEntityBatchLimitField(
+  page,
+  key,
+  drawerTitle = DRAWER_TITLE.editEntity,
+) {
+  const label = ENTITY_BATCH_LIMIT_LABELS[key];
+  if (!label) {
+    throw new Error(`未知的批量限流维度: ${key}`);
+  }
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  await expect(drawer).toBeVisible({ timeout: 15000 });
+  const item = drawer
+    .locator('.ivu-form-item')
+    .filter({ hasText: label })
+    .first();
+  const input = item
+    .locator('input.ivu-input, .ivu-input-number-input')
+    .first();
+  await expect(input).toBeVisible({ timeout: 10000 });
+  return (await input.inputValue()).trim();
 }
 
 async function fillEntityBatchLimits(
@@ -1123,6 +1297,14 @@ async function fillEntityQuotaForm(
   if (quota.resetCycle !== undefined) {
     await selectEntityQuotaResetCycle(page, quota.resetCycle, drawerTitle);
   }
+  if (quota.passWhenNoQuota !== undefined) {
+    await selectEntityFormSelect(
+      page,
+      '配额不足时放行',
+      quota.passWhenNoQuota ? '是' : '否',
+      drawerTitle,
+    );
+  }
 }
 
 async function fillEntityRateLimitForm(
@@ -1391,12 +1573,13 @@ async function searchEntityByQuota(page, keyword) {
 }
 
 async function searchEntityById(page, entityId) {
-  // 在 ID 搜索框输入（th 内除 ID 外还含排序图标，不能用 ^ID$ 精确匹配）
-  const idSearchInput = page
-    .locator('th')
-    .filter({ hasText: /^ID/ })
-    .locator('input');
-  await idSearchInput.fill(entityId);
+  // 搜索框在 pageTable 的 searchTable 行（placeholder「请输入ID查询」），不在表头 th 内
+  const input = entityOrgTable(page).searchInput(
+    ENTITY_SEARCH_PLACEHOLDER_ID,
+  );
+  await input.click({ clickCount: 3 });
+  await page.keyboard.press('Backspace');
+  await input.pressSequentially(String(entityId), { delay: 30 });
   await page.waitForTimeout(1000);
 }
 
@@ -1417,15 +1600,7 @@ async function filterEntityByRateLimitStatus(page, status) {
   }
   // 如果选择"全部"，点击清除图标
   if (status === '全部') {
-    await waitForEntitiesListResponse(page, async () => {
-      const clearIcon = trigger.locator('.ivu-icon-ios-close');
-      if ((await clearIcon.count()) > 0) {
-        await clearIcon.click();
-      } else {
-        await trigger.click();
-        await page.keyboard.press('Escape');
-      }
-    });
+    await clearIvuSearchSelect(page, trigger);
     return;
   }
   await trigger.click();
@@ -1437,6 +1612,58 @@ async function filterEntityByRateLimitStatus(page, status) {
   await waitForEntitiesListResponse(page, async () => {
     await page.waitForTimeout(500);
   });
+}
+
+/**
+ * 清空 iView 搜索区下拉（Select clearable）：
+ * 清除图标仅在 hover 后渲染，且类名为 `ivu-select-arrow ivu-icon-ios-close-circle`
+ * （旧写法 `.ivu-icon-ios-close` 永不命中 → 静默失效，2026-11-01 审计修正）
+ */
+async function clearIvuSearchSelect(page, trigger) {
+  await trigger.hover();
+  await page.waitForTimeout(200);
+  const clearIcon = trigger.locator(
+    '.ivu-select-arrow.ivu-icon-ios-close-circle',
+  );
+  if ((await clearIcon.count()) > 0) {
+    await clearIcon.first().click();
+    await waitForPageSettled(page, 800);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * EM-E-67：级别筛选（列表「级别」列 searchType=select，下拉 1~5）
+ * 定位方式：搜索区 placeholder「请选择级别」（com.tipSelectX + 列标题）
+ */
+async function filterEntityByLevel(page, level) {
+  const searchArea = entityOrgTable(page).searchArea();
+  const selects = searchArea.locator('.ivu-select');
+  await expect(selects.first()).toBeVisible({ timeout: 15000 });
+  // 搜索区有「级别」「限流状态」两个下拉；按占位符文本定位，找不到时回退首个
+  let target = selects.first();
+  const count = await selects.count();
+  for (let i = 0; i < count; i += 1) {
+    const text = ((await selects.nth(i).innerText()) || '').replace(/\s+/g, '');
+    if (text.includes('级别')) {
+      target = selects.nth(i);
+      break;
+    }
+  }
+  // pageTable 为纯前端过滤（serverPagination=false），不触发 GET /entities，
+  // 故不包 waitForEntitiesListResponse（会白等 15s 超时）
+  if (level === '全部' || level === undefined || level === null) {
+    await clearIvuSearchSelect(page, target);
+    return;
+  }
+  await target.click();
+  await page
+    .locator('.ivu-select-dropdown:visible .ivu-select-item')
+    .filter({ hasText: new RegExp(`^${level}$`) })
+    .first()
+    .click();
+  await waitForPageSettled(page, 800);
 }
 
 async function expectEntityVisible(page, entityName, timeout) {
@@ -1698,6 +1925,16 @@ async function expectEntityDetailDescriptionRow(page, expected) {
   await expect(row.locator('.info-value')).toHaveText(expected);
 }
 
+/** EM-E-63/64/65/66：详情抽屉「基本信息/配额信息」区按 label 读取展示值 */
+async function expectEntityDetailInfoRow(page, label, expected) {
+  const row = entityDetailDrawer(page)
+    .locator('.info-row')
+    .filter({ has: page.locator('.info-label', { hasText: label }) })
+    .first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  await expect(row.locator('.info-value')).toHaveText(expected);
+}
+
 /** EM-DESC-05：详情基本信息区描述行位于 名称 与 类型 之间 */
 async function expectEntityDetailDescriptionRowOrder(page) {
   const labels = await entityDetailDrawer(page)
@@ -1820,7 +2057,8 @@ function resetQuotaTotalInput(page) {
 
 async function fillResetQuotaForm(page, total, reason) {
   const modal = resetQuotaModal(page);
-  await expect(modal.getByText('新的配额总量', { exact: true })).toBeVisible();
+  // issue #139：标签变为「新的配额总量（百万Token / 元）」，不再是精确文本
+  await expect(modal.getByText('新的配额总量', { exact: false }).first()).toBeVisible();
   let quotaInput = resetQuotaTotalInput(page);
   if ((await quotaInput.count()) === 0) {
     quotaInput = modal
@@ -1829,7 +2067,10 @@ async function fillResetQuotaForm(page, total, reason) {
       .locator('input')
       .first();
   }
-  await quotaInput.fill(String(total));
+  // issue #139：入参为存储值（token 数/元），按弹窗单位换算为录入值
+  await quotaInput.fill(
+    String(quotaStorageToInput(total, await readResetQuotaUnit(page))),
+  );
   if (reason !== undefined) {
     let reasonInput = modal
       .locator('.info-row')
@@ -1859,8 +2100,7 @@ async function clearResetQuotaTotal(page) {
   }
   await input.click({ clickCount: 3 });
   await input.press('Backspace');
-  await input.fill('');
-  await input.blur();
+  await page.waitForTimeout(200);
 }
 
 async function submitResetQuotaForm(page) {
@@ -1888,59 +2128,38 @@ async function expectResetQuotaDrawerHidden(page) {
 }
 
 /**
- * 直接写入重置配额弹窗 Vue 模型 newQuota，绕过 InputNumber :max=90000000 钳制。
- * iView InputNumber 只在用户输入（setValue）时钳制，watch value 仅同步不钳制，
- * 因此注入超限值后点击「确认」时 confirmResetQuota 读到的即注入值。
- * EntityView / ApiKeyView 共用（两处弹窗标题一致、newQuota 均为详情组件 data）。
+ * 在重置配额弹窗中键入新配额总量（录入单位：百万Token / 元）。
+ * issue #139：组件不再有 max 钳制，超限值可直接键盘输入，点击「确认」时由校验拦截；
+ * 不再依赖 Vue 模型注入（iView Modal teleport 后 __vue__ 链不可达）。
  */
 async function setResetQuotaTotalModel(page, value) {
   const modal = resetQuotaModal(page);
   await expect(modal).toBeVisible({ timeout: 15000 });
-  const result = await modal.evaluate((modalEl, quotaValue) => {
-    // 优先从 modal 根节点 Vue 实例向上找持有 newQuota 的详情组件
-    let vm = modalEl.__vue__ || null;
-    while (
-      vm &&
-      !(vm.$data && Object.prototype.hasOwnProperty.call(vm.$data, 'newQuota'))
-    ) {
-      vm = vm.$parent;
-    }
-    if (!vm) {
-      // 回退：从弹窗内 InputNumber 实例向上找
-      const inputEl = modalEl.querySelector('.ivu-input-number');
-      if (inputEl && inputEl.__vue__) {
-        vm = inputEl.__vue__;
-        while (
-          vm &&
-          !(
-            vm.$data &&
-            Object.prototype.hasOwnProperty.call(vm.$data, 'newQuota')
-          )
-        ) {
-          vm = vm.$parent;
-        }
-      }
-    }
-    if (!vm) {
-      return { ok: false, reason: 'no-newQuota-vm' };
-    }
-    if (typeof vm.$set === 'function') {
-      vm.$set(vm.$data, 'newQuota', quotaValue);
-    } else {
-      vm.$data.newQuota = quotaValue;
-    }
-    if (vm.$forceUpdate) {
-      vm.$forceUpdate();
-    }
-    return { ok: true, newQuota: vm.$data.newQuota };
-  }, value);
-  if (!result || !result.ok) {
-    throw new Error(
-      `未能写入重置配额总量到 Vue 模型: ${JSON.stringify(result || {})}`,
-    );
+  let input = resetQuotaTotalInput(page);
+  if ((await input.count()) === 0) {
+    input = modal
+      .locator('.modal-form-item')
+      .filter({ hasText: '新的配额总量' })
+      .locator('input')
+      .first();
   }
+  await input.click({ clickCount: 3 });
+  await input.press('Backspace');
+  await input.pressSequentially(String(value), { delay: 30 });
+  await input.blur();
   await page.waitForTimeout(300);
-  return result;
+  return { ok: true, newQuota: value };
+}
+
+async function readResetQuotaUnit(page) {
+  const modal = resetQuotaModal(page);
+  const label = await modal
+    .locator('.modal-label')
+    .first()
+    .textContent()
+    .catch(() => '');
+  const text = label || '';
+  return text.indexOf('元') >= 0 && text.indexOf('Token') < 0 ? 'RMB' : 'total_token';
 }
 
 /** Entity 详情抽屉：配额单位行显示指定单位（unit=RMB 场景前置断言） */
@@ -1951,7 +2170,8 @@ async function expectEntityDetailQuotaUnit(page, unit) {
     .filter({ hasText: '配额单位' })
     .first();
   await expect(row).toBeVisible({ timeout: 15000 });
-  await expect(row).toContainText(unit);
+  // issue #139：详情「配额单位」行展示「百万Token / 元」，入参仍收 total_token / RMB
+  await expect(row).toContainText(quotaUnitOptionLabel(unit));
 }
 
 async function resetEntityQuota(page, total, reason) {
@@ -2097,7 +2317,8 @@ function entityDetailQuotaCard(page) {
 
 /** EM-E-RO-03 预期 1：详情配额信息区应正常只读展示的字段 label */
 const ENTITY_DETAIL_QUOTA_READONLY_LABELS = [
-  '无限配额',
+  // issue #139：「无限配额」改为「配额限制」（是=有限，否=无限）
+  '配额限制',
   '配额总量',
   '配额单位',
   '已使用',
@@ -2212,6 +2433,7 @@ module.exports = {
   selectEntityAllowModels,
   selectEntityBlockModels,
   expectEntityAllowModelsDefault,
+  replaceEntityAllowModelsSelection,
   fillEntityFormBasic,
   expectEntityNamePlaceholder,
   expectEntityNameFormTip,
@@ -2226,6 +2448,8 @@ module.exports = {
   expectParentEntityOptionVisible,
   selectEntityQuotaUnlimited,
   entityQuotaTotalInput,
+  readEntityQuotaUnit,
+  readResetQuotaUnit,
   setEntityQuotaTotalModel,
   fillEntityQuotaTotal,
   fillEntityQuotaTotalAndBlur,
@@ -2242,6 +2466,8 @@ module.exports = {
   setEntityRateLimitRuleFieldModel,
   fillEntityBatchLimitField,
   fillEntityBatchLimits,
+  setEntityBatchLimitModel,
+  readEntityBatchLimitField,
   setupEntityCreateWithRateLimit,
   submitEntityFormExpectRateLimitError,
   submitEntityFormExpectRateLimitBackendReject,
@@ -2282,6 +2508,7 @@ module.exports = {
   searchEntityByQuota,
   searchEntityById,
   filterEntityByRateLimitStatus,
+  filterEntityByLevel,
   expectEntityVisible,
   expectEntityNotVisible,
   clickDeleteEntityBtn,
@@ -2308,6 +2535,7 @@ module.exports = {
   expectEntityEditDescriptionValue,
   submitEntityEditAndCapturePatchBody,
   expectEntityDetailDescriptionRow,
+  expectEntityDetailInfoRow,
   expectEntityDetailDescriptionRowOrder,
   readEntityDescriptionColumnTexts,
   sortEntityByDescriptionColumn,

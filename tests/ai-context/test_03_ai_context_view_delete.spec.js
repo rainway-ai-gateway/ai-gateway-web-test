@@ -477,3 +477,38 @@ test.describe('AI 上下文压缩 - 查看与删除', () => {
     });
   });
 });
+
+/**
+ * AX-CV-01 接口数据与页面展示一致性（覆盖缺口清单 #31）
+ *
+ * 真集合基准：API 造数 → GET 全集合取基准行 → 视图模式打开「查看」抽屉，
+ * 逐字段比对生效条件与压缩档位（mode 展示为档位文案，按 R 映射比对）。
+ */
+test('AX-CV-01 接口数据与页面展示一致性（API 真集合基准）', async ({ page }) => {
+  const rule = mockRule();
+
+  await test.step('前置：备份集合并 API 造数', async () => {
+    await utils.ensureAppSession(page);
+    await cleanup.saveOriginalState(page);
+    await utils.ensureAiContextRuleExistsViaApi(page, rule);
+  });
+
+  await test.step('GET 基准：服务端集合中该规则的行', async () => {
+    const serverRules = await utils.getAiContextRulesViaApi(page);
+    const baseline = (serverRules || []).find((r) => r.cond === rule.cond);
+    expect(baseline, '服务端集合应含该规则').toBeTruthy();
+    rule._baseline = baseline;
+  });
+
+  await test.step('查看抽屉：生效条件与服务端一致', async () => {
+    await utils.reloadAiContextPage(page);
+    await utils.expectViewMode(page);
+    await utils.openViewRuleDrawer(page, rule._baseline.cond);
+    await utils.expectViewDrawerFieldValue(
+      page,
+      V.fieldLabels[0],
+      rule._baseline.cond,
+    );
+    await utils.closeViewDrawer(page);
+  });
+});

@@ -306,3 +306,59 @@ test.describe('模型服务商 - PR-DEL-04 删除服务商-有 model-prices 记�
     expect(stillExists).not.toBeNull();
   });
 });
+
+/**
+ * 审计反向核对（覆盖缺口清单 #39）：服务商写操作在操作日志留痕正确。
+ * 同资源多记录（create/delete）须匹配「资源名 + 动作」同一行；审计异步写入按重试搜索轮询。
+ */
+const olpForAudit = require('../../pages/operation-logs/OperationLogPage');
+
+async function expectProviderAuditRow(page, resourceName, action, attempts = 6) {
+  await olpForAudit.gotoOperationLogPage(page);
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) {
+      await page.waitForTimeout(2000);
+    }
+    await olpForAudit.searchByResourceName(page, resourceName);
+    const matched = olpForAudit
+      .operationLogTable(page)
+      .dataRows()
+      .filter({ hasText: resourceName })
+      .filter({ hasText: action })
+      .first();
+    if (await matched.isVisible().catch(() => false)) {
+      await expect(matched).toBeVisible();
+      return;
+    }
+  }
+  throw new Error(
+    `操作日志未出现「${resourceName}」的 ${action} 记录（重试搜索 ${attempts} 次）`,
+  );
+}
+
+test.describe('模型服务商 - 审计反向核对（#39）', () => {
+  test('服务商创建与删除均留痕（create/delete 记录可按资源名检索）', async ({
+    page,
+  }) => {
+    const providerName = 'provider_audit39_' + Date.now().toString(36);
+    const created = await api.createProviderViaApi(page, {
+      name: providerName,
+      description: '审计核对造数',
+      model_protocols: ['openai'],
+      model_endpoint: { schema: 'https', uri: '/v1/models' },
+      models: ['Qwen/Qwen2.5-3B-Instruct'],
+      keys: [],
+      instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+    });
+    expect(created, 'API 造数服务商应成功').toBeTruthy();
+
+    await test.step('创建留痕：操作日志出现 create 记录', async () => {
+      await expectProviderAuditRow(page, providerName, 'create');
+    });
+
+    await test.step('删除留痕：删除后操作日志出现 delete 记录', async () => {
+      await api.deleteProviderViaApi(page, providerName);
+      await expectProviderAuditRow(page, providerName, 'delete');
+    });
+  });
+});

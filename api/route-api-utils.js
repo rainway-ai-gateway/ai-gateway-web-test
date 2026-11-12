@@ -33,22 +33,54 @@ function getOpenApiBaseUrl() {
 }
 
 async function getUserData(page) {
-  const userData = await page.evaluate(() => {
-    const userStr = localStorage.getItem('user');
-    if (!userStr) {
-      return null;
-    }
-    try {
-      return JSON.parse(userStr);
-    } catch (e) {
-      return null;
-    }
-  });
+  // 先尝试从页面 localStorage 获取
+  try {
+    const userData = await page.evaluate(() => {
+      const userStr = localStorage.getItem('user');
+      if (!userStr) {
+        return null;
+      }
+      try {
+        return JSON.parse(userStr);
+      } catch (e) {
+        return null;
+      }
+    });
 
-  if (!userData || !userData.sessionKey) {
-    throw new Error('无法从页面获取 session_key');
+    if (userData && userData.sessionKey) {
+      return userData;
+    }
+  } catch (e) {
+    // 页面可能不在正确的 origin（如 about:blank、首次导航前），尝试从 auth.json 读取。
+    // 覆盖缺口清单遗留项：BC-J-01 的 routeCleanup.saveGlobalRouteRulesOriginalState
+    // 在建页面前快照曾抛 SecurityError 导致快照丢失。
+    common.log(
+      '从页面获取 sessionKey 失败，尝试从 auth.json 读取: ' + e.message,
+    );
   }
-  return userData;
+
+  // 从 auth.json 文件读取
+  try {
+    const authPath = path.join(__dirname, '../auth.json');
+    if (fs.existsSync(authPath)) {
+      const authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+      if (authData.origins && authData.origins.length > 0) {
+        const localStorageItems = authData.origins[0].localStorage || [];
+        const userItem = localStorageItems.find((item) => item.name === 'user');
+        if (userItem && userItem.value) {
+          const userData = JSON.parse(userItem.value);
+          if (userData && userData.sessionKey) {
+            common.log('从 auth.json 成功读取 sessionKey');
+            return userData;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    common.log('从 auth.json 读取失败: ' + e.message);
+  }
+
+  throw new Error('无法获取 session_key');
 }
 
 async function requestOpenApi(page, method, endpoint, data) {
@@ -82,12 +114,30 @@ async function getGlobalRouteRulesViaApi(page) {
 }
 
 async function getRouteTablesViaApi(page) {
-  const body = await requestOpenApi(page, 'get', '/route-tables?page_size=200');
-  if (body.ErrNum !== 200) {
-    return [];
+  // 后端 page_size 上限 100，且路由表数量会随环境增长（实测已 107 条）；
+  // 只取第一页会漏掉新行（新 owner 的 id 最大 → 落在最后一页），必须分页拉全。
+  const pageSize = 100;
+  let pageNum = 1;
+  const all = [];
+  while (true) {
+    const body = await requestOpenApi(
+      page,
+      'get',
+      `/route-tables?page=${pageNum}&page_size=${pageSize}`,
+    );
+    if (body.ErrNum !== 200) {
+      break;
+    }
+    const data = body.Data || {};
+    const list = Array.isArray(data.list) ? data.list : [];
+    all.push(...list);
+    const total = data.pagination && data.pagination.total;
+    if (!list.length || all.length >= (total || 0)) {
+      break;
+    }
+    pageNum += 1;
   }
-  const data = body.Data || {};
-  return Array.isArray(data.list) ? data.list : [];
+  return all;
 }
 
 async function setGlobalRouteRulesViaApi(page, { enabled, rules }) {

@@ -45,10 +45,15 @@ const SESSION_ERROR_TEXTS = [
   'Session Key Not Exist',
 ];
 
-// 同一根因（会话/登录态失效）导致的前端模态框：401 时产品提示后跳转登录页
+// 登录态/角色异常导致的前端模态框：401 提示后跳转登录页；0.11 起角色不可用
+// 或前后端版本不一致也走这里（后者点「确定」是刷新页面，不会停在 /login）
 const SESSION_EXPIRED_TEXTS = [
   '当前未登录或者登录已过期请前往登录',
+  // 0.11 之前的文案（老构建仍可能命中）
   '当前url非法',
+  // 0.11 起守卫失败按原因区分文案
+  '当前账号没有控制台访问权限',
+  '控制台前端与后端版本不一致',
 ];
 
 const ALL_AUTH_ALERT_TEXTS = SESSION_ERROR_TEXTS.concat(SESSION_EXPIRED_TEXTS);
@@ -331,13 +336,13 @@ async function loginViaApi(page, conf = readConf()) {
  * 复活会话，破坏注销类断言。
  */
 async function injectSessionIntoPage(page, user) {
+  // 注意：这里不能在 apply 内部吞掉异常 —— about:blank（opaque origin）访问
+  // localStorage 会抛 SecurityError，被吞掉后 evaluate 会正常返回，下面的
+  // 「先落地应用首页再注入」兜底将永远不会执行，表现为「注入成功但页面仍无会话」
+  // （SC-L-06 / EM-K-24 实测：用例首个动作即导航时自愈失败）
   const apply = (u) => {
-    try {
-      localStorage.setItem('user', JSON.stringify(u));
-      localStorage.setItem('lang', 'zh');
-    } catch (e) {
-      /* sandbox 下可能不可用 */
-    }
+    localStorage.setItem('user', JSON.stringify(u));
+    localStorage.setItem('lang', 'zh');
   };
 
   try {
@@ -575,7 +580,15 @@ async function recoverFromSessionError(page, options = {}) {
     await injectSessionIntoPage(page, user);
   }
 
-  const current = await readStoredUser(page);
+  // 注入后页面侧 localStorage 偶有写入可见性延迟（全量长跑实测偶发），短暂轮询再判定；
+  // 每轮重注一次 —— 应用启动流程（store 初始化/路由守卫的会话校验）可能在我们注入
+  // 之后才清空 'user'，重注可覆盖这类清写竞态
+  let current = await readStoredUser(page);
+  for (let i = 0; i < 5 && (!current || !current.sessionKey); i += 1) {
+    await injectSessionIntoPage(page, user);
+    await page.waitForTimeout(200);
+    current = await readStoredUser(page);
+  }
   if (!current || !current.sessionKey) {
     throw new Error(
       '会话自愈失败：重新登录后仍未取得 session key（请检查 conf.json 凭证）',
@@ -598,24 +611,50 @@ async function ensureSessionHealthy(page, options = {}) {
     return false;
   }
 
-  const recovered = await recoverFromSessionError(page, options);
+  // #25：单会话环境下「登录成功但 Key 立刻被别的上下文顶掉」是常态抖动。
+  // 一次失败不再直接中断用例：按退避重试（默认 3 次），仍失败才抛错并带上诊断。
+  const attempts = Number(process.env.PW_SESSION_RETRIES || 3);
+  let recovered = false;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    recovered = await recoverFromSessionError(page, options);
 
-  if (await isLoginPage(page)) {
-    common.log('会话自愈后仍停留在登录页，执行 UI 登录兜底');
-    if (!uiLoginHandler) {
-      throw new Error('会话自愈失败：仍停留在登录页（未注册 UI 登录兜底）');
+    if (await isLoginPage(page)) {
+      common.log(
+        `会话自愈后仍停留在登录页（第 ${attempt}/${attempts} 次），执行 UI 登录兜底`,
+      );
+      if (!uiLoginHandler) {
+        throw new Error('会话自愈失败：仍停留在登录页（未注册 UI 登录兜底）');
+      }
+      await uiLoginHandler(page);
+      await reloadAppPage(page, options.retryUrl);
     }
-    await uiLoginHandler(page);
-    await reloadAppPage(page, options.retryUrl);
+
+    const onLoginPage = await isLoginPage(page);
+    const modal = await isSessionErrorModalVisible(page);
+    if (!onLoginPage && !modal) {
+      return recovered;
+    }
+
+    if (attempt < attempts) {
+      const backoff = 400 * attempt;
+      common.log(
+        `会话自愈未稳定（登录页=${onLoginPage}、模态框=${modal}），${backoff}ms 后重试`,
+      );
+      await page.waitForTimeout(backoff);
+    }
   }
 
-  if (await isLoginPage(page)) {
-    throw new Error('会话自愈失败：仍停留在登录页');
-  }
-  if (await isSessionErrorModalVisible(page)) {
-    throw new Error('会话自愈失败：仍存在「Session Key 错误」模态框');
-  }
-  return recovered;
+  const onLoginPage = await isLoginPage(page);
+  const modal = await isSessionErrorModalVisible(page);
+  throw new Error(
+    '会话自愈失败（已重试 ' +
+      attempts +
+      ' 次）：登录页=' +
+      onLoginPage +
+      '、「Session Key 错误」模态框=' +
+      modal +
+      '（可用 PW_SESSION_RETRIES 调整重试次数）',
+  );
 }
 
 /**

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 /**
- * 模型服务商 - 详情页验证（PR-D-01 / PR-D-02 / PR-D-03）
+ * 模型服务商 - 详情页验证（PR-D-01 ~ PR-D-05）
  *
  * 覆盖用例（docs/providers/02-功能测试用例/03-详情页验证.md）：
  * - PR-D-01：详情页全字段与接口数据一致性（基本信息 / 实例池 / 模型服务配置
@@ -22,6 +22,12 @@
  * - PR-D-02：详情页分段计价配置 Card（已配置展示时区 + 忙时（peak）+ 时间段表；
  *   未配置展示「未配置」提示、不渲染空表；Card 仅展示不含编辑入口）
  * - PR-D-03：详情页协议路径映射卡片展示（已配置展示映射，未配置不展示）
+ * - PR-D-04：详情页 K8s 分支展示（实例来源 = K8s 实例池（k8s_pool）、只读标签
+ *   「K8s 池名称」、实例表「实例地址/端口/权重」数据源为 GET /k8s_pools/{name}
+ *   的实时 instances，逐行一致；只读卡片形态）
+ * - PR-D-05：详情页 K8s 池实例列表实时读取与降级（场景 ① 池实例变更后重新打开详情
+ *   即为最新数据；场景 ② 空池文案「暂无镜像实例（池不存在 ≡ 零实例）」；
+ *   场景 ③ 池不存在（404）文案「K8s 池不存在（≡ 零实例）」）
  *
  * 文档偏差记录（docs/providers/02 验收优先，已保留 02 验收断言）：
  * 1. PR-D-01 预期 Key 值脱敏形如「sk-a****aaaa」（示例性表述，首尾少量字符+中间掩码）：
@@ -40,11 +46,26 @@
  *    新行可能落在第 2/3 页，原「造数后直接断言行可见」必然超时；统一改用
  *    pp.expectProviderRowVisibleByName（先按名称本地筛选再断言行可见），断言内容不变。
  *
+ * 数据隔离（PR-D-04/05）：K8s 池经 InnerAPI 造数（`api/k8s-pool-api-utils.js`，
+ * 命名前缀 qa_pool_），provider 命名前缀 provider_；afterEach 删除，不触碰环境既有池
+ * （test-pool 由 K8s 侧同步维护）。造池/删池复用页面 Session，不得再调 session-keys
+ * （会让已下发的 Session Key 失效）。
+ *
+ * PR-D-05 场景 ③ 观测到的产品缺陷（保留 02 验收断言，未改断言迁就实现）：
+ * 池详情返回 404 时，ProviderView 期望走 `catch(err => err.response.status === 404)` 分支
+ * 打上 `k8sPoolState = 'notfound'` 并展示「K8s 池不存在（≡ 零实例）」；但全局
+ * `src/utils/request.js` 的响应拦截器把错误响应 `return error.response`（**resolve**，
+ * 不 reject），因此 `then(res => { if (res.status !== 200) return; })` 直接返回，
+ * catch 永不执行 → `k8sPoolState` 恒为空 → 实例区始终显示空池文案
+ * 「暂无镜像实例（池不存在 ≡ 零实例）」。实测：GET /k8s_pools/{name} 返回 404，
+ * 详情实例区文案仍为空池文案（见 PR-D-05 场景 ③ 失败截图）。
+ *
  * 运行：npx playwright test tests/providers/test_03_provider_detail.spec.js
  */
 const { test, expect } = require('@playwright/test');
 const pp = require('../../pages/providers/ProviderPage');
 const api = require('../../api/provider-api-utils');
+const k8sPoolApi = require('../../api/k8s-pool-api-utils');
 
 // 与 ProviderView.vue 实例池多实例一致（2 实例，权重和 100，IP 模式端口不按 schema 同步）
 const INSTANCES = [
@@ -416,6 +437,260 @@ test.describe('模型服务商 - PR-D-03 详情页协议路径映射卡片展示
       await expect(ppCard.locator('table.kv-table')).toHaveCount(0);
 
       // 详情仅展示，不含编辑入口
+      await pp.expectViewNoInputs(page);
+    });
+  });
+});
+// ===================================================================
+// PR-D-04 / PR-D-05：详情页 K8s 分支（实例数据源 = GET /k8s_pools/{name} 实时查询）
+// 设计见 docs/providers/02-功能测试用例/03-详情页验证.md
+// ===================================================================
+
+const K8S_POOL_INSTANCES = [
+  { addr: '10.1.0.11', port: 8000, weight: 100 },
+  { addr: '10.1.0.12', port: 8001, weight: 60 },
+];
+
+let k8sSeq = 0;
+
+function uniqueK8sName(prefix) {
+  k8sSeq += 1;
+  return prefix + Date.now().toString(36) + '_' + k8sSeq;
+}
+
+/**
+ * 造池 + 造引用该池的 k8s_pool 服务商，并进入列表页（afterEach 清理池与 provider）
+ */
+async function setupK8sProvider({
+  page,
+  cleanup,
+  poolCleanup,
+  instances = K8S_POOL_INSTANCES,
+  deletePoolBeforeProvider = false,
+}) {
+  const poolName = k8sPoolApi.POOL_NAME_PREFIX + uniqueK8sName('');
+  const pool = await k8sPoolApi.createK8sPoolViaApi(page, poolName, instances);
+  expect(pool, 'API 造数 K8s 池应成功').not.toBeNull();
+  poolCleanup.trackPool(poolName);
+
+  // 池不存在（404）场景：先造池再删池，然后才创建引用该池名的 provider。
+  // 实测（2026-10-28）：若 provider 已引用该池再删池，后端会把池记录按空池保留
+  // （DELETE 200 后 GET 仍 200 + instances: []），404 分支不可达，故采用此顺序。
+  if (deletePoolBeforeProvider) {
+    const deleted = await k8sPoolApi.deleteK8sPoolViaApi(page, poolName);
+    expect(deleted.ok, 'InnerAPI 删除池应返回成功').toBe(true);
+    expect(
+      (await k8sPoolApi.getK8sPoolViaApi(page, poolName)).status,
+      '删池后池详情应返回 404',
+    ).toBe(404);
+  }
+
+  const providerName = uniqueK8sName('provider_');
+  const data = await api.createProviderViaApi(page, {
+    name: providerName,
+    description: '自动化测试-详情页 K8s 分支',
+    instance_source: 'k8s_pool',
+    k8s_pool_name: poolName,
+    model_protocols: ['openai'],
+    model_endpoint: { schema: 'https', uri: '/v1/models' },
+    models: ['qa-detail-k8s'],
+    keys: [],
+  });
+  expect(data, 'API 造数 K8s 模式服务商应成功').not.toBeNull();
+  cleanup.trackName(providerName);
+
+  await pp.gotoProvidersPage(page);
+  await pp.expectProviderRowVisibleByName(page, providerName);
+  return { providerName, poolName };
+}
+
+test.describe('模型服务商 - PR-D-04 详情页 K8s 分支展示', () => {
+  let cleanup;
+  let poolCleanup;
+  let providerName;
+  let poolName;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
+    ({ providerName, poolName } = await setupK8sProvider({
+      page,
+      cleanup,
+      poolCleanup,
+    }));
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
+  });
+
+  test('详情进入 K8s 分支：实例来源、只读标签「K8s 池名称」、实例表与 GET /k8s_pools/{name} 逐行一致', async ({
+    page,
+  }) => {
+    const response = await pp.openViewDrawerWaitingK8sPool(
+      page,
+      providerName,
+      poolName,
+    );
+    await pp.expectViewScopeVisible(page);
+
+    await test.step('预期 1/2/3：进入 K8s 分支，实例来源与只读标签「K8s 池名称」正确', async () => {
+      expect(response.status()).toBe(200);
+      await pp.expectViewK8sPool(page, poolName);
+    });
+
+    await test.step('预期 4：实例表表头「实例地址/端口/权重」，数据与实时接口逐行一致', async () => {
+      await pp.expectViewK8sInstanceHeaders(page);
+      const poolDetail = await k8sPoolApi.getK8sPoolViaApi(page, poolName);
+      expect(poolDetail.status).toBe(200);
+      await pp.expectViewK8sInstances(
+        page,
+        poolDetail.data.instances.map((item) => ({
+          addr: item.addr,
+          port: item.port,
+          weight: item.weight,
+        })),
+      );
+    });
+
+    await test.step('预期 6：只读卡片形态，无实例表单 / 编辑控件', async () => {
+      await pp.expectViewInstancePoolReadonly(page);
+      await pp.expectViewNoInputs(page);
+      const provider = await api.getProviderViaApi(page, providerName);
+      expect(provider).not.toHaveProperty('k8s_instance_pool');
+    });
+  });
+});
+
+test.describe('模型服务商 - PR-D-05 详情页 K8s 池实例列表实时读取与降级', () => {
+  let cleanup;
+  let poolCleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
+  });
+
+  test('场景 ①：池内实例变更后重新打开详情即展示最新实例（实时读取，非 provider 镜像）', async ({
+    page,
+  }) => {
+    const { providerName, poolName } = await setupK8sProvider({
+      page,
+      cleanup,
+      poolCleanup,
+    });
+
+    await test.step('首次打开详情：实例表 = 造数时的池实例', async () => {
+      const response = await pp.openViewDrawerWaitingK8sPool(
+        page,
+        providerName,
+        poolName,
+      );
+      expect(response.status()).toBe(200);
+      await pp.expectViewK8sInstanceHeaders(page);
+      await pp.expectViewK8sInstances(page, K8S_POOL_INSTANCES);
+    });
+
+    const updatedInstances = [
+      { addr: '10.9.0.31', port: 9000, weight: 70 },
+      { addr: '10.9.0.32', port: 9000, weight: 30 },
+    ];
+
+    await test.step('InnerAPI 覆盖池实例后重新打开详情：展示最新实例（逐行一致）', async () => {
+      const sync = await k8sPoolApi.syncK8sPoolInstancesViaApi(
+        page,
+        poolName,
+        updatedInstances,
+      );
+      expect(sync.ok, 'InnerAPI 覆盖池实例应成功').toBe(true);
+
+      await pp.gotoProvidersPage(page);
+      await pp.expectProviderRowVisibleByName(page, providerName);
+      const response = await pp.openViewDrawerWaitingK8sPool(
+        page,
+        providerName,
+        poolName,
+      );
+      expect(response.status()).toBe(200);
+      await pp.expectViewK8sInstances(page, updatedInstances);
+
+      // provider 记录本身不含实例镜像（k8s_pools 为唯一事实源）
+      const provider = await api.getProviderViaApi(page, providerName);
+      expect(provider.instance_source).toBe('k8s_pool');
+      expect(provider).not.toHaveProperty('k8s_instance_pool');
+    });
+  });
+
+  test('场景 ②：空池（200 + instances: []）展示「暂无镜像实例（池不存在 ≡ 零实例）」', async ({
+    page,
+  }) => {
+    const { providerName, poolName } = await setupK8sProvider({
+      page,
+      cleanup,
+      poolCleanup,
+      instances: [],
+    });
+
+    const response = await pp.openViewDrawerWaitingK8sPool(
+      page,
+      providerName,
+      poolName,
+    );
+    await pp.expectViewScopeVisible(page);
+
+    await test.step('空池为合法状态：接口 200 + instances: []', async () => {
+      expect(response.status()).toBe(200);
+      const poolDetail = await k8sPoolApi.getK8sPoolViaApi(page, poolName);
+      expect(poolDetail.status).toBe(200);
+      expect(poolDetail.data.instances).toEqual([]);
+      expect(poolDetail.data.instance_count).toBe(0);
+    });
+
+    await test.step('实例区展示空池文案且不渲染实例表', async () => {
+      await pp.expectViewK8sPool(page, poolName);
+      await pp.expectViewK8sEmptyText(page, pp.DOC.k8sPoolEmpty);
+      await pp.expectViewInstancePoolReadonly(page);
+    });
+  });
+
+  test('场景 ③：池不存在（404）展示「K8s 池不存在（≡ 零实例）」', async ({
+    page,
+  }) => {
+    const { providerName, poolName } = await setupK8sProvider({
+      page,
+      cleanup,
+      poolCleanup,
+      deletePoolBeforeProvider: true,
+    });
+
+    await test.step('前置：池已被删除（GET /k8s_pools/{name} → 404），provider 保留池名', async () => {
+      const provider = await api.getProviderViaApi(page, providerName);
+      expect(provider.instance_source).toBe('k8s_pool');
+      expect(provider.k8s_pool_name).toBe(poolName);
+    });
+
+    const response = await pp.openViewDrawerWaitingK8sPool(
+      page,
+      providerName,
+      poolName,
+    );
+    await pp.expectViewScopeVisible(page);
+
+    await test.step('池不存在 ≡ 零实例：展示降级文案且不渲染实例表', async () => {
+      expect(response.status()).toBe(404);
+      await pp.expectViewK8sPool(page, poolName);
+      // 02 验收：404 → 「K8s 池不存在（≡ 零实例）」
+      // 当前实现回归缺陷：ProviderView 的 404 判定写在 catch 分支，而 $request 拦截器
+      // 把错误 resolve，catch 永不执行 → 实际展示空池文案（见文件头偏差说明）。
+      await pp.expectViewK8sEmptyText(page, pp.DOC.k8sPoolNotFound);
+      await pp.expectViewInstancePoolReadonly(page);
       await pp.expectViewNoInputs(page);
     });
   });

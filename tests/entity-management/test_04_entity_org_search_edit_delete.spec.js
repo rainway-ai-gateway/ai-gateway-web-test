@@ -430,7 +430,7 @@ entityOrgDescribe('Entity组织管理 - EM-E-15 重置Entity配额', (cleanup) =
       await utils.createEntityTypeViaUI(page, typeName, '重置配额测试类型', 1);
       await utils.gotoEntityOrgManagementPage(page);
       await utils.createEntityWithQuotaViaUI(page, entityName, typeName, {
-        total: 1000,
+        total: 1000000,
         unit: 'total_token',
         resetCycle: '永不重置',
       });
@@ -664,9 +664,8 @@ entityOrgDescribe('Entity组织管理 - EM-E-12b Entity搜索-按配额', (clean
       // 先按名称搜索确认 Entity 存在且可见
       await utils.searchEntityByName(page, entityName);
       await utils.expectEntityVisible(page, entityName);
-      // 配额列 render 与 API Key 列表一致：decimals=0 时 >=1000 缩写为 K/M
-      // 例如："0 tokens / 500.0K tokens"
-      await utils.searchEntityByQuota(page, '500.0K');
+      // issue #139：配额列按「百万Token / 元」展示（2 位小数）；本用例实体为 500,000 token = 0.50 百万Token
+      await utils.searchEntityByQuota(page, '0.50');
       await utils.expectEntityVisible(page, entityName);
     });
 

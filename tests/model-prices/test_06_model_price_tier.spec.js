@@ -74,13 +74,18 @@ async function captureCreatePostBody(page, clickAction) {
 
 // 详情页价格值为 ¥ 前缀格式化文本，剥前缀后做数值等价比较
 function expectKvEntriesNumericallyEqual(entries, expected) {
+  // 2026-11-03 单位口径：详情对 token 计价键按「元/百万 tokens」展示（¥<百万值> / 百万tokens），
+  // 取打头数值并与存储值 ×1e6 比较；语义仍是「UI 展示与接口数据一致」。
   const ui = {};
   entries.forEach((e) => {
-    ui[e.key] = Number(String(e.value).replace(/^¥/, '').trim());
+    const m = String(e.value).match(/^[¥]?\s*([\d.eE+-]+)/);
+    ui[e.key] = m ? Number(m[1]) : NaN;
   });
   expect(Object.keys(ui).sort()).toEqual(Object.keys(expected).sort());
   Object.keys(expected).forEach((key) => {
-    expect(ui[key]).toBe(Number(expected[key]));
+    const storageVal = Number(expected[key]);
+    const expectedUi = mp.isTokenBasedPriceKey(key) ? storageVal * 1e6 : storageVal;
+    expect(ui[key]).toBe(expectedUi);
   });
 }
 
@@ -555,20 +560,26 @@ test.describe('模型定价 - MP-T-08~09 详情展示与编辑回显', () => {
       mp.PRICE_KEY_INPUT_COST,
     );
     const inputRow = await mp.getTierPriceRowValues(page, inputIndex);
-    mp.expectNumericPriceEqual(inputRow.value, '3e-6');
+    expect(inputRow.value).toBe(
+      mp.priceDisplayForKey(mp.PRICE_KEY_INPUT_COST, 3e-6),
+    );
     const outputIndex = await mp.findTierPriceRowIndexByKey(
       page,
       mp.PRICE_KEY_OUTPUT_COST,
     );
     const outputRow = await mp.getTierPriceRowValues(page, outputIndex);
-    mp.expectNumericPriceEqual(outputRow.value, '9e-6');
+    expect(outputRow.value).toBe(
+      mp.priceDisplayForKey(mp.PRICE_KEY_OUTPUT_COST, 9e-6),
+    );
     // 默认价格块回填 prices
     const defaultInputIndex = await mp.findPriceRowIndexByKey(
       page,
       mp.PRICE_KEY_INPUT_COST,
     );
     const defaultRow = await mp.getPriceRowValues(page, defaultInputIndex);
-    mp.expectNumericPriceEqual(defaultRow.value, '1.5e-6');
+    expect(defaultRow.value).toBe(
+      mp.priceDisplayForKey(mp.PRICE_KEY_INPUT_COST, 1.5e-6),
+    );
 
     // 修改分时段 input 价格并保存
     await mp.fillTierPriceRow(page, inputIndex, { value: '5e-6' });

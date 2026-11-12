@@ -662,3 +662,42 @@ test.describe('AI 缓存规则 - 查看与删除', () => {
     });
   });
 });
+/**
+ * AC-CV-01 接口数据与页面展示一致性（覆盖缺口清单 #31）
+ *
+ * 真集合基准（区别于 AC-D-01 的 mock 注入）：API 造数 → GET 全集合取基准行 →
+ * 视图模式打开「查看」抽屉，逐字段比对名称与生效条件。
+ */
+test('AC-CV-01 接口数据与页面展示一致性（API 真集合基准）', async ({ page }) => {
+  const rule = mockRule({ name: utils.generateTestRuleName('ac_cv01_') });
+
+  await test.step('前置：备份集合并 API 造数', async () => {
+    await utils.ensureAppSession(page);
+    await cleanup.saveOriginalState(page);
+    await utils.ensureAiCacheRuleExistsViaApi(page, rule);
+  });
+
+  await test.step('GET 基准：服务端集合中该规则的行', async () => {
+    const serverRules = await utils.getAiCacheRulesViaApi(page);
+    const baseline = (serverRules || []).find((r) => r.name === rule.name);
+    expect(baseline, '服务端集合应含该规则').toBeTruthy();
+    rule._baseline = baseline;
+  });
+
+  await test.step('查看抽屉：名称与生效条件与服务端一致', async () => {
+    await utils.reloadAiCachePage(page);
+    await utils.expectViewMode(page);
+    await utils.openViewRuleDrawer(page, rule.name);
+    await utils.expectViewDrawerFieldValue(
+      page,
+      V.fieldLabels[0],
+      rule._baseline.name,
+    );
+    await utils.expectViewDrawerFieldValue(
+      page,
+      V.fieldLabels[1],
+      rule._baseline.cond,
+    );
+    await utils.closeViewDrawer(page);
+  });
+});

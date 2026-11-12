@@ -451,3 +451,51 @@ test.describe('流量镜像规则 - 查看详情', () => {
     });
   });
 });
+
+/**
+ * TM-CV-01 接口数据与页面展示一致性（覆盖缺口清单 #31）
+ *
+ * 真集合基准（区别于既有 mock 用例）：API 造数（mirror_cluster 取真实集群名）→
+ * GET 全集合取基准行 → 视图模式打开「查看」抽屉，逐字段比对规则名与生效条件。
+ */
+test('TM-CV-01 接口数据与页面展示一致性（API 真集合基准）', async ({ page }) => {
+  const clusters = await utils.fetchClusterNamesViaApi(page);
+  expect(clusters.length, '环境中应有可用集群').toBeGreaterThan(0);
+  const ruleName = utils.generateTestRuleName('tm_cv01_');
+  const rule = utils.buildTestRule({
+    name: ruleName,
+    // cond 全局唯一：集合级 PUT 对重复 cond 返回 422，固定模板会与残留/并发用例冲突
+    cond: 'req_path_prefix_in("/tm_cv01/' + ruleName + '", true)',
+    mirror_cluster: clusters[0],
+  });
+
+  await test.step('前置：备份集合并 API 造数', async () => {
+    await utils.ensureAppSession(page);
+    await cleanup.saveOriginalState(page);
+    await utils.ensureTrafficMirrorRuleExistsViaApi(page, rule);
+  });
+
+  await test.step('GET 基准：服务端集合中该规则的行', async () => {
+    const serverRules = await utils.fetchTrafficMirrorRulesViaApi(page);
+    const baseline = (serverRules || []).find((r) => r.name === rule.name);
+    expect(baseline, '服务端集合应含该规则').toBeTruthy();
+    rule._baseline = baseline;
+  });
+
+  await test.step('查看抽屉：规则名与生效条件与服务端一致', async () => {
+    await utils.reloadTrafficMirrorPage(page);
+    await utils.expectViewMode(page);
+    await utils.openViewRuleDrawer(page, rule.name);
+    await utils.expectViewDrawerFieldValue(
+      page,
+      V.fieldLabels[0],
+      rule._baseline.name,
+    );
+    await utils.expectViewDrawerFieldValue(
+      page,
+      V.fieldLabels[1],
+      rule._baseline.cond,
+    );
+    await utils.closeViewDrawer(page);
+  });
+});

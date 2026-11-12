@@ -135,14 +135,15 @@ const DOC_ENTITY_ORG = {
   quotaIntegerErrorMsg: '配额总量必须为非负整数',
   quotaMaxErrorMsg: '配额总量超出允许范围',
   quotaDecimal: 5.3,
-  quotaTokenMax: 9999999999,
-  quotaOverMax: 10000000000,
+  // issue #139：token 以「百万Token」录入（≤9999.99，2 位小数，粒度 1 万 token）
+  quotaTokenMax: 9999.99,
+  quotaOverMax: 10000,
   int32Max: '2147483647',
-  // 2026-08-16: unit=RMB 时配额上限为 9000 万元（RMB_QUOTA_MAX）
+  // unit=RMB 时配额上限为 9000 万元（RMB_QUOTA_MAX）
   quotaRmbMax: 90000000,
   quotaRmbOverMax: 90000001,
-  quotaRmbMaxErrorMsg: 'RMB 配额不能超过 9000 万元',
-  quotaRmbPrecisionErrorMsg: 'RMB 配额最多保留 4 位小数',
+  quotaRmbMaxErrorMsg: '金额配额不能超过 9000 万元',
+  quotaRmbPrecisionErrorMsg: '金额配额最多保留 2 位小数',
   maxConcurrencyOverMax: '2147483648',
   maxConcurrencyMaxErrorMsg: '最大并发超出允许范围',
   // TPM/RPM 规则字段仍为 int64，溢出值需超过 int64 上界
@@ -157,6 +158,7 @@ const DOC_ENTITY_ORG = {
   tpmRuleNameRequiredMsgTemplate: '第{index}条TPM规则请输入规则名称',
   tpmStepMinutesRangeMsgTemplate: '第{index}条TPM规则滑动步长范围为1-360分钟',
   tpmStepMinutesRequiredMsgTemplate: '第{index}条TPM规则滑动步长不能为空',
+  tpmStepMinutesInvalidMsgTemplate: '第{index}条TPM规则滑动步长不能超过时间窗口',
   tpmMaxTokensMinErrorMsgTemplate: '第{index}条TPM规则最大Token数必须大于0',
   tpmMaxTokensMaxErrorMsgTemplate: '第{index}条TPM规则最大Token数超出允许范围',
   tpmMaxTokensRequiredMsgTemplate: '第{index}条TPM规则最大Token数不能为空',
@@ -225,15 +227,16 @@ const DOC_API_KEY = {
   quotaIntegerErrorMsg: '配额总量必须为非负整数',
   quotaMaxErrorMsg: '配额总量超出允许范围',
   quotaDecimal: 5.3,
-  quotaTokenMax: 9999999999,
-  quotaOverMax: 10000000000,
+  // issue #139：token 以「百万Token」录入（≤9999.99，2 位小数，粒度 1 万 token）
+  quotaTokenMax: 9999.99,
+  quotaOverMax: 10000,
   descriptionMaxLength: 512,
   descriptionLengthErrorMsg: '描述不能超过512个字符',
-  // 2026-08-16: unit=RMB 时配额上限为 9000 万元（RMB_QUOTA_MAX）
+  // unit=RMB 时配额上限为 9000 万元（RMB_QUOTA_MAX）
   quotaRmbMax: 90000000,
   quotaRmbOverMax: 90000001,
-  quotaRmbMaxErrorMsg: 'RMB 配额不能超过 9000 万元',
-  quotaRmbPrecisionErrorMsg: 'RMB 配额最多保留 4 位小数',
+  quotaRmbMaxErrorMsg: '金额配额不能超过 9000 万元',
+  quotaRmbPrecisionErrorMsg: '金额配额最多保留 2 位小数',
   int32Max: '2147483647',
   maxConcurrencyOverMax: '2147483648',
   maxConcurrencyMaxErrorMsg: '最大并发超出允许范围',
@@ -814,6 +817,44 @@ async function expectElDrawerFieldSelectedContains(
 
 // ── Exports ─────────────────────────────────────────────────────────
 
+// ============ 配额单位换算（issue #139：录入口径 = 百万Token / 元，存储/接口仍是整数 token） ============
+const QUOTA_MILLION = 1e6;
+// 表单「配额单位」下拉展示文案
+function quotaUnitOptionLabel(unit) {
+  return unit === 'RMB' ? '元' : '百万Token';
+}
+// 存储值（token 数 / 元）→ 录入值（百万Token / 元）
+function quotaStorageToInput(storage, unit) {
+  if (storage === null || storage === undefined || storage === '') {
+    return storage;
+  }
+  const num = Number(storage);
+  if (!Number.isFinite(num)) {
+    return String(storage);
+  }
+  const input = unit === 'RMB' ? num : num / QUOTA_MILLION;
+  return Number(input.toFixed(2));
+}
+// 录入值（百万Token / 元）→ 存储值（token 数 / 元）
+function quotaInputToStorage(input, unit) {
+  const num = Number(input);
+  if (!Number.isFinite(num)) {
+    return num;
+  }
+  return unit === 'RMB' ? num : Math.round(num * QUOTA_MILLION);
+}
+// 存储值 → 界面展示串（与前端 const.js formatQuotaDisplay 一致：token ÷1e6 截断 2 位，RMB toFixed 2 位）
+function formatQuotaDisplayText(storage, unit) {
+  const num = Number(storage);
+  if (!Number.isFinite(num) || num < 0) {
+    return '0.00';
+  }
+  if (unit === 'RMB') {
+    return num.toFixed(2);
+  }
+  return (Math.floor((num / QUOTA_MILLION) * 100) / 100).toFixed(2);
+}
+
 module.exports = {
   // Constants
   DRAWER_TITLE,
@@ -851,6 +892,10 @@ module.exports = {
   generateTestEntityAtName,
   makeStringOfLength,
   formatRuleValidationMsg,
+  quotaUnitOptionLabel,
+  quotaStorageToInput,
+  quotaInputToStorage,
+  formatQuotaDisplayText,
 
   // Visibility / Tab helpers
   isTabActive,

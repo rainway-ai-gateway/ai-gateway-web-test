@@ -637,3 +637,131 @@ test.describe('路由管理 - RT-D-21 编辑模式下按规则名搜索', () => 
     await utils.expectRuleRowHidden(page, nameB);
   });
 });
+
+// ==================== RT-CC-01/02 幂等与并发（覆盖缺口清单 #34/#35） ====================
+
+test.describe('路由管理 - RT-CC-01 提交并生效-重复点击幂等', () => {
+  let routeCleanup;
+
+  test.beforeEach(async ({ page }) => {
+    routeCleanup = require('../../api/route-api-utils').createRouteTestCleanup();
+    await routeCleanup.saveGlobalRouteRulesOriginalState(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await routeCleanup.cleanup(page);
+  });
+
+  test('连点两次「提交并生效」：PUT 次数 ≤2 且规则集合中同名仅一条（#34）', async ({
+    page,
+  }) => {
+    const ruleName = 'rt_cc01_' + Date.now();
+    await utils.gotoRouteTableListPage(page);
+    await page.waitForTimeout(1000);
+    await utils.openGlobalRouteTableDetail(page);
+    await utils.ensureGlobalRouteTableDisabledViaUI(page);
+    await utils.openGlobalRouteTableDetail(page);
+    await utils.enterRouteRulesEditMode(page);
+    await utils.openAddRuleDrawer(page);
+    await utils.fillRuleName(page, ruleName);
+    await utils.fillRuleExpression(page, 'default_t()');
+    const clusters = await utils.getAvailableClustersForRule(page);
+    expect(clusters.length, '环境中应有可用集群').toBeGreaterThan(0);
+    await utils.selectRuleTargetCluster(page, 0, clusters[0].name);
+    await utils.fillRuleTargetWeight(page, 0, 100);
+    await utils.submitRuleFormAndWait(page);
+    await utils.expectRuleFormDrawerHidden(page);
+    await utils.expectRuleRowVisible(page, ruleName);
+
+    let putCount = 0;
+    let lastPutBody = null;
+    page.on('response', (r) => {
+      if (
+        r.url().includes('/global-route-rules') &&
+        r.request().method() === 'PUT'
+      ) {
+        putCount += 1;
+        lastPutBody = r.request().postData();
+      }
+    });
+    const submitBtn = page.getByRole('button', { name: '提交并生效' });
+    await submitBtn.click();
+    await submitBtn.click().catch(() => {});
+    await page.waitForTimeout(2500);
+
+    expect(putCount, 'PUT /global-route-rules 次数应 ≤2（第二次被置灰/拦截）').toBeLessThanOrEqual(2);
+    expect(lastPutBody, '应至少发出一次 PUT').toBeTruthy();
+    expect(
+      JSON.parse(lastPutBody).rules.filter((r) => r.name === ruleName).length,
+      '提交体中同名规则应仅一条',
+    ).toBe(1);
+  });
+});
+
+test.describe('路由管理 - RT-CC-02 编辑期间他人提交', () => {
+  let routeCleanup;
+
+  test.beforeEach(async ({ page }) => {
+    routeCleanup = require('../../api/route-api-utils').createRouteTestCleanup();
+    await routeCleanup.saveGlobalRouteRulesOriginalState(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await routeCleanup.cleanup(page);
+  });
+
+  test('UI 提交整体覆盖他人规则（集合级 last-write-wins，已知偏差）（#35）', async ({
+    page,
+  }) => {
+    const ownRule = 'rt_cc02_own_' + Date.now();
+    const othersRule = 'rt_cc02_others_' + Date.now();
+
+    await utils.gotoRouteTableListPage(page);
+    await page.waitForTimeout(1000);
+    await utils.openGlobalRouteTableDetail(page);
+    await utils.ensureGlobalRouteTableDisabledViaUI(page);
+    await utils.openGlobalRouteTableDetail(page);
+    await utils.enterRouteRulesEditMode(page);
+
+    // 他人先提交一条规则（API 侧，模拟另一管理员）
+    const routeApi = require('../../api/route-api-utils');
+    const current = await routeApi.getGlobalRouteRulesViaApi(page);
+    const clusters = await utils.getAvailableClustersForRule(page);
+    expect(clusters.length).toBeGreaterThan(0);
+    const linked = await routeApi.setGlobalRouteRulesViaApi(page, {
+      enabled: false,
+      rules: [
+        ...(current?.rules || []),
+        {
+          name: othersRule,
+          cond: 'default_t()',
+          targets: [{ cluster_name: clusters[0].name, model: '', weight: 100 }],
+          fallbacks: [],
+        },
+      ],
+    });
+    expect(linked, '他人提交应成功').toBe(true);
+
+    // UI 侧新增自己的规则并提交（本地状态不含他人规则）
+    await utils.openAddRuleDrawer(page);
+    await utils.fillRuleName(page, ownRule);
+    await utils.fillRuleExpression(page, 'default_t()');
+    await utils.selectRuleTargetCluster(page, 0, clusters[0].name);
+    await utils.fillRuleTargetWeight(page, 0, 100);
+    await utils.submitRuleFormAndWait(page);
+    await utils.expectRuleFormDrawerHidden(page);
+    await utils.expectRuleRowVisible(page, ownRule);
+    await utils.submitGlobalRouteRulesAndWait(page);
+
+    // 产品现状：整体替换语义、无版本校验 → UI 提交覆盖他人规则（已知偏差）
+    const after = await routeApi.getGlobalRouteRulesViaApi(page);
+    expect(
+      (after?.rules || []).some((r) => r.name === ownRule),
+      'UI 提交的规则应存在',
+    ).toBe(true);
+    expect(
+      (after?.rules || []).some((r) => r.name === othersRule),
+      '他人规则应被 UI 整体覆盖（last-write-wins，已知偏差，登记 #35）',
+    ).toBe(false);
+  });
+});
