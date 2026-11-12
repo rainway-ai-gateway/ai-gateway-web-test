@@ -8,9 +8,9 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 .
 ├── README.md                          # 项目说明文档
 ├── regression-reports/                # 全量回归报告归档（受跟踪，按日期命名）
-│   ├── README.md                      # 归档索引（最新报告在最前，自动生成）
 │   ├── TEST-REPORT-2026-10-17.md      # 2026-10-17 全量回归
-│   └── ...                            # 每轮全量回归一份，不覆盖
+│   ├── TEST-REPORT-YYYY-MM-DD.md      # 每轮一份，不覆盖历史
+│   └── ...                            # 每份只记录本轮结果：无历史汇总、无跨报告索引
 ├── api/                               # API 调用层（造数/清理）
 │   ├── ai-cache-api-utils.js
 │   ├── ai-context-api-utils.js
@@ -60,16 +60,16 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── entity-type/                   # 6 个 spec
 │   ├── entity-management/             # 15 个 spec
 │   ├── api-key/                       # 9 个 spec
-│   ├── cluster/                       # 18 个 spec（含 BC-J/BC-E/BC-C 场景用例）
+│   ├── cluster/                       # 22 个 spec（含 BC-J/BC-E/BC-C 场景用例）
 │   ├── providers/                     # 10 个 spec
-│   ├── model-prices/                  # 9 个 spec
-│   ├── route/                         # 17 个 spec
+│   ├── model-prices/                  # 10 个 spec
+│   ├── route/                         # 16 个 spec
 │   ├── epp-pool/                      # 5 个 spec
-│   ├── ai-cache/                      # 9 个 spec
+│   ├── ai-cache/                      # 8 个 spec
 │   ├── traffic-mirror/                # 9 个 spec
 │   ├── intent-config/                 # 8 个 spec
 │   ├── ai-context/                    # 8 个 spec
-│   ├── report/                        # 8 个 spec
+│   ├── report/                        # 9 个 spec
 │   ├── batch-tasks/                   # 4 个 spec
 │   ├── reencrypt-sweep/               # 6 个 spec
 │   ├── operation-logs/                # 3 个 spec
@@ -77,7 +77,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   └── model-prices/                  # YAML 导入测试文件（valid/invalid/duplicate 等）
 ├── report/                            # 每轮测试报告（gitignored）
 ├── scripts/
-│   ├── aggregate-report.js            # 生成按日期归档的全量回归报告 + 索引
+│   ├── aggregate-report.js            # 生成按日期归档的全量回归报告（每份只记本轮）
 │   ├── accepted-skips.json            # 跳过签核清单
 │   ├── impact-scan.js                 # 既有用例影响扫描
 │   ├── check-coverage-mapping.js      # 映射表声明 ↔ spec 实际覆盖核对（`npm run check:mapping`）
@@ -86,7 +86,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── seed-report-data.js            # 报表造数
 │   ├── capture-*.js                   # 手册/新模块/报表截图
 │   └── cleanup-*.cjs                  # 各模块测试数据清理
-├── docs/                              # 18 个模块的两层测试文档 + `覆盖缺口清单.md`（缺口跟踪）+ `模块深度检查清单.md`（审计方法）+ `自动化用例评审标准.md`（跨项目评审标准）+ `跨模块横切用例.md`（横切用例族登记）
+├── docs/                              # 17 个模块的两层测试文档（每模块 01-测试场景概览 + 02-功能测试用例/）
 ├── global-setup.js                    # Playwright 全局登录
 ├── global-teardown.js                 # Playwright 全局清理
 ├── playwright.config.js               # Playwright 配置
@@ -120,16 +120,16 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 | Entity 类型 | `docs/entity-type/` | `tests/entity-type/` | 6 | 类型列表、编辑、删除、只读视角 |
 | Entity 组织 | `docs/entity-management/` | `tests/entity-management/` | 15 | 组织 CRUD、配额/限流校验、跨模块串联、描述字段、只读视角、模型白名单/黑名单、配额周期与级别筛选 |
 | API-Key | `docs/api-key/` | `tests/api-key/` | 9 | Key CRUD、配额与限流校验、详情一致性、名称校验、只读视角 |
-| AI 业务集群 | `docs/business-cluster/` | `tests/cluster/` | 18 | 5 步向导、大模型配置、Key 亲和、EPP 均衡模式、字段校验、只读视角；跨模块闭环（02g）、交互边界与引用保护（02h）、并发与竞态（02i） |
+| AI 业务集群 | `docs/business-cluster/` | `tests/cluster/` | 22 | 5 步向导、大模型配置、Key 亲和、EPP 均衡模式、字段校验、只读视角；跨模块闭环（02g）、交互边界与引用保护（02h）、并发与竞态（02i） |
 | 模型服务商 | `docs/providers/` | `tests/providers/` | 10 | 实例来源、模型发现、Keys、分段计价、引用保护、只读视角 |
 | 模型定价 | `docs/model-prices/` | `tests/model-prices/` | 10 | 定价 CRUD、YAML 导入、分时段价格、精度与键级合并、只读视角 |
-| 路由管理 | `docs/route-management/` | `tests/route/` | 17 | 路由表、路由规则、表达式条件、条件原语面板、只读视角 |
+| 路由管理 | `docs/route-management/` | `tests/route/` | 16 | 路由表、路由规则、表达式条件、条件原语面板、只读视角 |
 | EPP 实例池与调度 | `docs/epp-pool/` | `tests/epp-pool/` | 5 | 实例池管理、调度分配、只读视角 |
-| AI 缓存规则 | `docs/ai-cache/` | `tests/ai-cache/` | 9 | 集合级规则双模式、语义缓存、语义设置、字段校验、拖拽排序、只读视角 |
+| AI 缓存规则 | `docs/ai-cache/` | `tests/ai-cache/` | 8 | 集合级规则双模式、语义缓存、语义设置、字段校验、拖拽排序、只读视角 |
 | 流量镜像规则 | `docs/traffic-mirror/` | `tests/traffic-mirror/` | 9 | 集合级规则双模式、KV/请求体/请求头注入、字段校验、拖拽排序、只读视角 |
 | 意图配置 | `docs/intent-config/` | `tests/intent-config/` | 8 | 全局最小置信度、问题集、发布流程（含编辑/删除到发布闭环与并发覆盖）、离开拦截、只读视角 |
 | AI 上下文压缩 | `docs/ai-context/` | `tests/ai-context/` | 8 | 压缩规则、全局设置、字段校验、拖拽排序、只读视角 |
-| 数据报表 | `docs/report/` | `tests/report/` | 8 | 总览指标卡、时序、维度排行/分布下钻、明细与过滤、只读视角 |
+| 数据报表 | `docs/report/` | `tests/report/` | 9 | 总览指标卡、时序、维度排行/分布下钻、明细与过滤、只读视角 |
 | 批量任务 | `docs/batch-tasks/` | `tests/batch-tasks/` | 4 | 列表、详情、取消、只读视角 |
 | 密钥收敛 | `docs/reencrypt-sweep/` | `tests/reencrypt-sweep/` | 6 | 触发与轮询、列表筛选、详情与错误、只读视角 |
 | 操作日志 | `docs/operation-logs/` | `tests/operation-logs/` | 3 | 列表筛选、详情、跨模块联动 |
@@ -248,7 +248,7 @@ npm run seed:batch:execute    # 实际写入
 
 | 报告 | 路径 | 是否受版本控制 | 用途 |
 | ---- | ---- | -------------- | ---- |
-| 全量回归报告 | `regression-reports/TEST-REPORT-YYYY-MM-DD.md`（+ 自动生成的 [归档索引](regression-reports/README.md)） | **是**（随代码提交） | 「用例是否 100% 跑通」的**唯一权威出口**：按模块/spec 汇总通过、失败、跳过，含失败明细与跳过原因、历史全量对比。每轮全量回归一份，不覆盖历史 |
+| 全量回归报告 | `regression-reports/TEST-REPORT-YYYY-MM-DD.md` | **是**（随代码提交） | 「用例是否 100% 跑通」的**唯一权威出口**：按模块/spec 汇总通过、失败、跳过，含失败明细与跳过原因。每轮全量回归一份，不覆盖历史；每份只记录本轮结果，不汇总历史全量记录 |
 | 每轮人读报告 | `report/test-report.md`（+ 带时间戳归档） | 否（`report/` 在 `.gitignore` 内） | 单轮（含定向批次）的明细与失败详情，滚动覆盖、可被清理，**不可作为长期凭据引用** |
 
 跑完一轮后自动生成 Markdown 报告：`report/test-report.md`；同时生成 Playwright HTML 报告，可通过以下命令查看：
@@ -260,20 +260,19 @@ npx playwright show-report
 **生成归档的全量回归报告**（约定：只在跑完**全量**回归后生成，并在提交代码时一并提交）：
 
 ```bash
-# 1) 跑全量（单 worker 串行：只读视角等用例依赖 viewer 单一会话，必须串行）
-PW_WORKERS=1 npx playwright test tests/ --global-timeout=0
+# 1) 跑全量（package.json 脚本；单 worker 串行：只读视角等用例依赖 viewer 单一会话，必须串行）
+npm run test:all
 
-# 2) 生成归档报告 + 刷新索引
+# 2) 生成归档报告
 npm run report:tracked
 ```
 
-- 输出为 `regression-reports/TEST-REPORT-<运行日期>.md`，并自动重建 `regression-reports/README.md` 索引（最新报告在最前）。
+- 输出为 `regression-reports/TEST-REPORT-<运行日期>.md`（每份报告只记录本轮结果，不汇总历史全量记录）。
 - 同一天第二次全量回归会自动追加 `-HHmmss`（如 `TEST-REPORT-2026-10-17-233755.md`），不会覆盖当天已有归档；同一份 `test-results.json` 重复生成时复用原文件。
 - 脚本只在「本轮覆盖了全部常规 spec」时写入归档，定向批次（只跑某模块）不会覆盖全站结论；需要另存本轮汇总用 `npm run report:tracked -- --out <path>`。
 - 若报告判定为 ❌（有失败）：**修复后重跑受影响 spec，再跑一次全量并重新生成**，直到判定为 ✅。
 - 若判定为 ⚠️（有**未签核**的跳过）：跳过属运行时条件跳过（环境数据/产品行为依赖），确属此类而非用例遗漏的，在 `scripts/accepted-skips.json` 登记 `caseId` / `reason` / `evidence` / `confirmedBy` 后重新生成，判定即升为 ✅；报告第 5 节会逐条列出签核依据。**禁止为了好看而登记**。
-- 历史行只增不改；新报告会汇总 `regression-reports/` 下既有归档的历史结果，避免跨报告丢历史。
-- 生成后把新增报告与更新的 `regression-reports/README.md` 一起 `git add`（`report/` 仍保持 gitignored）。
+- 生成后把新增报告随相关 spec/文档改动一起 `git add`（`report/` 仍保持 gitignored）。
 
 ## 测试数据说明
 
@@ -283,7 +282,7 @@ npm run report:tracked
 | 测试用户名 | user_{时间戳} | 如: user_20260703093500 |
 | 测试密码 | 字母+数字+特殊字符 | 如: Itm@2026 |
 | Token 名称 | token_{时间戳} | 如: token_20260703093500 |
-| 批量任务造数 | batch_id 前缀 `batch-seed-` | `npm run seed:batch:execute` 写入，`npm run cleanup:batch:execute` 清理 |
+| 批量任务造数 | batch_id 前缀 `batch-seed-` | `npm run seed:batch:execute` 写入 55 条任务 / 10 个文件（UI 每页 50 条，形成第 2 页以覆盖游标翻页置灰），`npm run cleanup:batch:execute` 清理 |
 | 报表造数 | 详见 `scripts/seed-report-data.js` | 提供报表指标卡/时序/维度用例的数据基础 |
 
 ## 开发规范
@@ -330,7 +329,6 @@ await page.locator('.ivu-drawer-wrap').click()
 - [测试用例生成规范](.trae/skills/ai-gateway-test-generation/SKILL.md)
 - [实现模式参考](.trae/skills/ai-gateway-test-generation/reference-patterns.md)
 - [iView 测试陷阱](.trae/skills/ivue-playwright-test-patterns/SKILL.md)
-- [全量回归报告归档索引](regression-reports/README.md)
 - Web 侧 UI 变更记录：`ai-gateway-web/design-docs/modifications/`
 ## 分模块运行（2026-11-02）
 
@@ -338,7 +336,7 @@ await page.locator('.ivu-drawer-wrap').click()
 
 ```bash
 npm run test:<module>        # 例：npm run test:report / test:user / test:route
-npm run test:all             # 全量（PW_WORKERS=1，长批次约 2~3 小时）
+npm run test:all             # 全量（PW_WORKERS=1，约 1241 条 / 3.5 小时）
 ```
 
 - 想并行可显式 `PW_WORKERS=2 npx playwright test tests/<module>/`，仅推荐用于**无写操作、无二次登录**的 spec（如 report / operation-logs 的读路径）；一旦出现「重新登录后仍未取得 session key」类失败，先降回 1 再复跑（坑位 4.2）。

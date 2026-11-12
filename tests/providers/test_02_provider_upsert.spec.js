@@ -1586,13 +1586,77 @@ test.describe('模型服务商 - PR-C-23 提交体不含 k8s_instance_pool', () 
   });
 });
 
-test.describe('模型服务商 - PR-C-24 k8s_pool_name 引用池无需预先存在（跳过）', () => {
-  // 跳过原因（docs/providers/02-功能测试用例/02-创建与编辑.md PR-C-24，2026-10-28 判定）：
-  // UI 已无手填入口 —— 「K8s 池名称」为下拉选择（选项来自 GET /k8s_pools），
-  // 「填写不存在的池名」在 UI 层不可达；后端「池不存在 ≡ 零实例」契约未变，
-  // 该场景的接口层覆盖见 PR-C-23，编辑已保存但池被删除的回显见 PR-C-25 场景 ③。
-  // 恢复条件：重新开放手填入口。
-  test.skip('填写不存在的池名提交不被拦截（UI 手填入口已移除，暂不可达）', async () => {});
+test.describe('模型服务商 - PR-C-24 k8s_pool_name 引用池无需预先存在', () => {
+  // 字段演变（docs/providers/02-功能测试用例/02-创建与编辑.md PR-C-24）：
+  // 原用例要求「手填不存在的池名提交不被拦截」。2026-10-28 起 UI 取消手填、改为下拉
+  // （选项来自 GET /k8s_pools），「手填」路径不复存在。本用例按**现行 UI 路径**改写：
+  // 用路由桩让 GET /k8s_pools 返回一个后端并不存在的池名，在下拉中选中并提交，
+  // 验证后端「池不存在 ≡ 零实例」契约——提交不被拦截（200），提交体按所选池名下发。
+  let cleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('下拉选中后端不存在的池名，提交不被拦截（200，按所选池名下发出参）', async ({
+    page,
+  }) => {
+    const missingPool =
+      k8sPoolApi.POOL_NAME_PREFIX + 'missing_' + Date.now().toString(36);
+
+    const poolListStub = async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ErrNum: 200,
+          ErrMsg: 'success',
+          Data: { list: [{ name: missingPool, instances: [] }] },
+        }),
+      });
+    };
+    // 只桩「池列表」；池详情 GET /k8s_pools/{name} 让它走真实接口（404），
+    // 正好覆盖「引用不存在的池」这一前提
+    await page.route(/\/open-api\/v1\/k8s_pools(\?|$)/, poolListStub);
+
+    try {
+      await openCreateAndFillBasic(
+        page,
+        uniqueName('provider'),
+        '自动化测试-PR-C-24 池不存在',
+      );
+      await pp.selectInstanceSource(page, pp.DOC.instanceSourceK8s);
+
+      await test.step('前置：下拉只含桩注入的不存在池名', async () => {
+        await pp.expectK8sPoolOptions(page, [missingPool]);
+        await pp.selectK8sPool(page, missingPool);
+        expect(await pp.getK8sPoolSelectedValue(page)).toBe(missingPool);
+      });
+
+      await test.step('提交不被拦截：POST /providers 200，出参保留所选池名', async () => {
+        const response = await pp.submitUpsertAndWait(page);
+        const payload = response.request().postDataJSON();
+        expect(payload.instance_source).toBe('k8s_pool');
+        expect(payload.k8s_pool_name).toBe(missingPool);
+        const body = await response.json();
+        expect(body.ErrNum).toBe(200);
+        expect(body.Data.k8s_pool_name).toBe(missingPool);
+        cleanup.trackName(body.Data.name);
+        await pp.expectProviderRowVisibleByName(page, body.Data.name);
+      });
+    } finally {
+      await page.unroute(/\/open-api\/v1\/k8s_pools(\?|$)/);
+    }
+  });
 });
 
 test.describe('模型服务商 - PR-C-25 K8s 实例池下拉选项与接口一致及空池降级', () => {

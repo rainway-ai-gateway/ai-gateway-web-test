@@ -189,10 +189,9 @@ test.describe('长链路场景 - SC-L-03 Entity→API-Key→路由生命周期�
         { headers: { Authorization: 'Session ' + (await sessionKey(page)) } },
       );
       const blockedBody = await blocked.json();
-      // 产品行为偏差（与 EM-E-21 同一签核口径）：挂载 API-Key 的 Entity 删除实测返回
-      // 422 而非接口契约的 409——本链路断言「被拦截」这一事实，状态码按已签核的
-      // 实际行为 422 断言；契约期望 409 由 EM-E-21 继续固化守卫。
-      expect(blockedBody.ErrNum).toBe(422);
+      // 2026-11-11 全量回归实测：产品已修复为接口契约的 409（EM-E-21 同轮恢复通过、
+      // 不再跳过），此处同步按契约 409 断言「被拦截」。
+      expect(blockedBody.ErrNum).toBe(409);
 
       await entityUtils.deleteApiKeyViaApi(page, apiKeyId);
 

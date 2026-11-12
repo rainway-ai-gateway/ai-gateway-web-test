@@ -1685,6 +1685,54 @@ async function expectViewNoInputs(page) {
   await expect(viewScope(page).locator('input')).toHaveCount(0);
 }
 
+/**
+ * 编辑/创建抽屉内不存在已下线的镜像字段 k8s_instance_pool
+ * （issue #276 后续：后端字段删除后前端同步移除，防止重新引入）
+ * 同时校验 formData 键与 FormItem prop 两处的「不存在」
+ */
+async function expectUpsertNoMirrorInstancePool(page) {
+  const result = await upsertScope(page).evaluate((el) => {
+    const formEl = el.querySelector('.ivu-form');
+    if (!formEl || !formEl.__vue__) {
+      return { ok: false, reason: 'no-form-vue' };
+    }
+    let vm = formEl.__vue__;
+    while (vm && !vm.formData) {
+      vm = vm.$parent;
+    }
+    if (!vm || !vm.formData) {
+      return { ok: false, reason: 'no-formData' };
+    }
+    const formRef = (vm.$refs && (vm.$refs.formData || vm.$refs.form)) || null;
+    const props =
+      formRef && Array.isArray(formRef.fields)
+        ? formRef.fields.map((f) => String(f.prop || ''))
+        : [];
+    return {
+      ok: true,
+      hasKey: Object.prototype.hasOwnProperty.call(
+        vm.formData,
+        'k8s_instance_pool',
+      ),
+      props,
+    };
+  });
+  expect(result.ok, '应能读取抽屉表单模型: ' + JSON.stringify(result)).toBe(
+    true,
+  );
+  expect(result.hasKey, 'formData 不应再包含 k8s_instance_pool').toBe(false);
+  expect(
+    result.props.filter((p) => p.indexOf('k8s_instance_pool') !== -1),
+    'FormItem 不应再声明 k8s_instance_pool 字段',
+  ).toEqual([]);
+}
+
+/** 详情页不渲染已下线的镜像字段（纯回归护栏：文本中不应再出现该字段名） */
+async function expectViewNoMirrorInstancePool(page) {
+  const text = await viewScope(page).innerText();
+  expect(text).not.toContain('k8s_instance_pool');
+}
+
 // ---------- 详情页 K8s 分支（PR-D-04 / PR-D-05） ----------
 
 function viewInstancePoolCard(page) {
@@ -2237,6 +2285,8 @@ module.exports = {
   viewTableRows,
   expectViewTableHeaders,
   expectViewNoInputs,
+  expectUpsertNoMirrorInstancePool,
+  expectViewNoMirrorInstancePool,
   weekdayCheckbox,
   clickWeekdayCheckbox,
   expectWeekdayChecked,

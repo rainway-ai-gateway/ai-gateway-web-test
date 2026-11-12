@@ -92,14 +92,14 @@ test.describe('API-Key管理 - EM-K-02 创建API-Key-成功', () => {
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -176,14 +176,14 @@ test.describe('API-Key管理 - EM-K-04 创建API-Key-带配额计划', () => {
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -225,14 +225,14 @@ test.describe('API-Key管理 - EM-K-05 创建API-Key-带限流策略', () => {
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -287,14 +287,14 @@ test.describe('API-Key管理 - EM-K-06 创建API-Key-挂载Entity', () => {
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
       await utils.deleteEntityViaApi(page, entityId);
       await utils.deleteEntityTypeViaApi(page, typeName);
@@ -328,14 +328,14 @@ test.describe('API-Key管理 - EM-K-07 创建API-Key-不挂载Entity', () => {
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -369,14 +369,14 @@ test.describe('API-Key管理 - EM-K-08 创建API-Key-无限配额', () => {
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -460,14 +460,14 @@ test.describe('API-Key管理 - EM-K-10 创建API-Key-过期时间校验', () => 
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -536,14 +536,14 @@ test.describe('API-Key管理 - EM-K-11 创建API-Key-允许子网校验', () => 
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -676,14 +676,14 @@ test.describe('API-Key管理 - EM-K-27 创建API-Key-配额总量小数校验', 
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -848,14 +848,14 @@ test.describe('API-Key管理 - EM-K-52 创建API-Key-RMB配额小数校验', () 
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -902,14 +902,14 @@ test.describe('API-Key管理 - EM-K-53 创建API-Key-RMB配额4位小数边界',
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -942,14 +942,14 @@ test.describe('API-Key管理 - EM-K-54 创建API-Key-total_token配额小数（�
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -1013,14 +1013,14 @@ test.describe('API-Key管理 - EM-K-58 创建API-Key-RMB配额总量9000万边�
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -1070,14 +1070,14 @@ test.describe('API-Key管理 - EM-K-60 编辑API-Key-RMB配额总量9000万上�
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -1127,14 +1127,14 @@ test.describe('API-Key管理 - EM-K-59 重置配额弹窗-unit=RMB-9000万上界
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });
@@ -1178,14 +1178,14 @@ test.describe('API-Key管理 - EM-K-61 重置配额弹窗-total_token 上界校�
     });
 
     await test.step('清理测试数据', async () => {
-      await utils.searchApiKeyByDescription(page, description);
-      const row = page
-        .locator('.show-iView-Table .ivu-table tbody tr')
-        .filter({ hasText: description })
-        .first();
-      const apiKeyId = await row.getAttribute('data-row-key');
-      if (apiKeyId) {
-        await utils.deleteApiKeyViaApi(page, apiKeyId);
+      // iView 表格无 data-row-key，改按描述查接口取 id（与 test_08 修复口径一致），
+      // 避免列表分页（20条/页）时新行不在首页导致清理静默漏删、残留累积挤占后续用例
+      const created = await utils.findApiKeyByDescriptionViaApi(
+        page,
+        description,
+      );
+      if (created?.id) {
+        await utils.deleteApiKeyViaApi(page, created.id);
       }
     });
   });

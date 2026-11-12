@@ -859,6 +859,91 @@ async function fillEntityBatchLimitField(
 }
 
 /**
+ * 直接把批量限流维度写入 Vue 表单模型并触发该 FormItem 校验。
+ * 负数无法经键盘输入（NumberInput 清洗会去掉负号，issue #139），
+ * 校验「不能为负数」等负值场景必须走模型注入（与 setEntityQuotaTotalModel 同口径）。
+ */
+async function setEntityBatchLimitModel(
+  page,
+  key,
+  value,
+  drawerTitle = DRAWER_TITLE.createEntity,
+) {
+  const label = ENTITY_BATCH_LIMIT_LABELS[key];
+  if (!label) {
+    throw new Error(`未知的批量限流维度: ${key}`);
+  }
+  const drawer = ivuDrawer(page).withTitle(drawerTitle);
+  await expect(drawer).toBeVisible({ timeout: 15000 });
+  const result = await drawer.evaluate(
+    (drawerEl, payload) => {
+      const { fieldKey, fieldValue } = payload;
+      const formEl = drawerEl.querySelector('.ivu-form');
+      if (!formEl || !formEl.__vue__) {
+        return { ok: false, reason: 'no-form-vue' };
+      }
+      let vm = formEl.__vue__;
+      while (vm && !vm.formData) {
+        vm = vm.$parent;
+      }
+      const batch =
+        vm &&
+        vm.formData &&
+        vm.formData.rate_limit_policy &&
+        vm.formData.rate_limit_policy.rules &&
+        vm.formData.rate_limit_policy.rules.batch_limits;
+      if (!batch) {
+        return { ok: false, reason: 'no-batch_limits' };
+      }
+      const formRef = (vm.$refs && (vm.$refs.formData || vm.$refs.form)) || null;
+      if (!formRef || !Array.isArray(formRef.fields)) {
+        return { ok: false, reason: 'no-form-fields' };
+      }
+      const prop = `rate_limit_policy.rules.batch_limits.${fieldKey}`;
+      if (typeof vm.$set === 'function') {
+        vm.$set(batch, fieldKey, fieldValue);
+      } else {
+        batch[fieldKey] = fieldValue;
+      }
+      const field = formRef.fields.find((f) => f.prop === prop);
+      if (!field || typeof field.validate !== 'function') {
+        return {
+          ok: false,
+          reason: 'no-batch-limit-form-item',
+          props: formRef.fields.map((f) => f.prop),
+        };
+      }
+      return new Promise((resolve) => {
+        // 再次写入，尽量赶在组件钳制前触发校验
+        if (typeof vm.$set === 'function') {
+          vm.$set(batch, fieldKey, fieldValue);
+        } else {
+          batch[fieldKey] = fieldValue;
+        }
+        field.validate('change', (errorMessage) => {
+          resolve({
+            ok: true,
+            validated: true,
+            errorMessage: errorMessage || null,
+            value: batch[fieldKey],
+            validateState: field.validateState,
+            validateMessage: field.validateMessage,
+          });
+        });
+      });
+    },
+    { fieldKey: key, fieldValue: value },
+  );
+  if (!result || !result.ok) {
+    throw new Error(
+      `未能写入批量限流字段 ${label} 到 Vue formData: ${JSON.stringify(result || {})}`,
+    );
+  }
+  await page.waitForTimeout(300);
+  return result;
+}
+
+/**
  * 读取「批量限流」维度输入值（EM-E-61 接口 ↔ 编辑回显一致性用；数字框带千分位，按数值比较）
  * @param {string} key max_create_rpm | max_active_batches | max_file_bytes | max_file_lines
  */
@@ -2381,6 +2466,7 @@ module.exports = {
   setEntityRateLimitRuleFieldModel,
   fillEntityBatchLimitField,
   fillEntityBatchLimits,
+  setEntityBatchLimitModel,
   readEntityBatchLimitField,
   setupEntityCreateWithRateLimit,
   submitEntityFormExpectRateLimitError,

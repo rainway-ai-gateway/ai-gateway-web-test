@@ -1355,13 +1355,66 @@ test.describe('模型服务商 - PR-V-19 k8s_pool_name 校验', () => {
   });
 });
 
-test.describe('模型服务商 - PR-V-20 k8s_instance_pool 只读校验（跳过）', () => {
-  // 跳过原因（docs/providers/02-功能测试用例/06-字段校验矩阵.md PR-V-20，2026-10-28 判定）：
-  // `k8s_instance_pool` 镜像字段已彻底删除（后端不再返回、请求体携带按未知字段静默忽略，
-  // 不再 422），「请求体携带返回 422」「详情页读镜像字段」两条断言的前提不复存在；
-  // 详情页实时实例展示由 tests/providers/test_03_provider_detail.spec.js PR-D-05 覆盖。
-  // 恢复条件：镜像字段恢复或重新引入等价机制。
-  test.skip('k8s_instance_pool 只读（字段已删除，断言前提不复存在）', async () => {});
+test.describe('模型服务商 - PR-V-20 k8s_instance_pool 镜像字段已下线', () => {
+  // 字段演变（docs/providers/02-功能测试用例/06-字段校验矩阵.md PR-V-20）：
+  // 原用例验证「k8s_instance_pool 镜像字段只读」（请求体携带 422、详情页读镜像字段）。
+  // 该字段已于 2026-10-28 从产品彻底删除，原断言前提不复存在；本用例按**现行契约**改写为
+  // 下线护栏：请求体携带该字段静默忽略（200、响应不含）＋ 编辑抽屉无该输入项 ＋
+  // 详情页不渲染该字段。实例数据由 GET /k8s_pools/{name} 实时读取（PR-D-04/05 覆盖）。
+  let cleanup;
+  let poolCleanup;
+
+  test.beforeEach(async ({ page }) => {
+    cleanup = api.createProviderTestCleanup();
+    poolCleanup = k8sPoolApi.createK8sPoolTestCleanup();
+    await pp.gotoProvidersPage(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+    await poolCleanup.cleanup(page);
+  });
+
+  test('请求体携带该字段静默忽略；编辑抽屉无该输入项；详情页不渲染', async ({
+    page,
+  }) => {
+    const poolName = await createK8sPool(page, poolCleanup);
+    const created = await api.createProviderRawViaApi(page, {
+      name: uniqueName('provider'),
+      description: '自动化测试-PR-V-20 镜像字段下线',
+      instance_source: 'k8s_pool',
+      k8s_pool_name: poolName,
+      k8s_instance_pool: [
+        { addr: IP_ADDR, port: IP_PORT, weight: IP_WEIGHT },
+      ],
+      model_protocols: ['openai'],
+      model_endpoint: { schema: 'https', uri: '/v1/models' },
+      models: [DEFAULT_MODEL],
+      keys: [],
+    });
+    expect(
+      created.body.ErrNum,
+      'k8s_instance_pool 已删除，请求体携带应按未知字段静默忽略',
+    ).toBe(200);
+    expect(created.body.Data).not.toBeNull();
+    expect(created.body.Data).not.toHaveProperty('k8s_instance_pool');
+    const providerName = created.body.Data.name;
+    cleanup.trackName(providerName);
+
+    await test.step('编辑抽屉不再有 k8s_instance_pool 输入项', async () => {
+      // 接口造数后列表不会自动刷新，重载再断言行可见
+      await page.reload();
+      await pp.expectProviderRowVisibleByName(page, providerName);
+      await pp.openEditDrawer(page, providerName);
+      await pp.expectUpsertNoMirrorInstancePool(page);
+      await pp.closeProviderDrawer(page);
+    });
+
+    await test.step('详情页不渲染该字段', async () => {
+      await pp.openViewDrawer(page, providerName);
+      await pp.expectViewNoMirrorInstancePool(page);
+    });
+  });
 });
 
 test.describe('模型服务商 - PR-V-21 k8s_pool 模式 instance_pool 休眠保留', () => {

@@ -698,32 +698,61 @@ test.describe('模型服务商 - PR-L-08 模型列 2 Tag + `+N` 悬停 Tooltip',
   });
 });
 
-test.describe('模型服务商 - PR-L-09 空列表展示空态（环境依赖，非空则跳过）', () => {
+test.describe('模型服务商 - PR-L-09 空列表展示空态', () => {
   test('系统无服务商时展示空态，筛选/分页控件正常、添加按钮可用', async ({
     page,
   }) => {
-    // 环境依赖偏差（偏差记录 1）：空列表要求「系统无任何服务商」，不可删除真实数据，
-    // 故先探测；系统已有服务商则跳过本用例。
-    const existing = await api.fetchProvidersViaApi(page);
-    test.skip(
-      existing.length > 0,
-      '系统已有 ' +
-        existing.length +
-        ' 个服务商，无法构造空列表环境（PR-L-09 环境依赖偏差）',
-    );
+    // 2026-11-12：共享环境已有百余个真实服务商，不可为了造空态而删除真实数据。
+    // 按 PR-C-25 场景② 同一口径用路由桩让 GET /providers 返回空列表（Data.list = []），
+    // 验证前端在「无服务商」响应下的空态与控件可用性，语义与原用例一致
+    await page.route(/\/open-api\/v1\/providers(\?|$)/, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ErrNum: 200,
+          ErrMsg: 'success',
+          Data: { list: [], pagination: { page: 1, page_size: 20, total: 0 } },
+        }),
+      });
+    });
 
-    await pp.gotoProvidersPage(page);
+    try {
+      const listResponse = page.waitForResponse(
+        (r) =>
+          /\/open-api\/v1\/providers(\?|$)/.test(r.url()) &&
+          r.request().method() === 'GET',
+        { timeout: 15000 },
+      );
+      await pp.gotoProvidersPage(page);
 
-    // 1. 展示空态（表格无数据占位）
-    await pp.expectEmptyProvidersTable(page);
+      await test.step('前置：列表接口返回空集合', async () => {
+        const resp = await listResponse;
+        expect(resp.status()).toBe(200);
+        const payload = await resp.json();
+        expect(payload.Data.list, '桩返回空列表').toEqual([]);
+      });
 
-    // 2. 筛选 / 分页控件正常显示但不报错
-    await expect(pp.paginationScope(page)).toBeVisible();
+      await test.step('1. 展示空态（表格无数据占位）', async () => {
+        await pp.expectEmptyProvidersTable(page);
+      });
 
-    // 3. 「添加服务商」按钮可用
-    await expect(
-      page.getByRole('button', { name: pp.DOC.createButton }),
-    ).toBeEnabled();
+      await test.step('2. 筛选 / 分页控件正常显示但不报错', async () => {
+        await expect(pp.paginationScope(page)).toBeVisible();
+      });
+
+      await test.step('3. 「添加服务商」按钮可用', async () => {
+        await expect(
+          page.getByRole('button', { name: pp.DOC.createButton }),
+        ).toBeEnabled();
+      });
+    } finally {
+      await page.unroute(/\/open-api\/v1\/providers(\?|$)/);
+    }
   });
 });
 

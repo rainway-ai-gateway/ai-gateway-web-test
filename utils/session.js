@@ -336,13 +336,13 @@ async function loginViaApi(page, conf = readConf()) {
  * 复活会话，破坏注销类断言。
  */
 async function injectSessionIntoPage(page, user) {
+  // 注意：这里不能在 apply 内部吞掉异常 —— about:blank（opaque origin）访问
+  // localStorage 会抛 SecurityError，被吞掉后 evaluate 会正常返回，下面的
+  // 「先落地应用首页再注入」兜底将永远不会执行，表现为「注入成功但页面仍无会话」
+  // （SC-L-06 / EM-K-24 实测：用例首个动作即导航时自愈失败）
   const apply = (u) => {
-    try {
-      localStorage.setItem('user', JSON.stringify(u));
-      localStorage.setItem('lang', 'zh');
-    } catch (e) {
-      /* sandbox 下可能不可用 */
-    }
+    localStorage.setItem('user', JSON.stringify(u));
+    localStorage.setItem('lang', 'zh');
   };
 
   try {
@@ -580,9 +580,12 @@ async function recoverFromSessionError(page, options = {}) {
     await injectSessionIntoPage(page, user);
   }
 
-  // 注入后页面侧 localStorage 偶有写入可见性延迟（全量长跑实测偶发），短暂轮询再判定
+  // 注入后页面侧 localStorage 偶有写入可见性延迟（全量长跑实测偶发），短暂轮询再判定；
+  // 每轮重注一次 —— 应用启动流程（store 初始化/路由守卫的会话校验）可能在我们注入
+  // 之后才清空 'user'，重注可覆盖这类清写竞态
   let current = await readStoredUser(page);
   for (let i = 0; i < 5 && (!current || !current.sessionKey); i += 1) {
+    await injectSessionIntoPage(page, user);
     await page.waitForTimeout(200);
     current = await readStoredUser(page);
   }

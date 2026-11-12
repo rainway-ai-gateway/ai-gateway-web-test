@@ -168,8 +168,15 @@ entityOrgDescribe('Entity组织管理 - EM-E-58 批量限流-负数校验', (cle
       }
     });
 
-    await test.step('1. 批量任务创建RPM 填 -1', async () => {
-      await utils.fillEntityBatchLimitField(page, 'max_create_rpm', -1);
+    await test.step('1. 批量任务创建RPM 注入 -1（键盘无法输入负号）', async () => {
+      // issue #139：NumberInput 输入层会剔除负号，键盘敲 -1 实际录入 1；
+      // 负值校验场景按 EM-E-05 同口径走 Vue 模型注入
+      const result = await utils.setEntityBatchLimitModel(
+        page,
+        'max_create_rpm',
+        -1,
+      );
+      expect(result.value, '模型应保留注入的负值').toBe(-1);
     });
 
     await test.step('2. 提交被拦截并提示不能为负数', async () => {

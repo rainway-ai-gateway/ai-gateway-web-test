@@ -415,6 +415,8 @@ test.describe('批量任务 - BT-L-10 游标翻页与按钮置灰', () => {
 
     // 环境守卫：GET /batches 只能由数据面透传产生，若当前无数据或只有一页，
     // 首页即末页，「上一页/下一页」的置灰语义无法区分（前置条件不成立而非产品缺陷）。
+    // 注意 UI 每页条数为 50（BatchTasks/index.vue PAGE_LIMIT，与接口默认一致），
+    // 造数 25 条时恒为单页，属环境数据依赖跳过
     const firstPage = await batchApi.fetchBatchTasksViaApi(page, {
       limit: bp.PAGE_LIMIT,
     });
