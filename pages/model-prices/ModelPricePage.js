@@ -143,6 +143,81 @@ const MODE_OPTIONS = [
 ];
 
 const PRICE_KEY_INPUT_COST = 'input_cost_per_token';
+
+// ─────────────────────────────────────────────────────────────────────────
+// 价格单位口径（2026-11-03 对齐「元/百万 tokens」录入/展示改造，覆盖缺口清单 §三十）
+// - spec 语义不变：价格数值一律为**存储值（每 token 单价）**，断言与造数口径不动；
+// - 页对象负责换算：UI 对含 `_token` 的计价键以「元/百万 tokens」录入/回显，
+//   录入时 ×1e6、回显/展示断言期望值由 millionDisplayForKey() 给出。
+// 依据：ai-gateway-web src/utils/price.js isTokenBasedPriceKey/tokenPriceToMillion。
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * 价格键归一化（issue #140）：中文界面展示为「英文键（中文备注）」，如
+ * `input_cost_per_token（输入）`；比较/查找一律用归一化后的英文键（接口契约键名）。
+ */
+function normalizePriceKey(label) {
+  const text = String(label === null || label === undefined ? '' : label).trim();
+  const idx = text.search(/[（(]/);
+  return idx > 0 ? text.slice(0, idx).trim() : text;
+}
+
+/** 计价键是否按 token 计价（与前端 isTokenBasedPriceKey 同口径：键名含 `_token`） */
+function isTokenBasedPriceKey(key) {
+  return typeof key === 'string' && key.indexOf('_token') !== -1;
+}
+
+/**
+ * 存储值 → UI 录入值：token 计价键 ×1e6（元/百万 tokens），其余键原值。
+ * 值为非数值字符串（非法输入用例）时原样透传，交由产品校验提示。
+ */
+function uiPriceInputForKey(key, value) {
+  if (!isTokenBasedPriceKey(key)) {
+    return String(value);
+  }
+  const num = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(num)) {
+    return String(value);
+  }
+  return String(num * 1e6);
+}
+
+/**
+ * 存储值 → UI 展示期望串（复刻 src/utils/price.js formatPriceNumber 口径：
+ * 0→'0'；|x|<1e-4 或 ≥1e6 用科学计数法（去尾零）；否则 en-US 最多 15 位有效数字）。
+ * token 计价键先 ×1e6 换算为百万单位，其余键按原值展示。
+ */
+function priceDisplayForKey(key, perTokenValue) {
+  let num = typeof perTokenValue === 'number' ? perTokenValue : Number(perTokenValue);
+  if (isTokenBasedPriceKey(key)) {
+    num = num * 1e6;
+  }
+  if (num === 0) return '0';
+  const abs = Math.abs(num);
+  if (abs < 1e-4 || abs >= 1e6) {
+    return num
+      .toExponential()
+      .replace(/(\.\d*?)0+([eE])/g, '$1$2')
+      .replace(/\.([eE])/g, '$1');
+  }
+  return num.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 15 });
+}
+
+/** 读取价格行当前选中的键名（payload.key 未给定时用，如编辑回显后的既有行）。
+ *  与 getPriceRowValues 的键读取同机制（input 值优先、选中区文本兜底）——
+ *  __vue__ 的 selectedLabel 在 filterable 下拉交互后存在空窗期竞态（2026-11-03 实测）。 */
+async function readPriceRowKey(row) {
+  const keySel = row.locator('.el-select').first();
+  const keyFromInput =
+    (await keySel.locator('input').first().inputValue().catch(() => '')) || '';
+  const keyText =
+    (await keySel
+      .locator('.el-input__inner, .el-select__selection')
+      .first()
+      .textContent()
+      .catch(() => '')) || '';
+  return normalizePriceKey(keyFromInput || keyText || '');
+}
 const PRICE_KEY_OUTPUT_COST = 'output_cost_per_token';
 const PRICE_KEY_CACHE_CREATION_1H = 'cache_creation_input_token_cost_1h';
 const PRICE_KEY_INPUT_256K = 'input_cost_per_token_above_256k_tokens';
@@ -771,7 +846,8 @@ async function getPriceKeyDropdownOptions(page) {
   // 关闭下拉，避免遮挡后续操作
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-  return result;
+  // issue #140：选项文案带中文备注，断言口径统一为英文键
+  return (result || []).map(normalizePriceKey);
 }
 
 // ---------- 价格配置块（默认价格 / 分时段价格 / 批量折扣系数） ----------
@@ -841,10 +917,13 @@ async function fillTierPriceRow(page, index, payload) {
     await keySel.selectOptionFilterable(payload.key);
   }
   if (payload.value !== undefined) {
+    // 2026-11-03 单位口径：同 fillPriceRow，存储值语义，token 计价键录入 ×1e6
+    const key =
+      payload.key !== undefined ? payload.key : await readPriceRowKey(row);
     const valueInput = row.locator('td').nth(1).locator('input').first();
     await expect(valueInput).toBeVisible({ timeout: 10000 });
     await valueInput.click({ clickCount: 3 });
-    await valueInput.fill(String(payload.value));
+    await valueInput.fill(uiPriceInputForKey(key, payload.value));
     await valueInput.blur();
   }
   await page.waitForTimeout(200);
@@ -865,7 +944,7 @@ async function getTierPriceRowValues(page, index) {
     .locator('input')
     .first()
     .inputValue();
-  return { key: (keyFromInput || keyText || '').trim(), value };
+  return { key: normalizePriceKey(keyFromInput || keyText || ''), value };
 }
 
 async function findTierPriceRowIndexByKey(page, key) {
@@ -915,7 +994,8 @@ async function getTierPriceKeyDropdownOptions(page) {
   // 关闭下拉，避免遮挡后续操作
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-  return result;
+  // issue #140：选项文案带中文备注，断言口径统一为英文键
+  return (result || []).map(normalizePriceKey);
 }
 
 /**
@@ -1064,10 +1144,12 @@ async function fillPriceRow(page, index, payload) {
     await keySel.selectOptionFilterable(payload.key);
   }
   if (payload.value !== undefined) {
+    // 2026-11-03 单位口径：payload.value 为存储值（每 token 单价），token 计价键录入 ×1e6
+    const key = payload.key !== undefined ? payload.key : await readPriceRowKey(row);
     const valueInput = row.locator('td').nth(1).locator('input').first();
     await expect(valueInput).toBeVisible({ timeout: 10000 });
     await valueInput.click({ clickCount: 3 });
-    await valueInput.fill(String(payload.value));
+    await valueInput.fill(uiPriceInputForKey(key, payload.value));
     await valueInput.blur();
   }
   await page.waitForTimeout(200);
@@ -1106,7 +1188,7 @@ async function getPriceRowValues(page, index) {
     .locator('input')
     .first()
     .inputValue();
-  return { key: (keyFromInput || keyText || '').trim(), value };
+  return { key: normalizePriceKey(keyFromInput || keyText || ''), value };
 }
 
 async function findPriceRowIndexByKey(page, key) {
@@ -1134,12 +1216,17 @@ async function expectViewPricesNumericallyEqual(page, prices) {
   const entries = await viewKvEntries(page, LABEL.prices);
   const ui = {};
   entries.forEach((e) => {
-    ui[e.key] = Number(String(e.value).replace(/^¥/, '').trim());
+    // 2026-11-03 单位口径：token 计价项展示为「¥<百万单位> / 百万tokens」，取打头数值
+    const m = String(e.value).match(/^[¥]?\s*([\d.eE+-]+)/);
+    ui[e.key] = m ? Number(m[1]) : NaN;
   });
   const expected = prices || {};
   expect(Object.keys(ui).sort()).toEqual(Object.keys(expected).sort());
   Object.keys(expected).forEach((key) => {
-    expect(ui[key]).toBe(Number(expected[key]));
+    const storageVal = Number(expected[key]);
+    // token 计价键详情按「元/百万 tokens」展示，期望 = 存储值 ×1e6
+    const expectedUi = isTokenBasedPriceKey(key) ? storageVal * 1e6 : storageVal;
+    expect(ui[key]).toBe(expectedUi);
   });
 }
 
@@ -1320,7 +1407,7 @@ async function viewKvEntries(page, cardTitle) {
   for (let i = 0; i < count; i += 1) {
     const tds = rows.nth(i).locator('td');
     entries.push({
-      key: ((await tds.nth(0).textContent()) || '').trim(),
+      key: normalizePriceKey((await tds.nth(0).textContent()) || ''),
       value: ((await tds.nth(1).textContent()) || '').trim(),
     });
   }
@@ -1348,7 +1435,7 @@ async function viewTierPriceGroups(page) {
     for (let j = 0; j < rowCount; j += 1) {
       const tds = rows.nth(j).locator('td');
       entries.push({
-        key: ((await tds.nth(0).textContent()) || '').trim(),
+        key: normalizePriceKey((await tds.nth(0).textContent()) || ''),
         value: ((await tds.nth(1).textContent()) || '').trim(),
       });
     }
@@ -1716,6 +1803,7 @@ module.exports = {
   PRICE_KEY_INPUT_AUDIO,
   PRICE_KEY_OUTPUT_AUDIO,
   NEW_PRICE_KEYS,
+  normalizePriceKey,
   CAPABILITY_OPTIONS,
   SUPPORTED_PARAMETER_OPTIONS,
   LIMIT_KEY_OPTIONS,
@@ -1775,6 +1863,9 @@ module.exports = {
   removeTierPriceRow,
   expectTierPriceRowCount,
   fillTierPriceRow,
+  uiPriceInputForKey,
+  priceDisplayForKey,
+  isTokenBasedPriceKey,
   getTierPriceRowValues,
   findTierPriceRowIndexByKey,
   expectTierPriceRowInputValue,

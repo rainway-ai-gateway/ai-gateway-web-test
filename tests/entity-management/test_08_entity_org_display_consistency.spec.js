@@ -62,18 +62,18 @@ function formatTimestamp(timestamp) {
 }
 
 /**
- * 与前端 EntityView/ApiKeyView formatNumber 一致的金额/数值格式化
- * （zh-CN 千分位，RMB 最多 4 位小数，total_token 0 位；
- *   与前端一致使用 minimumFractionDigits=0，不足 4 位小数不补零，
- *   如 0 显示为 ¥0 而非 ¥0.0000）
+ * 与前端 const.js formatQuotaDisplay 一致的配额展示格式化（issue #139）：
+ * total_token → 百万Token（÷1e6，截断 2 位小数）；RMB → 元（toFixed 2 位）。
  */
-function formatQuotaNumber(num, decimals) {
+function formatMillionTokens(tokens) {
+  const num = Number(tokens);
+  if (Number.isNaN(num)) return '-';
+  return (Math.floor((num / 1e6) * 100) / 100).toFixed(2);
+}
+function formatYuan(num) {
   const value = Number(num);
   if (Number.isNaN(value)) return '-';
-  return value.toLocaleString('zh-CN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals,
-  });
+  return value.toFixed(2);
 }
 
 // 复刻 EntityList.vue formatNumber：decimals=0 时对 >=1000 做 K/M 缩写（与 ApiKeyList 一致）
@@ -255,33 +255,27 @@ entityOrgDescribe(
         const unlimitedText = quota.unlimited ? '是' : '否';
         await expect(drawerText).toContain(unlimitedText);
 
-        // 配额总量（带千位分隔符）
+        // 配额总量（issue #139：百万Token 展示，2 位小数）
         if (quota.quota !== undefined) {
-          const formattedQuota = quota.quota
-            .toString()
-            .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-          await expect(drawerText).toContain(formattedQuota);
+          await expect(drawerText).toContain(formatMillionTokens(quota.quota));
         }
 
         // 已使用
         if (quota.used !== undefined) {
-          const formattedUsed = quota.used
-            .toString()
-            .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-          await expect(drawerText).toContain(formattedUsed);
+          await expect(drawerText).toContain(formatMillionTokens(quota.used));
         }
 
         // 剩余量
         if (quota.remaining !== undefined) {
-          const formattedRemaining = quota.remaining
-            .toString()
-            .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-          await expect(drawerText).toContain(formattedRemaining);
+          await expect(drawerText).toContain(
+            formatMillionTokens(quota.remaining),
+          );
         }
 
         // 配额单位
         if (quota.unit) {
-          const unitText = quota.unit === 'total_token' ? 'tokens' : 'requests';
+          const unitText =
+            quota.unit === 'total_token' ? '百万Token' : '元';
           await expect(drawerText).toContain(unitText);
         }
 
@@ -436,21 +430,17 @@ entityOrgDescribe(
           .first();
         const drawerText = await drawer.textContent();
 
-        // 单位行显示 RMB（详情 quotaPlanUnit 原值）
-        await expect(drawerText).toContain('RMB');
+        // 单位行显示「元」（issue #139：详情配额单位不再露出 RMB 枚举）
+        await expect(drawerText).toContain('元');
 
-        // 配额总量：¥ 前缀，最多 4 位小数（0 值不补零，如 ¥0）
-        await expect(drawerText).toContain(
-          '¥' + formatQuotaNumber(quota.quota, 4),
-        );
+        // 配额总量：按「元」展示（2 位小数）
+        await expect(drawerText).toContain(formatYuan(quota.quota));
 
-        // 已使用 / 剩余量同样 ¥ 前缀，最多 4 位小数（0 值不补零，如 ¥0）
+        // 已使用 / 剩余量同样 2 位小数
         const used = quota.balance ? Number(quota.balance.used) || 0 : 0;
         const remaining = Math.max(0, Number(quota.quota) - used);
-        await expect(drawerText).toContain('¥' + formatQuotaNumber(used, 4));
-        await expect(drawerText).toContain(
-          '¥' + formatQuotaNumber(remaining, 4),
-        );
+        await expect(drawerText).toContain(formatYuan(used));
+        await expect(drawerText).toContain(formatYuan(remaining));
 
         // 进度条百分比与 used / quota 比例一致（前端 quotaPercent 计算方式）
         const percent = Math.round((used / Number(quota.quota)) * 10000) / 100;
@@ -505,11 +495,8 @@ entityOrgDescribe(
         const tokenEntity = await utils.findEntityByNameViaApi(page, tokenName);
         const tq = tokenEntity.quota_plan;
         const tUsed = tq.balance ? Number(tq.balance.used) || 0 : 0;
-        // 前端格式：`{used} tokens / {quota} tokens`，且 decimals=0 时 >=1000 缩写为 K/M
-        const tText = `${formatEntityListNumber(
-          tUsed,
-          0,
-        )} tokens / ${formatEntityListNumber(tq.quota, 0)} tokens`;
+        // issue #139：列表格式 `{used} 百万Token / {quota} 百万Token`
+        const tText = `${formatMillionTokens(tUsed)} 百万Token / ${formatMillionTokens(tq.quota)} 百万Token`;
         const tokenRow = page
           .locator('.show-iView-Table .ivu-table tbody tr')
           .filter({ hasText: tokenName })
@@ -523,16 +510,86 @@ entityOrgDescribe(
         const rmbEntity = await utils.findEntityByNameViaApi(page, rmbName);
         const rq = rmbEntity.quota_plan;
         const rUsed = rq.balance ? Number(rq.balance.used) || 0 : 0;
-        const rText = `¥${formatQuotaNumber(
-          rUsed,
-          4,
-        )} / ¥${formatQuotaNumber(rq.quota, 4)}`;
+        // issue #139：列表 RMB 按「元」展示（2 位小数）
+        const rText = `${formatYuan(rUsed)} 元 / ${formatYuan(rq.quota)} 元`;
         const rmbRow = page
           .locator('.show-iView-Table .ivu-table tbody tr')
           .filter({ hasText: rmbName })
           .first();
         await expect(rmbRow).toContainText(rText);
         await expect(rmbRow).not.toContainText('tokens');
+      });
+    });
+  },
+);
+
+/**
+ * Entity组织管理 - EM-E-61 批量限流接口数据与页面展示一致性
+ *
+ * 2026-10-30 补齐（00-索引与映射「批量限流」节自登记的缺口：EM-E-57~61 未纳入自动化映射，
+ * 其中 EM-E-61 建议参照本节 EOD-01 写法补充）。基准：GET /entities 返回的
+ * rate_limit_policy.rules.batch_limits 四维度；UI 侧断言编辑抽屉回显一致。
+ */
+entityOrgDescribe(
+  'Entity组织管理 - EM-E-61 批量限流接口数据与页面展示一致性',
+  (cleanup) => {
+    const BATCH_LIMITS = {
+      max_create_rpm: 3,
+      max_active_batches: 2,
+      max_file_bytes: 2097152,
+      max_file_lines: 20,
+    };
+
+    test('接口返回的 batch_limits 与编辑抽屉回显逐项一致', async ({ page }) => {
+      const entityName = await utils.generateTestEntityName();
+      const typeName = await utils.generateTestEntityTypeName();
+      cleanup.trackTypeName(typeName);
+      cleanup.trackEntityName(entityName);
+
+      await test.step('前置：API 造数类型 + 带 batch_limits 的 Entity', async () => {
+        await utils.gotoEntityTypeManagementPage(page);
+        await utils.createEntityTypeViaApiAndRefresh(
+          page,
+          typeName,
+          '批量限流一致性类型',
+          1,
+        );
+        const entity = await utils.createEntityWithTypeViaApi(page, {
+          name: entityName,
+          type: typeName,
+          rateLimitPolicy: {
+            enabled: true,
+            rules: {
+              tpm: [],
+              rpm: [],
+              max_concurrency: -1,
+              batch_limits: BATCH_LIMITS,
+            },
+          },
+        });
+        expect(entity, 'Entity 应创建成功').toBeTruthy();
+      });
+
+      await test.step('接口基准：GET 返回 batch_limits 四维度', async () => {
+        const apiData = await utils.findEntityByNameViaApi(page, entityName);
+        expect(apiData, '应能按名称查到 Entity').not.toBeNull();
+        expect(apiData.rate_limit_policy.rules.batch_limits).toEqual(
+          BATCH_LIMITS,
+        );
+      });
+
+      await test.step('UI：编辑抽屉批量限流四维度回显与接口一致', async () => {
+        await utils.gotoEntityOrgManagementPage(page);
+        await utils.openEditEntityDrawer(page, entityName);
+        for (const [key, value] of Object.entries(BATCH_LIMITS)) {
+          // 数字输入框带千分位（如 2,097,152），按数值比较
+          const raw = await utils.readEntityBatchLimitField(page, key);
+          expect(
+            Number(raw.replace(/,/g, '')),
+            `批量限流维度 ${key} 回显应与接口一致`,
+          ).toBe(Number(value));
+        }
+        await utils.cancelEditEntityForm(page);
       });
     });
   },

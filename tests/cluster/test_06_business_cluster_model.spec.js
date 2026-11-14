@@ -324,6 +324,16 @@ test.describe('AI业务集群 - RM-BC-71~78、81、84 大模型配置 Provider �
     await utils.setModelKeyWeightViaModel(page, 1, 50);
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
+
+    // 复查页服务鉴权 Keys 表格与第 4 步输入逐项一致（覆盖缺口清单 #1 补齐）
+    const reviewKeys = await utils.getReviewKeysTable(
+      page,
+      utils.DRAWER_TITLE.createBusinessCluster,
+    );
+    expect(reviewKeys).toEqual([
+      { name: KEY_A1, weight: '50' },
+      { name: KEY_A2, weight: '50' },
+    ]);
   });
 
   test('RM-BC-78 服务商无 keys 时「服务商 Key」下拉无可用选项，切回有 keys 服务商恢复', async ({

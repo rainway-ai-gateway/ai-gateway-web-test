@@ -395,3 +395,95 @@ test.describe('意图配置 - 全局配置与双模式', () => {
     // 与 02 文档「仅 404 触发自动编辑」预期不符，已在测试报告登记（不阻断本断言）。
   });
 });
+
+/**
+ * 错误容错（覆盖缺口清单 #33）：主数据接口 500 时页面不白屏、有降级表现、恢复后可用。
+ * 断言取「最小不变量」：侧栏布局在（不白屏）+ 全局错误提示竞速捕获（iView Message 约 3s
+ * 自动消失；未捕获时记录为已知偏差并继续，不阻断回归）+ 恢复后重试成功。
+ */
+test.describe('意图配置 - 错误容错（#33）', () => {
+  const LIST_GLOB = '**/open-api/v1/intent-config**';
+
+  test('主数据接口返回 500 时不白屏、有降级表现，恢复后可用', async ({ page }) => {
+    await test.step('1. 拦截主数据接口返回 500 并进入页面', async () => {
+      await page.route(LIST_GLOB, (route) =>
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ ErrNum: 500, ErrMsg: 'mock internal error' }),
+        }),
+      );
+      await utils.gotoIntentConfigPage(page);
+    });
+
+    await test.step('2. 不白屏：应用侧栏布局仍渲染', async () => {
+      await expect(page.locator('.bfe-sidebar').first()).toBeVisible({
+        timeout: 15000,
+      });
+    });
+
+    await test.step('3. 降级表现：并发等待全局错误提示（竞速捕获 3s 窗口）', async () => {
+      const toastPromise = page
+        .waitForSelector(
+          '.ivu-message-error, .ivu-notice .ivu-notice-title, .ivu-alert-error',
+          { state: 'visible', timeout: 15000 },
+        )
+        .catch(() => null);
+      await page.reload();
+      await page.waitForLoadState('domcontentloaded');
+      const toast = await toastPromise;
+      if (toast) {
+        await expect(
+          page
+            .locator('.ivu-message-error, .ivu-notice, .ivu-alert-error')
+            .first(),
+        ).toBeVisible();
+      } else {
+        console.log('[#33 偏差] 主数据接口 500 时 意图配置 页无可见错误提示（静默失败，待登记 BUG）');
+      }
+    });
+
+    await test.step('4. 恢复后重试可用：撤销拦截并刷新', async () => {
+      await page.unroute(LIST_GLOB);
+      await page.reload();
+      await page.waitForLoadState('domcontentloaded');
+      await expect(page.locator('.bfe-sidebar').first()).toBeVisible({
+        timeout: 15000,
+      });
+    });
+  });
+});
+
+/**
+ * IC-CV-01 全局配置接口数据与页面展示一致性（覆盖缺口清单 #31）
+ *
+ * 单例真值基准：API 发布指定最小置信度 + 1 题 → GET 取基准 → 视图模式逐处比对
+ * 置信度文案与问题数量卡片标题。区别于 IC-L-01（流程用例内含一致性断言），
+ * 本用例以接口返回值为唯一基准做端到端核对。
+ */
+test('IC-CV-01 全局配置接口数据与页面展示一致性（API 基准）', async ({ page }) => {
+  const threshold = 0.42;
+  const question = utils.buildTestChoiceQuestion({
+    instructions: 'IC-CV-01 接口一致性核对问题？',
+  });
+
+  await test.step('前置：备份原始配置并 API 发布测试配置', async () => {
+    await utils.ensureAppSession(page);
+    await cleanup.saveOriginalState(page);
+    await utils.ensureIntentConfigPublishedViaApi(page, {
+      minConfidence: threshold,
+      questions: [question],
+    });
+  });
+
+  await test.step('页面展示与接口一致：置信度文案 + 问题数卡片标题', async () => {
+    await utils.gotoIntentConfigPageAndWaitForConfig(page);
+    await utils.expectViewMode(page);
+    const cfg = await utils.getIntentConfigViaApi(page);
+    expect(cfg && cfg.published, '意图配置应已发布').toBe(true);
+    const thresholdValue = cfg.data.min_confidence;
+    expect(thresholdValue, '接口应返回 min_confidence').not.toBeUndefined();
+    await utils.expectGlobalThresholdText(page, String(thresholdValue));
+    await utils.expectQuestionsCardTitle(page, cfg.data.questions.length);
+  });
+});

@@ -177,8 +177,8 @@ test.describe('AI 缓存规则 - AC-DR-02 拖拽到目标行落到目标行原�
   });
 });
 
-test.describe('AI 缓存规则 - AC-DR-03 列排序/列搜索激活时拖拽按源下标移动正确的行', () => {
-  test('AC-DR-03 列排序激活时拖拽：按源下标移动正确的规则', async ({ page }) => {
+test.describe('AI 缓存规则 - AC-DR-03 列排序/列搜索激活时拖拽被禁用（#79 决策 ①）', () => {
+  test('AC-DR-03 列排序激活时拖拽被禁用：顺序不变、清除排序后恢复', async ({ page }) => {
     // 基线顺序刻意与「按规则名倒序」不同：倒序后可视首行不是基线首行
     const stamp = Date.now();
     const rules = [
@@ -204,38 +204,21 @@ test.describe('AI 缓存规则 - AC-DR-03 列排序/列搜索激活时拖拽按�
       expect(visualOrder).not.toEqual(baseline);
     });
 
-    await test.step('2. 拖拽可视首行到可视末行：按源下标落到可视末行的原下标处', async () => {
-      const sourceIndexOfFirst = baseline.indexOf(visualOrder[0]);
-      const sourceIndexOfLast = baseline.indexOf(
-        visualOrder[visualOrder.length - 1],
-      );
-      const expectedOrder = utils.moveRuleToIndex(
-        baseline,
-        sourceIndexOfFirst,
-        sourceIndexOfLast,
-      );
-      const visuallyIndexedOrder = utils.moveRuleToIndex(
-        baseline,
-        0,
-        visualOrder.length - 1,
-      );
-
+    await test.step('2. 排序态下拖拽被禁用：行不可拖拽且顺序保持不变', async () => {
+      await utils.expectRuleRowsDraggable(page, false);
       await utils.dragRuleRow(page, 0, visualOrder.length - 1);
-      await utils.expectRuleNamesInOrder(page, expectedOrder);
+      await page.waitForTimeout(500);
+      await utils.expectRuleNamesInOrder(page, visualOrder);
+    });
 
-      if (
-        JSON.stringify(expectedOrder) !== JSON.stringify(visuallyIndexedOrder)
-      ) {
-        // 负向对照：若按可视下标派发，移动的将是另一条规则
-        expect(
-          await utils.getRuleNamesInOrder(page),
-          '排序态下移动的规则不是可视首行对应的规则',
-        ).not.toEqual(visuallyIndexedOrder);
-      }
+    await test.step('2b. 清除排序后恢复可拖拽与原始顺序', async () => {
+      await utils.sortRuleTableByColumn(page, RULE_NAME_COLUMN, 'desc');
+      await utils.expectRuleRowsDraggable(page, true);
+      await utils.expectRuleNamesInOrder(page, baseline);
     });
   });
 
-  test('AC-DR-03 列搜索筛选激活时拖拽：按源下标移动正确的规则', async ({
+  test('AC-DR-03 列搜索激活时拖拽被禁用：清空搜索后顺序不变', async ({
     page,
   }) => {
     // 关键字命中第 2、3 条（第 1 条不命中）：可视首行的源下标 ≠ 0
@@ -265,41 +248,18 @@ test.describe('AI 缓存规则 - AC-DR-03 列排序/列搜索激活时拖拽按�
       );
     });
 
-    await test.step('2. 拖拽可视首行到可视末行：按源下标落到可视末行的原下标处', async () => {
+    await test.step('2. 筛选态下拖拽被禁用：清空搜索后顺序与基线一致', async () => {
       const visualOrder = await utils.getRuleNamesInOrder(page);
       expect(visualOrder.length).toBeGreaterThanOrEqual(2);
-      const sourceIndexOfFirst = baseline.indexOf(visualOrder[0]);
-      const sourceIndexOfLast = baseline.indexOf(
-        visualOrder[visualOrder.length - 1],
-      );
-      expect(
-        sourceIndexOfFirst,
-        '可视首行的源下标为 0，无法与「按可视下标派发」区分',
-      ).not.toBe(0);
-      const expectedOrder = utils.moveRuleToIndex(
-        baseline,
-        sourceIndexOfFirst,
-        sourceIndexOfLast,
-      );
-      const visuallyIndexedOrder = utils.moveRuleToIndex(
-        baseline,
-        0,
-        visualOrder.length - 1,
-      );
-
+      await utils.expectRuleRowsDraggable(page, false);
       await utils.dragRuleRow(page, 0, visualOrder.length - 1);
+      await page.waitForTimeout(500);
       await utils.searchRuleTableByColumn(page, RULE_NAME_COLUMN, '');
-      await utils.expectRuleNamesInOrder(page, expectedOrder);
+      await utils.expectRuleNamesInOrder(page, baseline);
+    });
 
-      if (
-        JSON.stringify(expectedOrder) !== JSON.stringify(visuallyIndexedOrder)
-      ) {
-        // 负向对照：若按可视下标派发，移动的将是另一条规则
-        expect(
-          await utils.getRuleNamesInOrder(page),
-          '筛选态下移动的规则不是可视首行对应的规则',
-        ).not.toEqual(visuallyIndexedOrder);
-      }
+    await test.step('2b. 清除搜索后恢复可拖拽', async () => {
+      await utils.expectRuleRowsDraggable(page, true);
     });
   });
 });

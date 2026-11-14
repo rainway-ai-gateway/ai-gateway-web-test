@@ -48,6 +48,8 @@ const {
   switchToEntityTypeTab,
   switchToEntityOrgTab,
   generateTestEntityTypeName,
+  quotaUnitOptionLabel,
+  formatQuotaDisplayText,
   waitForPageSettled,
   waitForEntityManagementShell,
   gotoEntityTypeManagementPage,
@@ -220,6 +222,41 @@ async function expectEntityTypeNotVisible(page, typeName, timeout) {
   await entityTypeTable(page).expectRowHidden(typeName, timeout);
 }
 
+/**
+ * EM-T-17：按级别筛选 Entity 类型（列表「级别」列 searchType=select，选项 1~5）
+ * pageTable 搜索区是表格行（无 .ivu-form-item 包裹），按占位符「请选择级别」定位
+ */
+async function filterEntityTypeByLevel(page, level) {
+  const searchArea = entityTypeTable(page).searchArea();
+  const selects = searchArea.locator('.ivu-select');
+  await expect(selects.first()).toBeVisible({ timeout: 15000 });
+  let target = selects.first();
+  const count = await selects.count();
+  for (let i = 0; i < count; i += 1) {
+    const text = ((await selects.nth(i).innerText()) || '').replace(/\s+/g, '');
+    if (text.includes('级别')) {
+      target = selects.nth(i);
+      break;
+    }
+  }
+  if (level === '全部' || level === undefined || level === null) {
+    await target.hover();
+    const clear = target.locator('.ivu-select-arrow.ivu-icon-ios-close-circle');
+    if ((await clear.count()) > 0) {
+      await clear.first().click();
+    }
+    await page.waitForTimeout(500);
+    return;
+  }
+  await target.click();
+  await page
+    .locator('.ivu-select-dropdown:visible .ivu-select-item')
+    .filter({ hasText: new RegExp('^' + level + '$') })
+    .first()
+    .click();
+  await page.waitForTimeout(500);
+}
+
 async function expectEntityTypeVisibleInAllPages(
   page,
   typeName,
@@ -250,7 +287,8 @@ async function expectEntityTypeVisibleInAllPages(
 }
 
 async function clickDeleteEntityTypeBtn(page, typeName) {
-  await entityTypeTable(page).rowAction(typeName, '删除').click();
+  // 数据量增长后新类型可能不在第 1 页：clickRowAction 内部逐页查找后再点
+  await entityTypeTable(page).clickRowAction(typeName, '删除');
   await page.waitForTimeout(500);
 }
 
@@ -894,11 +932,8 @@ function getResetCycleText(cycle) {
  * 获取配额单位的显示文本
  */
 function getQuotaUnitText(unit) {
-  const unitMap = {
-    total_token: 'tokens',
-    request_count: 'requests',
-  };
-  return unitMap[unit] || unit;
+  // issue #139：详情/列表统一展示「百万Token / 元」
+  return quotaUnitOptionLabel(unit);
 }
 async function expectEntityDetailMatchesApi(page, apiData, parentName) {
   const drawer = entityDetailDrawer(page);
@@ -926,9 +961,11 @@ async function expectEntityDetailMatchesApi(page, apiData, parentName) {
       );
     }
 
-    // 配额总量（带千位分隔符）
+    // 配额总量（issue #139：百万Token/元 展示，2 位小数）
     if (quota.quota !== undefined) {
-      await expect(drawerText).toContain(formatNumberWithCommas(quota.quota));
+      await expect(drawerText).toContain(
+        formatQuotaDisplayText(quota.quota, quota.unit),
+      );
     }
 
     // 配额单位
@@ -938,16 +975,16 @@ async function expectEntityDetailMatchesApi(page, apiData, parentName) {
 
     // 已使用（含百分比）
     if (quota.used !== undefined && quota.quota !== undefined) {
-      const usedText = formatNumberWithCommas(quota.used);
+      const usedText = formatQuotaDisplayText(quota.used, quota.unit);
       await expect(drawerText).toContain(usedText);
       const percentage = Math.round((quota.used / quota.quota) * 100);
       await expect(drawerText).toContain(`${percentage}%`);
     }
 
-    // 剩余量（带千位分隔符）
+    // 剩余量
     if (quota.remaining !== undefined) {
       await expect(drawerText).toContain(
-        formatNumberWithCommas(quota.remaining),
+        formatQuotaDisplayText(quota.remaining, quota.unit),
       );
     }
 
@@ -1020,15 +1057,14 @@ async function expectApiKeyDetailMatchesApi(page, apiData, entityName) {
   if (apiData.quota_plan) {
     const quota = apiData.quota_plan;
 
-    // 无限配额：检查"无限配额"标签后的值
-    // 格式通常是 "无限配额" + 值（是/否）
-    const unlimitedMatch = drawerText.match(/无限配额[\s\S]{0,20}/);
+    // issue #139：「无限配额」改为「配额限制」，值语义反转（有限=是，无限=否）
+    const unlimitedMatch = drawerText.match(/配额限制[\s\S]{0,20}/);
     if (unlimitedMatch) {
       const unlimitedSection = unlimitedMatch[0];
       if (quota.unlimited) {
-        expect(/是/.test(unlimitedSection), '无限配额应显示"是"').toBeTruthy();
+        expect(/否/.test(unlimitedSection), '无限配额应显示配额限制"否"').toBeTruthy();
       } else {
-        expect(/否/.test(unlimitedSection), '有限配额应显示"否"').toBeTruthy();
+        expect(/是/.test(unlimitedSection), '有限配额应显示配额限制"是"').toBeTruthy();
       }
     }
 
@@ -1041,19 +1077,13 @@ async function expectApiKeyDetailMatchesApi(page, apiData, entityName) {
       );
     }
 
-    // 配额类型：使用正则精确匹配
-    if (quota.unlimited) {
-      // 无限配额应显示"无限"
-      const hasUnlimited = /无限/.test(drawerText);
-      expect(hasUnlimited, '无限配额应显示"无限"').toBeTruthy();
-    } else {
-      const hasLimited = /有限/.test(drawerText);
-      expect(hasLimited, '有限配额应显示"有限"').toBeTruthy();
-    }
+    // issue #139：API-Key 详情不再出现「无限/有限配额」字样，统一由上方「配额限制 是/否」表达
 
-    // 配额总量（带千位分隔符）
+    // 配额总量（issue #139：百万Token/元 展示，2 位小数）
     if (quota.quota !== undefined) {
-      await expect(drawerText).toContain(formatNumberWithCommas(quota.quota));
+      await expect(drawerText).toContain(
+        formatQuotaDisplayText(quota.quota, quota.unit),
+      );
     }
 
     // 配额单位
@@ -1065,15 +1095,17 @@ async function expectApiKeyDetailMatchesApi(page, apiData, entityName) {
     const used = quota.used ?? quota.balance?.used;
     const remaining = quota.remaining ?? quota.balance?.remaining;
     if (used !== undefined && quota.quota !== undefined) {
-      const usedText = formatNumberWithCommas(used);
+      const usedText = formatQuotaDisplayText(used, quota.unit);
       await expect(drawerText).toContain(usedText);
       const percentage = Math.round((used / quota.quota) * 100);
       await expect(drawerText).toContain(`${percentage}%`);
     }
 
-    // 剩余量（带千位分隔符）
+    // 剩余量
     if (remaining !== undefined) {
-      await expect(drawerText).toContain(formatNumberWithCommas(remaining));
+      await expect(drawerText).toContain(
+        formatQuotaDisplayText(remaining, quota.unit),
+      );
     }
 
     // 重置周期
@@ -1159,8 +1191,9 @@ async function createEntityWithTypeViaApi(
 ) {
   await umUtils.handleUrlInvalidAlert(page);
 
-  // 支持对象参数 { name, type, parentName, quotaPlan, rateLimitPolicy, description } 或分开参数
-  let entityName, type, parent, quotaPlan, rateLimitPolicy, description;
+  // 支持对象参数 { name, type, parentName, quotaPlan, rateLimitPolicy, description,
+  // allowModels, blockModels } 或分开参数
+  let entityName, type, parent, quotaPlan, rateLimitPolicy, description, extra;
   if (typeof entityNameOrObj === 'object' && entityNameOrObj !== null) {
     entityName = entityNameOrObj.name;
     type = entityNameOrObj.type;
@@ -1168,6 +1201,13 @@ async function createEntityWithTypeViaApi(
     quotaPlan = entityNameOrObj.quotaPlan;
     rateLimitPolicy = entityNameOrObj.rateLimitPolicy;
     description = entityNameOrObj.description;
+    extra = { ...(entityNameOrObj.extra || {}) };
+    if (entityNameOrObj.allowModels !== undefined) {
+      extra.allow_models = entityNameOrObj.allowModels;
+    }
+    if (entityNameOrObj.blockModels !== undefined) {
+      extra.block_models = entityNameOrObj.blockModels;
+    }
   } else {
     entityName = entityNameOrObj;
     type = typeName;
@@ -1182,6 +1222,7 @@ async function createEntityWithTypeViaApi(
     quotaPlan,
     rateLimitPolicy,
     description,
+    extra,
   );
   if (!entityData) {
     // Session 过期时 API 常直接失败，强制走一遍弹框/重登后再试
@@ -1194,6 +1235,7 @@ async function createEntityWithTypeViaApi(
       quotaPlan,
       rateLimitPolicy,
       description,
+      extra,
     );
   }
   if (!entityData) {
@@ -1517,6 +1559,7 @@ module.exports = {
   openCreateEntityTypeDrawer,
   openEditEntityTypeDrawer,
   fillEntityTypeForm,
+  filterEntityTypeByLevel,
   selectEntityTypeLevel,
   submitEntityTypeForm,
   createEntityTypeViaUI,

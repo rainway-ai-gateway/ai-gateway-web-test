@@ -17,19 +17,19 @@
 /**
  * 批量清理 Entity 管理自动化测试残留数据（type_* / ent_* / 文档固定测试名 / API-Key 测试描述）
  *
- * 用法（在 code/ 目录下执行）：
- *   node ai-gateway-tests/scripts/cleanup-entity-test-data.cjs              # 仅预览（默认）
- *   node ai-gateway-tests/scripts/cleanup-entity-test-data.cjs --execute    # 实际删除
- *   node ai-gateway-tests/scripts/cleanup-entity-test-data.cjs --session-key <key>  # 指定 Session Key
+ * 用法（在本仓库根目录下执行）：
+ *   node scripts/cleanup-entity-test-data.cjs              # 仅预览（默认）
+ *   node scripts/cleanup-entity-test-data.cjs --execute    # 实际删除
+ *   node scripts/cleanup-entity-test-data.cjs --session-key <key>  # 指定 Session Key
  *
- *   node ai-gateway-tests/scripts/cleanup-entity-test-data.cjs --include-doc-fixtures  # 含 test-dep 等固定名
+ *   node scripts/cleanup-entity-test-data.cjs --include-doc-fixtures  # 含 test-dep 等固定名
  */
 
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 
-const CODE_ROOT = path.resolve(__dirname, '../..');
+const CODE_ROOT = path.resolve(__dirname, '..');
 const CONF_PATH = path.join(CODE_ROOT, 'conf.json');
 
 const args = process.argv.slice(2);

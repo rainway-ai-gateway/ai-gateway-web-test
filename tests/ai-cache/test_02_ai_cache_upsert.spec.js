@@ -711,3 +711,125 @@ test.describe('AI 缓存规则 - 新增与编辑', () => {
     });
   });
 });
+// ==================== AC-C-18 / AC-CC-01/02（审计补充：重置行为 + 幂等 + 并发） ====================
+
+/**
+ * AC-C-18 规则表单「重置」按钮：改动后恢复初始值、不发变更请求（覆盖缺口清单 §十一）
+ * 现状：既有用例只断言按钮存在（AC-C-01 底部），未验证点按后的行为。
+ */
+test.describe('AI 缓存规则 - AC-C-18 规则表单重置按钮行为', () => {
+  test('填写后点「重置」：字段恢复默认、列表不变、不发 PUT', async ({ page }) => {
+    const tracker = utils.trackAiCacheRuleRequests(page);
+    try {
+      await utils.ensureAppSession(page);
+      await utils.gotoAiCachePageAndWaitForRules(page);
+      await utils.enterEditMode(page);
+      await utils.openAddRuleDrawer(page);
+      await utils.fillRuleName(page, utils.generateTestRuleName('ac_c18_'));
+      await utils.fillRuleCond(page, 'default_t()');
+      await utils.clickRuleFormReset(page);
+      await utils.expectRuleFormDefaultValues(page);
+      await utils.expectNoRuleMutationRequest(tracker);
+    } finally {
+      tracker.stop();
+    }
+  });
+});
+
+/**
+ * AC-CC-01 连点「提交并生效」幂等：集合级 PUT ≤2 且同名规则仅一条（#34 同构）
+ */
+test.describe('AI 缓存规则 - AC-CC-01 提交并生效-重复点击幂等', () => {
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('连点两次提交：PUT ≤2，集合内同名规则仅一条', async ({ page }) => {
+    const name = utils.generateTestRuleName('ac_cc01_');
+    await utils.ensureAppSession(page);
+    await cleanup.saveOriginalState(page);
+    await utils.reloadAiCachePage(page);
+    await utils.enterEditMode(page);
+    await utils.openAddRuleDrawer(page);
+    await utils.fillRuleName(page, name);
+    // 唯一 cond：避免整集合 cond 查重（环境可能有其他 default_t() 规则）
+    await utils.fillRuleCond(
+      page,
+      `req_header_value_in("x-cc01", "${name}", false)`,
+    );
+    await utils.submitRuleFormExpectMessage(page, '添加成功！');
+    await utils.expectRuleFormDrawerHidden(page);
+
+    let putCount = 0;
+    page.on('response', (r) => {
+      if (
+        r.url().includes('/ai-cache-rules') &&
+        r.request().method() === 'PUT'
+      ) {
+        putCount += 1;
+      }
+    });
+    const btn = page.getByRole('button', { name: '提交并生效' });
+    await btn.click();
+    await btn.click().catch(() => {});
+    await page.waitForTimeout(2500);
+
+    expect(putCount, 'PUT /ai-cache-rules 次数应 ≤2').toBeLessThanOrEqual(2);
+    const serverRules = await utils.getAiCacheRulesViaApi(page);
+    expect(
+      (serverRules || []).filter((r) => r.name === name).length,
+      '集合内同名规则应仅一条',
+    ).toBe(1);
+  });
+});
+
+/**
+ * AC-CC-02 编辑期间他人提交：UI 整体覆盖（集合级 last-write-wins，已知偏差）
+ * 与 route RT-CC-02 同语义：规则集合为整体替换，无版本校验。
+ */
+test.describe('AI 缓存规则 - AC-CC-02 编辑期间他人提交', () => {
+  test.afterEach(async ({ page }) => {
+    await cleanup.cleanup(page);
+  });
+
+  test('UI 提交覆盖他人新增的规则（集合级 last-write-wins）', async ({ page }) => {
+    const ownRule = utils.generateTestRuleName('ac_cc02_own_');
+    const othersRule = utils.generateTestRuleName('ac_cc02_others_');
+
+    await utils.ensureAppSession(page);
+    await cleanup.saveOriginalState(page);
+    await utils.reloadAiCachePage(page);
+    await utils.enterEditMode(page);
+
+    // 1. UI 本地先新增自己的规则（仅入本地草稿）
+    await utils.openAddRuleDrawer(page);
+    await utils.fillRuleName(page, ownRule);
+    await utils.fillRuleCond(
+      page,
+      `req_header_value_in("x-cc02", "${ownRule}", false)`,
+    );
+    await utils.submitRuleFormExpectMessage(page, '添加成功！');
+    await utils.expectRuleFormDrawerHidden(page);
+
+    // 2. 此时他人经 API 追加一条规则（UI 本地草稿不含他人规则）
+    const before = await utils.getAiCacheRulesViaApi(page);
+    const othersOk = await utils.setAiCacheRulesViaApi(page, [
+      ...(before || []),
+      utils.buildTestRule({ name: othersRule }),
+    ]);
+    expect(othersOk, '他人提交应成功').toBeTruthy();
+
+    // 3. UI 提交本地集合（整体替换语义）
+    await utils.submitRulesAndWait(page);
+
+    const after = await utils.getAiCacheRulesViaApi(page);
+    expect(
+      (after || []).some((r) => r.name === ownRule),
+      'UI 提交的规则应存在',
+    ).toBe(true);
+    expect(
+      (after || []).some((r) => r.name === othersRule),
+      '他人规则应被整体覆盖（已知偏差，登记清单 §十一）',
+    ).toBe(false);
+  });
+});

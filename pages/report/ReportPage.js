@@ -73,6 +73,17 @@ const DOC = {
     '错误',
     '操作',
   ],
+  // 2026-11-03 issue #1479：缺价列（Logs.vue cols 位于「缓存」与「镜像」之间）
+  priceMissColumn: '缺价',
+  priceMissDetailLabels: ['是否缺价', '缺价形态'],
+  priceWarnTexts: {
+    fallback: '回退 chat 价计费',
+    no_entry: '按 0 计费',
+    no_baseline: '无 chat 基线按 0',
+    reject: '转发前拒绝',
+    subitem_missing: '回退条目缺子项价格',
+    no_model_table: '价格表缺失',
+  },
   filterLabels: {
     model: '目标模型',
     apikey: 'API Key',
@@ -866,6 +877,8 @@ const DETAIL_FIELD_LABELS = [
   'Header Host',
   '原始URI',
   '缓存状态',
+  '是否缺价',
+  '缺价形态',
   '镜像命中',
   '意图问题',
   '意图答案',
@@ -1499,7 +1512,8 @@ async function getLogsPageSizeText(page) {
 // ====== 明细新列与过滤（RP-L-01 ~ RP-L-10 / RP-L-15 ~ RP-L-17 / RP-L-24） ======
 // 设计依据：docs/report/02-功能测试用例/04-明细新列与过滤.md
 
-// 明细表 15 列标题（按 Logs.vue columns 固定顺序，i18n report.* / com.operation）
+// 明细表 16 列标题（按 Logs.vue columns 固定顺序，i18n report.* / com.operation）
+// 2026-11-03 issue #1479：「缺价」列插入「缓存」与「镜像」之间（Logs.vue cols）
 const LOG_TABLE_COLUMNS_15 = [
   '时间',
   'API Key',
@@ -1512,6 +1526,7 @@ const LOG_TABLE_COLUMNS_15 = [
   'TTFT',
   '费用',
   '缓存',
+  '缺价',
   '镜像',
   '意图答案',
   '错误',

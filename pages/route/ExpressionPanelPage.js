@@ -265,6 +265,9 @@ const PRIMITIVE_TEMPLATES = {
   'port.in': 'req_port_in("")',
   'cip.range': 'req_cip_range("", "")',
   'intent.in': 'req_ai_intent_in("", "")',
+  // RT-E-02：请求体大小条件默认参数（源码 ExpressionConfig.js req_body_larger_than/less_than 的 expression）
+  'body.req_body_larger_than': 'req_body_larger_than(8192)',
+  'body.req_body_less_than': 'req_body_less_than(2048)',
 };
 
 /** tooltip 示例（源码 `example`，RT-E-10 抽查用；片段级断言避免 `<p>`/`<br/>` 结构依赖） */

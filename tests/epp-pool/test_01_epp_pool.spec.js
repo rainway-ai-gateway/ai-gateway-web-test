@@ -926,114 +926,62 @@ test.describe('EPP实例池 - EP-POOL-01~06', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // EP-POOL-05  字段校验
-  //  空组名 / 重复组名 / 重复实例 ID / 重复 (host,port) / 非法 host / 非法端口
+  // EP-POOL-05  字段校验（2026-11-02 改造：原「只打日志不断言」→ 逐项硬断言）
+  //  空组名 / 重复组名 / 非法 host；实例级校验见 test_05（EP-POOL-07）
   // ═══════════════════════════════════════════════════════════════
   test('EP-POOL-05 字段校验拦截非法输入', async ({ page }) => {
-    /** 确保处于编辑模式（保存按钮可见），否则重新进入 */
-    async function ensureEditMode() {
-      const saveBtn = page.getByRole('button', { name: '保存' });
-      if (!(await saveBtn.isVisible().catch(() => false))) {
-        await eppPage.clickEditPool(page);
-        await expect(page.getByRole('button', { name: '保存' })).toBeVisible({ timeout: 5000 });
-      }
-    }
-
-    /** 执行一次校验保存，并处理结果 */
-    async function attemptValidationSave(stepLabel) {
-      await eppPage.clickSavePool(page);
-      await page.waitForTimeout(500);
-
-      const stillEditing = await page.getByRole('button', { name: '保存' }).isVisible().catch(() => false);
-      const errorMsg = page.locator('.ivu-message-error, .el-message--error, .ivu-form-item-error-message, .ivu-tooltip-popper').first();
-      const hasError = await errorMsg.isVisible().catch(() => false);
-      common.log(`[POOL-05] ${stepLabel}: ${stillEditing ? '前端拦截' : (hasError ? 'API返回错误' : '保存通过（需确认）')}`);
-      return { stillEditing, hasError };
-    }
-
-    await test.step('1. 进入编辑模式', async () => {
+    /** 重置实例池并进入编辑模式、展开全部组（组内实例行在展开区） */
+    async function resetAndEdit() {
+      await api.patchEppPool(page, { groups: TEST_POOL.groups });
       await eppPage.gotoEppPoolPage(page);
+      await page.reload();
+      await page.waitForTimeout(1500);
+      await eppPage.ensureOnEppPoolPage(page, {
+        stabilityRounds: 1,
+        stabilityIntervalMs: 1000,
+      });
       await eppPage.clickEditPool(page);
+      await page.waitForTimeout(500);
+    }
+
+    /** 保存并断言「提示文案 + 仍停留编辑模式」 */
+    async function saveExpectBlocked(message) {
+      const toast = page.getByText(message).first().waitFor({
+        state: 'visible',
+        timeout: 15000,
+      });
+      await eppPage.clickSavePool(page);
+      await toast;
+      await expect(page.getByRole('button', { name: '保存' })).toBeVisible();
+    }
+
+    await test.step('1. 空组名：拦截并提示「组名不能为空」', async () => {
+      await resetAndEdit();
+      await fillGroupName(page, 'g-b', '');
+      await saveExpectBlocked('组名不能为空');
+      await eppPage.clickCancelPool(page);
     });
 
-    await test.step('2. 空组名校验', async () => {
-      const g2Input = groupNameInput(page, 'g-c');
-      const g2Count = await g2Input.count();
-      if (g2Count > 0) {
-        await g2Input.fill('');
-        await page.waitForTimeout(200);
-      } else {
-        common.log('[POOL-05] 空组名: g-c input not found, 尝试 fillGroupName 后清空');
-        await fillGroupName(page, 'g-c', '');
-      }
-      const { stillEditing } = await attemptValidationSave('空组名');
-
-      if (stillEditing) {
-        await fillGroupName(page, 'g-c', 'g-c');
-      } else {
-        // API 处理后回到查看模式，需重新进入编辑再恢复
-        await eppPage.clickEditPool(page);
-        await fillGroupName(page, 'g-c', 'g-c');
-      }
-      await page.waitForTimeout(300);
+    await test.step('2. 重复组名：拦截并提示「组名「g-a」重复」', async () => {
+      await resetAndEdit();
+      await fillGroupName(page, 'g-b', 'g-a');
+      await saveExpectBlocked('组名「g-a」重复');
+      await eppPage.clickCancelPool(page);
     });
 
-    await test.step('3. 重复组名校验', async () => {
-      await ensureEditMode();
-      const g3Input = groupNameInput(page, 'g-c');
-      const g3Count = await g3Input.count();
-      if (g3Count > 0) {
-        await g3Input.fill('g-a');
-        await page.waitForTimeout(200);
-      } else {
-        common.log('[POOL-05] 重复组名: g-c input not found');
-      }
-      const { stillEditing } = await attemptValidationSave('重复组名');
-
-      if (stillEditing) {
-        await fillGroupName(page, 'g-c', 'g-c');
-      } else {
-        await eppPage.clickEditPool(page);
-        await fillGroupName(page, 'g-c', 'g-c');
-      }
-      await page.waitForTimeout(300);
-    });
-
-    await test.step('4. 非法 host 格式校验', async () => {
-      await ensureEditMode();
-      await eppPage.ensureOnEppPoolPage(page);
-      // 展开 g-c 组，修改第一个实例的 host 为非法值
-      // 编辑模式下 tableKey 重建可能导致行选择器暂时失效，增加重试
-      for (let i = 0; i < 3; i++) {
-        try {
-          await toggleGroupExpand(page, 'g-c');
-          break;
-        } catch (e) {
-          common.log(`[POOL-05] toggleGroupExpand 第${i + 1}次失败: ${e.message}`);
-          await page.waitForTimeout(1500);
-        }
-      }
-      await page.waitForTimeout(300);
-      const hostInput = page.getByPlaceholder('主机').first();
-      if (await hostInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await hostInput.fill('[::1]');
-        common.log('[POOL-05] host 已改为非法值 [::1]');
-      }
+    await test.step('3. 非法主机：拦截并提示「主机格式不合法」', async () => {
+      await resetAndEdit();
+      const row = page.locator('.epp-pool-table tbody tr.ivu-table-row').first();
+      await row.locator('td').first().locator('.ivu-table-cell-expand').click();
+      await page.waitForTimeout(500);
+      const cell = page.locator('.epp-pool-table td.ivu-table-expanded-cell').first();
+      await cell.getByPlaceholder('主机').first().fill('bad host!!');
       await page.waitForTimeout(200);
-
-      await attemptValidationSave('非法host');
-
-      // 不关心具体结果，最后一步统一还原
+      await saveExpectBlocked('主机格式不合法');
+      await eppPage.clickCancelPool(page);
     });
 
-    await test.step('5. 还原实例池到初始状态', async () => {
-      // 如果还处于编辑模式，取消
-      const cancelBtn = page.getByRole('button', { name: '取消' });
-      if (await cancelBtn.isVisible().catch(() => false)) {
-        await cancelBtn.click();
-        await page.waitForTimeout(500);
-      }
-      // 通过 API 强制还原
+    await test.step('4. 还原实例池到初始状态', async () => {
       await api.patchEppPool(page, { groups: TEST_POOL.groups });
     });
   });

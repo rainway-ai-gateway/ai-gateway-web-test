@@ -794,13 +794,34 @@ async function changePageSize(page, sizeText) {
   await pageTable(page).changePageSize(sizeText);
 }
 
-async function openUserDropdown(page) {
-  await page.getByText(confInfo['username'], { exact: true }).first().click();
+/**
+ * 打开右上角用户下拉。
+ * 默认按 localStorage.user.name 定位（当前登录身份），回退 conf 的 admin ——
+ * 原实现固定用 confInfo.username，以非 admin 身份登录时必然超时（2026-11-01 审计修正）。
+ */
+async function openUserDropdown(page, username) {
+  let name = username;
+  if (!name) {
+    name = await page
+      .evaluate(() => {
+        try {
+          const raw = localStorage.getItem('user');
+          return raw ? JSON.parse(raw).name : null;
+        } catch (e) {
+          return null;
+        }
+      })
+      .catch(() => null);
+  }
+  await page
+    .getByText(name || confInfo['username'], { exact: true })
+    .first()
+    .click();
   await page.waitForTimeout(500);
 }
 
-async function clickLogoutMenu(page) {
-  await openUserDropdown(page);
+async function clickLogoutMenu(page, username) {
+  await openUserDropdown(page, username);
   await page.getByText('注销').click();
   await page.waitForTimeout(500);
 }

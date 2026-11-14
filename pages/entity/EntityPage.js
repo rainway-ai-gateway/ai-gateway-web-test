@@ -41,6 +41,7 @@ module.exports = {
   // Re-export from entity-api-utils (bypass circular dependency)
   createEntityOrgTestCleanup: entityApiUtilsDirect.createEntityOrgTestCleanup,
   createApiKeyTestCleanup: entityApiUtilsDirect.createApiKeyTestCleanup,
+  fetchAllApiKeysViaApi: entityApiUtilsDirect.fetchAllApiKeysViaApi,
   ensureEntityTestData: entityApiUtilsDirect.ensureEntityTestData,
   forceDeleteEntityTypeViaApi: entityApiUtilsDirect.forceDeleteEntityTypeViaApi,
 

@@ -426,6 +426,23 @@ async function deleteCluster(page, clusterName) {
   }
 }
 
+// PATCH /clusters/{name}（BC-C-01/02 并发场景：模拟「他人」修改集群配置）
+async function updateClusterWithResponse(page, clusterName, payload) {
+  const userData = await getUserData(page);
+  const response = await page.request.patch(
+    getOpenApiBaseUrl() + '/clusters/' + encodeURIComponent(clusterName),
+    { data: payload, headers: authHeaders(userData.sessionKey) },
+  );
+  let body = {};
+  try {
+    body = await response.json();
+  } catch (_error) {
+    body = {};
+  }
+  common.log('PATCH cluster 响应: ' + response.status() + ' ' + JSON.stringify(body).slice(0, 200));
+  return { status: response.status(), body };
+}
+
 async function createCluster(page, clusterData) {
   try {
     const userData = await getUserData(page);
@@ -717,6 +734,55 @@ async function restoreRouteTestData(page) {
   return ok;
 }
 
+/**
+ * 创建 llm_config.provider 引用指定服务商的标准集群（跨模块长链路场景公共造数，
+ * 2026-11-02 由 test_10/test_08/test_16 三处复制沉淀；后端校验 provider 存在且
+ * models 属于该服务商）。返回是否创建成功。
+ *
+ * @param {object} options { name, provider, models, description }
+ */
+async function createProviderReferencingCluster(
+  page,
+  { name, provider, models, description = '自动化测试-引用集群' },
+) {
+  return createCluster(page, {
+    name,
+    description,
+    basic: {
+      protocol: 'https',
+      connection: { max_idle_conn_per_rs: 2, cancel_on_client_close: false },
+      retries: { max_retry_in_cluster: 2 },
+      buffers: { req_write_buffer_size: 512 },
+      timeouts: {
+        timeout_conn_serv: 2000,
+        timeout_response_header: 60000,
+        timeout_readbody_client: 30000,
+        timeout_read_client_again: 60000,
+        timeout_write_client: 60000,
+      },
+    },
+    llm_config: {
+      provider,
+      model_endpoint: { schema: 'https', uri: '/v1/models', headers: {} },
+      models,
+      model_mappings: [],
+      keys: [],
+      key_policy: {
+        strategy: 'weighted_random',
+        max_retries: 0,
+        retry_backoff_initial: 500,
+        retry_backoff_max: 5000,
+      },
+      key_affinity: {
+        enabled: false,
+        ttl: 600,
+        redis_prefix: 'bfe:ai:key_affinity',
+        penalty_enable: true,
+      },
+    },
+  });
+}
+
 module.exports = {
   DEFAULT_PRODUCT_NAME,
   getOpenApiBaseUrl,
@@ -744,6 +810,8 @@ module.exports = {
   deleteCluster,
   createCluster,
   createClusterWithResponse,
+  createProviderReferencingCluster,
+  updateClusterWithResponse,
   createClusterWithProvider,
   updateGlobalRouteRules,
   getGlobalRouteRules,

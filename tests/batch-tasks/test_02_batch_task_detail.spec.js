@@ -150,10 +150,12 @@ test.describe('批量任务 - BT-D-02 详情字段完整性与无帮助图标', 
 
     const detail = await pickTaskWithDetail(
       page,
-      (d) => d.product_name && Array.isArray(d.batch_files) && d.batch_files.length > 0,
+      // issue #276（2026-10-23）：product_name 已从 batches 对外契约剔除，
+      // 详情返回值不再有该字段，样本条件只要求带批量文件
+      (d) => Array.isArray(d.batch_files) && d.batch_files.length > 0,
     );
     if (!detail) {
-      test.skip(true, '环境中无字段齐全的批量任务，跳过');
+      test.skip(true, '环境中无带批量文件的任务，跳过');
     }
 
     await bp.openDetailByBatchId(page, detail.batch_id);
@@ -380,13 +382,12 @@ test.describe('批量任务 - BT-D-08 详情接口数据与页面展示一致性
 
     const detail = await pickTaskWithDetail(
       page,
-      (d) =>
-        d.product_name &&
-        Array.isArray(d.batch_files) &&
-        d.batch_files.length > 0,
+      // issue #276（2026-10-23）：product_name 已从 batches 对外契约剔除，
+      // 详情返回值不再有该字段，样本条件只要求带批量文件
+      (d) => Array.isArray(d.batch_files) && d.batch_files.length > 0,
     );
     if (!detail) {
-      test.skip(true, '环境中无字段齐全的批量任务，跳过');
+      test.skip(true, '环境中无带批量文件的任务，跳过');
     }
 
     test.info().annotations.push({
@@ -411,9 +412,8 @@ test.describe('批量任务 - BT-D-08 详情接口数据与页面展示一致性
       expect(await bp.detailFieldText(page, bp.DOC.entityId)).toBe(
         uiText(detail.entity_id),
       );
-      expect(await bp.detailFieldText(page, bp.DOC.productName)).toBe(
-        uiText(detail.product_name),
-      );
+      // issue #276：接口不再返回 product_name，UI 该字段按空值渲染 '-'
+      expect(await bp.detailFieldText(page, bp.DOC.productName)).toBe('-');
       expect(await bp.detailFieldText(page, bp.DOC.endpoint)).toBe(
         uiText(detail.endpoint),
       );

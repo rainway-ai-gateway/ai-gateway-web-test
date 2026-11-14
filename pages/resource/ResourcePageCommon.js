@@ -84,6 +84,14 @@ const DOC_BUSINESS_CLUSTER = {
   keysWeightSumMsg: '所有 Key 的权重之和必须等于 100',
   keyNotInProviderMsg: (name) => `Key ${name} 不在所属服务商的 Keys 中`,
   keyPolicyStrategyInvalidMsg: '选择策略仅支持 weighted_random',
+  // 2026-10-30 复查页逐项一致性（覆盖缺口清单 #1）：Key 路由策略/服务鉴权 Keys 复查区块文案
+  keyPolicyStrategyLabel: '选择策略',
+  keyPolicyMaxRetriesLabel: '最大重试次数',
+  keyPolicyBackoffInitialLabel: '初始退避时间 (ms)',
+  keyPolicyBackoffMaxLabel: '最大退避时间 (ms)',
+  keyPolicyStrategyWeightedRandom: '加权随机',
+  providerKeyHeader: 'Key',
+  keyWeightHeader: '权重',
   keyPolicyMaxRetriesInvalidMsg: '最大重试次数必须大于或等于 0',
   keyPolicyBackoffInvalidMsg: '退避时间必须大于或等于 0',
   keyPolicyBackoffMaxInvalidMsg: '最大退避时间必须大于或等于初始退避时间',
@@ -104,12 +112,35 @@ const DOC_BUSINESS_CLUSTER = {
   keyAffinityTtlLabel: '空闲超时(秒)',
   keyAffinityPenaltyLabel: 'Key 惩罚',
   keyAffinityRedisPrefixLabel: 'Redis Key 前缀',
+  // 2026-11-04 issue #1448：Key 惩罚时长（labels/校验文案与 i18n zh.js 逐字一致，含 en dash –）
+  keyAffinityPenaltyTtl429Label: '429 惩罚时长（秒）',
+  keyAffinityPenaltyTtlAuthLabel: '401/402/403 惩罚时长（秒）',
+  keyAffinityPenaltyTtl429InvalidMsg: '429 惩罚时长须为 10–600 的整数（秒）',
+  keyAffinityPenaltyTtlAuthInvalidMsg: '401/402/403 惩罚时长须为 60–1800 的整数（秒）',
   keyAffinityTtlInvalidMsg: '须为大于 0 的整数',
   keyAffinityRedisPrefixRequiredMsg: 'Redis Key 前缀不能为空',
   defaultRedisPrefix: 'bfe:ai:key_affinity',
   // 2026-10-10 上游错误归一（新增 Card，渲染在「Key 亲和性」与「均衡模式配置」之间，
   // WRR/EPP 两种均衡模式下均展示；文案对齐 i18n gatewayConfig.normalizeUpstreamError）
   normalizeUpstreamErrorCard: '上游错误归一',
+  // 2026-10-30 RM-BC-110~114 自动化（test_12）补充标签与文案
+  normalizeEnabledLabel: '是否启用',
+  normalizeStreamEnabledLabel: '流式归一(SSE)',
+  normalizeRedactSecretsLabel: '凭证脱敏',
+  normalizeUnrecognizedActionLabel: '未识别错误体处理',
+  normalizePassthroughLabel: '原样透传',
+  normalizeRewriteGenericLabel: '重写为通用错误（rewrite_generic）',
+  normalizeMaxBodyBytesLabel: '错误响应体读取上限(字节)',
+  normalizeMaxBodyBytesInvalidMsg: '错误响应体读取上限须为 0-4194304 的整数',
+  normalizeUnrecognizedActionInvalidMsg:
+    '未识别错误体处理仅支持 passthrough / rewrite_generic',
+  normalizeDefaults: {
+    enabled: false,
+    stream_enabled: false,
+    unrecognized_action: 'passthrough',
+    max_body_bytes: 65536,
+    redact_secrets: true,
+  },
   // 2026-09-09 均衡模式配置（RM-BC-93~103）
   // 2026-10-09 EPP 调度参数破坏性重构对齐 v0.6：
   // scheduling_profile/cache_affinity 重命名为 load_profile/affinity（枚举变更），
@@ -125,12 +156,28 @@ const DOC_BUSINESS_CLUSTER = {
   prefixCacheAffinityLabel: '前缀缓存亲和性',
   sessionAffinityEnabledLabel: '会话亲和性',
   sessionAffinityHeaderLabel: '会话亲和性 Header',
+  sessionAffinityHeaderRequiredWhenOff:
+    // 53014ac（11/4）文案调整：亲和强度以「关闭 / 低/中/高」表述
+    '亲和强度为「关闭」时会话亲和性不生效；如需填写 Header，请先把亲和强度调回低/中/高，或关闭会话亲和性',
   kvCacheUtilizationMaxLabel: 'KV 缓存利用率上限',
   waitingQueueMaxLabel: '排队长度过滤阈值',
-  runningRequestsMaxLabel: '在飞请求数过滤阈值',
+  runningRequestsMaxLabel: '执行中请求数过滤阈值',
+  // 2026-11-03 issue #1479：缺价处置动作（llm_config.price_miss_action 三态，默认 fallback_chat）
+  priceMissActionLabel: '缺价处置动作',
+  priceMissActionOptions: {
+    fallback_chat: 'fallback_chat（回退 chat 价计费，默认）',
+    bill_zero: 'bill_zero（按 0 计费）',
+    reject: 'reject（转发前拒绝）',
+  },
+  priceMissActionShort: {
+    fallback_chat: '回退 chat 价计费',
+    bill_zero: '按 0 计费',
+    reject: '转发前拒绝',
+  },
+  defaultPriceMissAction: 'fallback_chat',
   fallbackOnEmptyLabel: '无端点时回退派发',
   metricsStalenessThresholdMsLabel: '指标失效剔除阈值（ms）',
-  flowControlCard: '流控',
+  flowControlCard: '流控配置',
   maxRequestsLabel: '最大请求数',
   queueTtlLabel: '队列 TTL（秒）',
   noEndpointQueueTtlLabel: '无端点队列 TTL（秒）',
@@ -146,10 +193,11 @@ const DOC_BUSINESS_CLUSTER = {
   defaultFallbackOnEmpty: false,
   defaultMetricsStalenessThresholdMs: 200,
   waitingQueueMaxInvalidMsg: '排队长度过滤阈值须为 >= 0 的数',
-  runningRequestsMaxInvalidMsg: '在飞请求数过滤阈值须为 >= 0 的数',
+  runningRequestsMaxInvalidMsg: '执行中请求数过滤阈值须为 >= 0 的数',
   metricsStalenessThresholdMsInvalidMsg: '指标失效剔除阈值须为 > 0 的整数（ms）',
   enableEvictionDisabledHint: '当前不支持开启，保持关闭',
-  defaultFlowControl: { max_requests: -1, queue_ttl: 60, no_endpoint_queue_ttl: 60, enable_eviction: false },
+  // 2026-11-11：默认排队预算 60→9（与调用超时默认 11s 搭配，满足 call > max(TTL)）
+  defaultFlowControl: { max_requests: -1, queue_ttl: 9, no_endpoint_queue_ttl: 9, enable_eviction: false },
   // 2026-10-13 EPP 运行时参数（RM-BC-115~122）
   // 分组子字段：关闭健康检查（switch）、健康检查间隔/冷却时长/连接超时/调用超时（duration
   // 复合控件：数字框 + 单位下拉 ms/s/m）、失败次数阈值/成功次数阈值（InputNumber，min=1）；
@@ -175,7 +223,7 @@ const DOC_BUSINESS_CLUSTER = {
       cooldown: '45s',
       success_threshold: 2,
     },
-    timeout: { connect: '500ms', call: '3s' },
+    timeout: { connect: '500ms', call: '11s' },
   },
   // duration 字段默认单位：间隔/冷却/调用超时 s，连接超时 ms
   defaultEppRuntimeUnits: {
@@ -188,6 +236,10 @@ const DOC_BUSINESS_CLUSTER = {
   eppCooldownInvalidMsg: '冷却时长须为合法的 Go duration 且 > 0（如 45s）',
   eppConnectTimeoutInvalidMsg: '连接超时须为合法的 Go duration 且 > 0（如 500ms）',
   eppCallTimeoutInvalidMsg: '调用超时须为合法的 Go duration 且 > 0（如 3s）',
+  // 2026-11-02 跨字段校验（RM-BC-124）：仅 balance_mode=EPP 时生效；
+  // {max} 为队列 TTL（秒）与无端点队列 TTL（秒）的最大值；两者均为 0（禁用驱逐）时不约束
+  eppCallTimeoutVsQueueTtlMsgTemplate:
+    '调用超时需大于队列 TTL（秒）与无端点队列 TTL（秒）的最大值（{max} 秒）',
   eppFailThresholdInvalidMsg: '失败次数阈值须为 >= 1 的整数',
   eppSuccessThresholdInvalidMsg: '成功次数阈值须为 >= 1 的整数',
 };

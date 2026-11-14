@@ -24,7 +24,7 @@
  * 用法：
  *   node scripts/aggregate-report.js                  # 全量回归后生成 regression-reports/TEST-REPORT-<日期>.md
  *   node scripts/aggregate-report.js --json <path>    # 指定 test-results.json
- *   node scripts/aggregate-report.js --out <path>     # 另存到指定文件（不写归档索引）
+ *   node scripts/aggregate-report.js --out <path>     # 另存到指定文件（不写入归档）
  *   node scripts/aggregate-report.js --out <path> --force  # 非全量也另存（默认只在覆盖全部 spec 时写入）
  *
  * 设计要点：
@@ -32,8 +32,8 @@
  *   覆盖度差值并提示加上 `--out` 另存，避免「一次局部回归把全量报告的结论冲掉」。
  * - **按日期归档、不覆盖**：默认文件名 `TEST-REPORT-YYYY-MM-DD.md`；同一天第二次全量回归
  *   追加 `-HHmmss`。同一份 `test-results.json` 反复生成（运行时间相同）时覆盖原文件，不产生重复归档。
- * - **索引自动更新**：每次写入归档后重建 `regression-reports/README.md`，最新报告排在最前。
- * - **历史表累积**：扫描归档目录内既有报告的「历史全量回归」表并追加本轮，不丢历史。
+ * - **每份只记自己**：报告只记录本轮全量结果，不汇总历史全量记录、不生成跨报告索引
+ *   （regression-reports/ 下除报告文件外不产生其他文件）。
  * - 模块维度由 spec 路径 `tests/<目录>/` 推导（复用 `utils/generate_report.js` 的 `inferModule`），
  *   不再出现「全部归到『其他』」的问题。
  */
@@ -43,12 +43,7 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const DEFAULT_JSON = path.join(ROOT, 'test-results.json');
 const ARCHIVE_DIR = path.join(ROOT, 'regression-reports');
-const INDEX_FILE = path.join(ARCHIVE_DIR, 'README.md');
-/** 迁移前的单文件报告位置：仅作为历史行兼容读取，不再写入 */
-const LEGACY_OUT = path.join(ROOT, 'TEST-REPORT.md');
 const WORKSPACE_ROOT = path.join(ROOT, '..');
-/** 被 playwright.config.js 的 testIgnore 排除的模块（回归外，单列说明） */
-const IGNORED_MODULE_DIR = 'cert';
 
 const { inferModule } = require('../utils/generate_report');
 
@@ -91,18 +86,6 @@ function listSpecFiles(dir = path.join(ROOT, 'tests'), acc = []) {
     }
   }
   return acc.sort();
-}
-
-/** 统计某目录下的 spec 文件数与非注释行里的 test( 数（用于「回归外」模块的静态口径） */
-function countSpecsAndCases(moduleDir) {
-  const dir = path.join(ROOT, 'tests', moduleDir);
-  const files = listSpecFiles(dir);
-  let cases = 0;
-  for (const rel of files) {
-    const source = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
-    cases += (source.match(/^\s*test\s*\(/gm) || []).length;
-  }
-  return { specs: files.length, cases };
 }
 
 // ---------------------------------------------------------------------------
@@ -273,16 +256,6 @@ function fmtDuration(ms) {
 // 归档路径与索引
 // ---------------------------------------------------------------------------
 
-/** 归档目录内的报告文件（按文件名升序，即日期升序） */
-function listArchiveReports() {
-  if (!fs.existsSync(ARCHIVE_DIR)) return [];
-  return fs
-    .readdirSync(ARCHIVE_DIR)
-    .filter((f) => /^TEST-REPORT-.*\.md$/.test(f))
-    .sort()
-    .map((f) => path.join(ARCHIVE_DIR, f));
-}
-
 /** 读取报告头部的「本轮运行」时间戳，用于判断是否为同一轮的重复生成 */
 function readRunStamp(file) {
   if (!fs.existsSync(file)) return null;
@@ -318,91 +291,6 @@ function pickArchivePath(startTime) {
     seq += 1;
   }
   return candidate;
-}
-
-/** 从一份归档报告中提取索引所需字段 */
-function parseReportSummary(file) {
-  const content = fs.readFileSync(file, 'utf-8');
-  const num = (label) => {
-    const m = content.match(new RegExp(`\\| ${label} \\| (\\d+) \\|`));
-    return m ? Number(m[1]) : null;
-  };
-  const verdictRaw = (content.match(/\| \*\*判定\*\* \| (.+?) \|/) || [])[1] || '';
-  let verdict = '—';
-  if (/❌/.test(verdictRaw)) verdict = '❌ 未达 100%';
-  else if (/⚠️/.test(verdictRaw)) verdict = '⚠️ 有未签核跳过';
-  else if (/✅/.test(verdictRaw)) verdict = '✅ 100% 跑通';
-  return {
-    file: path.basename(file),
-    run: readRunStamp(file) || '—',
-    total: num('用例总数'),
-    passed: num('通过'),
-    failed: num('失败'),
-    skipped: num('跳过'),
-    verdict,
-  };
-}
-
-/** 重建 regression-reports/README.md（最新归档在前） */
-function renderIndex() {
-  const reports = listArchiveReports();
-  if (!reports.length) return null;
-
-  const rows = reports
-    .map(parseReportSummary)
-    .sort((a, b) => b.run.localeCompare(a.run));
-
-  let md = '# 全量回归报告归档\n\n';
-  md +=
-    '本目录归档每一轮**全量回归**的报告，受版本控制、可长期引用；每轮生成一份，不覆盖历史。\n\n';
-  md +=
-    '- **命名**：`TEST-REPORT-YYYY-MM-DD.md`；同一天第二次全量回归追加 `-HHmmss`（如 `TEST-REPORT-2026-10-17-233755.md`）。\n';
-  md +=
-    '- **生成**：跑完全量后执行 `npm run report:tracked`（脚本 `scripts/aggregate-report.js`）；定向批次不会写入本目录。\n';
-  md +=
-    '- **最新**：下表第一行即最近一次全量回归；历史归档只读不改。\n\n';
-  md +=
-    '| 报告 | 运行时间 | 用例数 | 通过 | 失败 | 跳过 | 判定 |\n|---|---|---|---|---|---|---|\n';
-  const cell = (v) => (v === null || v === undefined ? '—' : String(v));
-  for (const r of rows) {
-    md += `| [${r.file}](./${encodeURI(r.file)}) | ${r.run} | ${cell(r.total)} | ${cell(r.passed)} | ${cell(r.failed)} | ${cell(r.skipped)} | ${r.verdict} |\n`;
-  }
-  md +=
-    '\n> 每份报告内部还保留「历史全量回归」表，用于跨归档对比；判定口径与跳过签核规则见报告第 8 节。\n';
-
-  fs.writeFileSync(INDEX_FILE, md, 'utf-8');
-  return INDEX_FILE;
-}
-
-/**
- * 读取所有归档报告的「历史全量回归」行。`exclude` 为本轮即将写入的文件——
- * 同一轮重复生成时跳过旧内容，避免旧行与本轮新行重复。
- */
-function readHistory(exclude) {
-  const files = listArchiveReports().filter(
-    (f) => path.resolve(f) !== path.resolve(exclude || ''),
-  );
-  if (fs.existsSync(LEGACY_OUT)) files.push(LEGACY_OUT);
-
-  const rows = [];
-  for (const file of files) {
-    const content = fs.readFileSync(file, 'utf-8');
-    let inHistory = false;
-    for (const line of content.split('\n')) {
-      if (/^##\s+.*历史全量/.test(line)) {
-        inHistory = true;
-        continue;
-      }
-      if (inHistory && /^##\s+/.test(line)) break;
-      if (!inHistory) continue;
-      const cells = line.split('|').map((c) => c.trim());
-      // | 日期 | 用例数 | 通过 | 失败 | 跳过 | 通过率 | 耗时 | 证据 |
-      if (cells.length < 9) continue;
-      if (!/^\d{4}-\d{2}-\d{2}/.test(cells[1])) continue;
-      rows.push(cells.slice(1, 9));
-    }
-  }
-  return rows;
 }
 
 const ACCEPTED_SKIPS_PATH = path.join(__dirname, 'accepted-skips.json');
@@ -451,7 +339,6 @@ function render(records, meta) {
     }),
   );
   const unaccepted = allSkips.filter((s) => !s.acceptedBy);
-  const cert = countSpecsAndCases(IGNORED_MODULE_DIR);
   const perModule = new Map();
   for (const r of records) {
     if (!perModule.has(r.module)) {
@@ -480,7 +367,7 @@ function render(records, meta) {
   if (meta.isFull && meta.archived) {
     md +=
       `> **本文件是 ${stamp(meta.startTime).slice(0, 10)} 全量回归的归档快照**，受版本控制、可长期引用，是"用例是否 100% 跑通"的**唯一权威出口**。\n` +
-      '> 全量回归报告按日期归档在 `regression-reports/`（`TEST-REPORT-YYYY-MM-DD.md`，同日多次回归追加 `-HHmmss`），最新一份见 [归档索引](./README.md)。\n' +
+      '> 全量回归报告按日期归档在 `regression-reports/`（`TEST-REPORT-YYYY-MM-DD.md`，同日多次回归追加 `-HHmmss`）；每份报告只记录本轮结果，不汇总历史全量记录。\n' +
       '> 与之并存的是 `report/test-report*.md`：那是**每轮**（含定向批次）的人读报告，落在被 `.gitignore` 忽略的 `report/` 下，**可被清理、不可寻址**。\n' +
       '> 更新方式、判定口径与维护约定见文末；已归档的历史报告只读不改。\n\n';
   } else if (meta.isFull) {
@@ -580,47 +467,13 @@ function render(records, meta) {
     md += '\n';
   }
 
-  md += `## 6. 回归外模块（\`testIgnore\` 排除）\n\n`;
-  md += `\`tests/${IGNORED_MODULE_DIR}/\` 共 **${cert.specs} 个 spec / ${cert.cases} 条用例**，被 \`playwright.config.js\` 的 \`testIgnore\` 排除，**不计入上表分母**。\n`;
-  md += '原因：证书管理模块已于 2026-09-11 随菜单移除，UI 入口不复存在（详见 `docs/cert-management/02-功能测试用例/00-索引与映射.md`）。\n';
-  md += '恢复条件：删除 `testIgnore` 中的该条并同步回写该模块文档的用例状态。\n\n';
-
-  md += '## 7. 历史全量回归\n\n';
-  md += '| 日期 | 用例数 | 通过 | 失败 | 跳过 | 通过率 | 耗时 | 证据 |\n|---|---|---|---|---|---|---|---|\n';
-  // 去重：历史行按整行内容去重——同一份 test-results.json 被重复生成（或反复执行本脚本）
-  // 时不应再追加一行，否则历史表会出现多份完全相同的记录
-  const seen = new Set();
-  const history = [];
-  for (const row of readHistory(meta.out)) {
-    const key = row.join('|');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    history.push(row);
-  }
-  const currentRow = [
-    stamp(meta.startTime).slice(0, 10),
-    String(total),
-    String(passed),
-    String(failed),
-    String(skipped),
-    pct(passed, total),
-    fmtDuration(meta.duration),
-    meta.archived
-      ? `[${path.basename(meta.out)}](${encodeURI(path.basename(meta.out))})`
-      : `\`${path.basename(meta.out)}\`（另存，未归档）`,
-  ];
-  // 历史表只记全量回归；定向批次（--out / --force）不写入历史
-  if (meta.isFull && !seen.has(currentRow.join('|'))) history.push(currentRow);
-  for (const row of history) md += `| ${row.join(' | ')} |\n`;
-  md += '\n> 历史行来自 `regression-reports/` 下既有的归档报告，只增不改；更早的全量回归（如 2026-10-15 的 1002 条 / 807 通过 / 158 失败 / 37 跳过，80.54%）其报告产物随 `report/` 被清理而不可寻址，仅在 `docs/<模块>/…/00-索引与映射.md` 的「取数依据」里留有数字。\n\n';
-
-  md += '## 8. 维护约定\n\n';
+  md += '## 6. 维护约定\n\n';
   md += '1. **跑全量**：\n\n```bash\nPW_WORKERS=1 npx playwright test tests/ --global-timeout=0\n```\n\n';
   md += '2. **生成本次归档报告**：\n\n```bash\nnpm run report:tracked\n```\n\n';
-  md += '   脚本只在「本轮覆盖了全部常规 spec」时写入 `regression-reports/TEST-REPORT-<运行日期>.md`（定向批次不会覆盖全站结论）；同一天第二次全量回归会自动追加 `-HHmmss`，不覆盖已有归档；需要另存时用 `--out <path>`。写入后会自动刷新 `regression-reports/README.md` 索引。\n';
+  md += '   脚本只在「本轮覆盖了全部常规 spec」时写入 `regression-reports/TEST-REPORT-<运行日期>.md`（定向批次不会覆盖全站结论）；同一天第二次全量回归会自动追加 `-HHmmss`，不覆盖已有归档；需要另存时用 `--out <path>`。每份报告只记录本轮结果，不汇总历史全量记录。\n';
   md += '3. **有失败 → 修到 100%**：修完先重跑受影响 spec，**再跑一次全量**并重新生成，直到第 1 节判定为 ✅。\n';
   md += '4. **跳过要签核**：`skipped > 0` 时，未在 `scripts/accepted-skips.json` 登记的跳过会把判定降级为 ⚠️；确属环境/产品行为依赖（非用例遗漏）的，登记 `spec`/`caseId`/`reason`/`evidence`/`confirmedBy`/`confirmedAt` 后重新生成即升为 ✅，第 5 节会列出逐条依据。**禁止为了好看而登记**。\n';
-  md += '5. **提交**：本次归档、`regression-reports/README.md` 索引与相关 spec/文档改动**一起提交**，让"当前通过状态"随代码一起被版本控制；已归档的历史报告只读不改。\n\n';
+  md += '5. **提交**：本次归档与相关 spec/文档改动**一起提交**，让"当前通过状态"随代码一起被版本控制；已归档的历史报告只读不改。\n\n';
 
   return {
     md,
@@ -642,9 +495,7 @@ function main() {
   const report = readJson(opts.json);
   const records = collect(report);
   const runFiles = new Set(records.map((r) => r.file));
-  const diskSpecs = listSpecFiles().filter(
-    (f) => !f.startsWith(`tests/${IGNORED_MODULE_DIR}/`),
-  );
+  const diskSpecs = listSpecFiles();
   const missing = diskSpecs.filter((f) => !runFiles.has(f));
   const extra = [...runFiles].filter((f) => !diskSpecs.includes(f));
   const isFull = missing.length === 0 && extra.length === 0;
@@ -715,12 +566,6 @@ function main() {
   console.log(
     `${customOut ? '已写入报告' : '已写入归档报告'}: ${path.relative(WORKSPACE_ROOT, out)}`,
   );
-  if (!customOut) {
-    const indexPath = renderIndex();
-    if (indexPath) {
-      console.log(`已更新归档索引: ${path.relative(WORKSPACE_ROOT, indexPath)}`);
-    }
-  }
   console.log(`覆盖度: ${records.length} / ${diskSpecs.length} 个常规 spec`);
   console.log(`总计 ${total}，通过 ${passed}，失败 ${failed}，跳过 ${skipped}`);
   if (failed || skipped) {
@@ -752,7 +597,5 @@ module.exports = {
   listSpecFiles,
   statusOf,
   inferModule,
-  renderIndex,
   pickArchivePath,
-  listArchiveReports,
 };

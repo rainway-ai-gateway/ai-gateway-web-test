@@ -318,9 +318,10 @@ test.describe('模型定价 - MP-LINK-01~04 跨模块联动 @journey', () => {
         (e) => e.key === mp.PRICE_KEY_INPUT_COST,
       );
       expect(peakEntry, '忙时分组应含 input_cost_per_token').toBeTruthy();
-      expect(Number(String(peakEntry.value).replace(/^¥/, '').trim())).toBe(
-        0.00002,
-      );
+      // 2026-11-03 单位口径：详情按「元/百万 tokens」展示，期望 = 存储值 0.00002 ×1e6
+      const m = String(peakEntry.value).match(/^[¥]?\s*([\d.eE+-]+)/);
+      expect(m, '忙时分组价格单元格应含数值').toBeTruthy();
+      expect(Number(m[1])).toBe(0.00002 * 1e6);
     });
 
     await test.step('3. 无定价记录的服务商直达：提示且不打开详情', async () => {
