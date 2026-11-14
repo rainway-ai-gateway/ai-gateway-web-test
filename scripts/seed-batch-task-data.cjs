@@ -155,7 +155,7 @@ function runSql(db, sql) {
  * 数据集
  * ------------------------------------------------------------------ *
  * 覆盖用例前置条件：
- *  - 总量 > 20（UI 固定 limit=20）→ 游标翻页 / 末页置灰可验证
+ *  - 总量 55 条（UI 固定 limit=50）→ 游标翻页 / 末页置灰可验证（BT-L-10 需第 2 页）
  *  - id 升序首行字段齐全（provider / api_key_id / entity_id / 金额 / 用量）→ 列表一致性
  *  - 4 种非终态（validating/queued/in_progress/finalizing）→ 取消类用例
  *  - 4 种终态（completed/failed/expired/cancelled）+ cancelling → 置灰断言
@@ -202,6 +202,12 @@ const PLAN = [
   [24, 'expired', 'released', 0, 'none', 'redis'],
   [25, 'in_progress', 'reserved', 0, 'none', 'redis'],
 ];
+
+// 26~55：UI 列表每页 50 条（BatchTasks/index.vue PAGE_LIMIT），补到 55 条才会有第 2 页，
+// BT-L-10「首页/末页按钮置灰」才有前置条件；这些补齐行保持简单终态，不引入新样本语义
+for (let no = 26; no <= 55; no += 1) {
+  PLAN.push([no, 'completed', 'settled', 0, 'none', 'redis']);
+}
 
 const TERMINAL = ['completed', 'failed', 'expired', 'cancelled'];
 
@@ -442,8 +448,8 @@ function summarize(tasks) {
   );
   console.log('  行数: batch_tasks=' + tasks.length);
   console.log(
-    '  游标翻页: limit=20 → 首页 20 行, 末页 ' +
-      (tasks.length - 20) +
+    '  游标翻页: limit=50 → 首页 50 行, 末页 ' +
+      Math.max(0, tasks.length - 50) +
       ' 行 (next_cursor 末页为 0)',
   );
 }

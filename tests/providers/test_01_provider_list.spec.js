@@ -698,32 +698,61 @@ test.describe('模型服务商 - PR-L-08 模型列 2 Tag + `+N` 悬停 Tooltip',
   });
 });
 
-test.describe('模型服务商 - PR-L-09 空列表展示空态（环境依赖，非空则跳过）', () => {
+test.describe('模型服务商 - PR-L-09 空列表展示空态', () => {
   test('系统无服务商时展示空态，筛选/分页控件正常、添加按钮可用', async ({
     page,
   }) => {
-    // 环境依赖偏差（偏差记录 1）：空列表要求「系统无任何服务商」，不可删除真实数据，
-    // 故先探测；系统已有服务商则跳过本用例。
-    const existing = await api.fetchProvidersViaApi(page);
-    test.skip(
-      existing.length > 0,
-      '系统已有 ' +
-        existing.length +
-        ' 个服务商，无法构造空列表环境（PR-L-09 环境依赖偏差）',
-    );
+    // 2026-11-12：共享环境已有百余个真实服务商，不可为了造空态而删除真实数据。
+    // 按 PR-C-25 场景② 同一口径用路由桩让 GET /providers 返回空列表（Data.list = []），
+    // 验证前端在「无服务商」响应下的空态与控件可用性，语义与原用例一致
+    await page.route(/\/open-api\/v1\/providers(\?|$)/, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ErrNum: 200,
+          ErrMsg: 'success',
+          Data: { list: [], pagination: { page: 1, page_size: 20, total: 0 } },
+        }),
+      });
+    });
 
-    await pp.gotoProvidersPage(page);
+    try {
+      const listResponse = page.waitForResponse(
+        (r) =>
+          /\/open-api\/v1\/providers(\?|$)/.test(r.url()) &&
+          r.request().method() === 'GET',
+        { timeout: 15000 },
+      );
+      await pp.gotoProvidersPage(page);
 
-    // 1. 展示空态（表格无数据占位）
-    await pp.expectEmptyProvidersTable(page);
+      await test.step('前置：列表接口返回空集合', async () => {
+        const resp = await listResponse;
+        expect(resp.status()).toBe(200);
+        const payload = await resp.json();
+        expect(payload.Data.list, '桩返回空列表').toEqual([]);
+      });
 
-    // 2. 筛选 / 分页控件正常显示但不报错
-    await expect(pp.paginationScope(page)).toBeVisible();
+      await test.step('1. 展示空态（表格无数据占位）', async () => {
+        await pp.expectEmptyProvidersTable(page);
+      });
 
-    // 3. 「添加服务商」按钮可用
-    await expect(
-      page.getByRole('button', { name: pp.DOC.createButton }),
-    ).toBeEnabled();
+      await test.step('2. 筛选 / 分页控件正常显示但不报错', async () => {
+        await expect(pp.paginationScope(page)).toBeVisible();
+      });
+
+      await test.step('3. 「添加服务商」按钮可用', async () => {
+        await expect(
+          page.getByRole('button', { name: pp.DOC.createButton }),
+        ).toBeEnabled();
+      });
+    } finally {
+      await page.unroute(/\/open-api\/v1\/providers(\?|$)/);
+    }
   });
 });
 
@@ -853,5 +882,65 @@ test.describe('模型服务商 - PR-L-11 查询模型价格跳转并按服务商
     await mpp.modelPriceTable(page).expectRowVisible(MODEL);
     await mpp.expectProviderFilterSelected(page, providerName);
     await mpp.expectViewScopeHidden(page);
+  });
+});
+
+/**
+ * #51 大数据量列表（覆盖缺口清单 #51）：25 个服务商 → 翻末页可达 + 筛选精确定位。
+ * 背景：providers 列表为前端分页 20/页，且 pageTable 在数据刷新时会清空列筛选（历史坑）。
+ */
+test.describe('模型服务商 - PR-L-12 大数据量列表（#51）', () => {
+  const BULK = 25;
+  const created = [];
+
+  test.afterAll(async ({ browser }) => {
+    // 独立 page 清理（afterAll 无 page fixture）
+    const page = await browser.newPage({ storageState: 'auth.json' });
+    try {
+      for (const name of created) {
+        await api.deleteProviderViaApi(page, name).catch(() => {});
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('25 个服务商：末页可达、总数分页正确、筛选命中单行', async ({ page }) => {
+    test.setTimeout(600000);
+    await pp.gotoProvidersPage(page);
+    for (let i = 0; i < BULK; i += 1) {
+      const name = 'provider_bulk_' + Date.now().toString(36) + '_' + i;
+      created.push(name);
+      const data = await api.createProviderViaApi(page, {
+        name,
+        description: 'bulk list 造数',
+        model_protocols: ['openai'],
+        model_endpoint: { schema: 'https', uri: '/v1/models' },
+        models: ['Qwen/Qwen2.5-3B-Instruct'],
+        keys: [],
+        instance_pool: [{ addr: '127.0.0.1', port: 80, weight: 100 }],
+      });
+      expect(data, `第 ${i} 个服务商应创建成功`).not.toBeNull();
+    }
+
+    await pp.gotoProvidersPage(page);
+    const table = pp.providerTable(page);
+    await table.waitForLoaded();
+
+    await test.step('分页渲染且末页可达，末页含最后创建的服务商', async () => {
+      await expect
+        .poll(async () => table.lastPageNumber(), { timeout: 20000 })
+        .toBeGreaterThan(1);
+      const last = await table.lastPageNumber();
+      await table.clickPageNumber(last);
+      await expect(table.rowByText(created[created.length - 1])).toBeVisible({
+        timeout: 20000,
+      });
+    });
+
+    await test.step('按名称筛选精确定位单行', async () => {
+      await pp.expectProviderRowVisibleByName(page, created[0]);
+      await expect(table.dataRows()).toHaveCount(1);
+    });
   });
 });

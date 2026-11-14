@@ -39,10 +39,10 @@ const NO_OWNER = '(未归属)';
 // docs/business-cluster/ 与 tests/cluster/。
 // 名称一致的模块（ai-cache、ai-context、api-key、batch-tasks、entity-management、entity-type、
 // epp-pool、intent-config、model-prices、operation-logs、providers、reencrypt-sweep、report、
-// traffic-mirror）无需别名。（原 tests/gateway-pool/ 孤儿目录已于 2026-10-15 删除，此处不再列出。）
+// traffic-mirror）无需别名。（原 tests/gateway-pool/ 孤儿目录已于 2026-10-15 删除、
+// docs/cert-management/ 与 tests/cert/ 已于 2026-10-30 删除，此处不再列出。）
 const MODULE_ALIAS_GROUPS = [
   ['business-cluster', 'cluster'],
-  ['cert-management', 'cert'],
   ['route-management', 'route'],
   ['user-management', 'user'],
 ];
@@ -60,7 +60,7 @@ const USAGE = `用法: node scripts/impact-scan.js <关键词...> [--module=<模
   关键词          一个或多个，任一命中即计入（大小写不敏感）
   --module=<名>   限定扫描该模块的 docs/<名>/、tests/<名>/、pages/<名>/
                   docs 与 tests 目录名不一致时按别名互通（business-cluster=cluster、
-                  cert-management=cert、route-management=route、user-management=user）
+                  route-management=route、user-management=user）
   --json          输出结构化 JSON（便于接入流程）
 
 扫描范围: docs/**/02-功能测试用例/*.md、docs/**/01-测试场景概览.md、

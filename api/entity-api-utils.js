@@ -222,6 +222,7 @@ async function createEntityViaApi(
   quotaPlan,
   rateLimitPolicy,
   description,
+  extra,
 ) {
   try {
     const userData = await getUserData(page);
@@ -248,6 +249,10 @@ async function createEntityViaApi(
     }
     if (rateLimitPolicy) {
       data.rate_limit_policy = rateLimitPolicy;
+    }
+    // 其余可选项（allow_models / block_models 等）由调用方显式传入
+    if (extra && typeof extra === 'object') {
+      Object.assign(data, extra);
     }
     common.log('接口创建 Entity 请求数据: ' + JSON.stringify(data));
     const response = await page.request.post(

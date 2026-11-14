@@ -225,6 +225,21 @@ test.describe('路由管理 - RT-D-22b 点击返回按钮返回路由表列表',
 });
 
 test.describe('路由管理 - RT-D-23 规则详情字段与接口数据一致', () => {
+  // 失败路径也要兜底清理：历史 rt_detail_check_* 残留正是断言中断导致删除未执行，
+  // 残留会反过来让 RT-D-28 等用例的规则名失去可筛选子串
+  test.afterEach(async ({ page }) => {
+    const current = await utils.getGlobalRouteRulesViaApi(page);
+    const rest = (current?.rules || []).filter(
+      (r) => !(r.name || '').startsWith('rt_detail_check_'),
+    );
+    if (rest.length !== (current?.rules || []).length) {
+      await utils.setGlobalRouteRulesViaApi(page, {
+        enabled: current?.enabled === true,
+        rules: rest,
+      });
+    }
+  });
+
   test('RT-D-23 规则详情字段与接口数据一致', async ({ page }) => {
     const clusters = await utils.getAvailableClustersForRule(page);
     expect(clusters.length, '无可用集群').toBeGreaterThan(0);
@@ -257,13 +272,18 @@ test.describe('路由管理 - RT-D-23 规则详情字段与接口数据一致', 
       .filter({ hasText: ruleName })
       .first();
     await expect(row).toContainText(targetCluster.name);
-    // RT-D-23 补充：验证目标集群列 Tooltip + 省略号
+    // RT-D-23 补充：目标集群列长文本展示。2026-11 rainway UI 改版（327c17b）将
+    // 该列从「省略号 + Tooltip」改为多行 Tag 直接展示，断言口径同步为 Tag 可见
+    // 且完整文本 cluster/model: weight% 直出
     const targetCell = row
       .locator('.ivu-table-cell')
       .filter({ hasText: targetCluster.name })
       .first();
-    // 验证存在 Tooltip 包裹
-    await expect(targetCell.locator('.ivu-tooltip')).toBeVisible();
+    await expect(targetCell.locator('.ivu-tag')).toBeVisible();
+    const targetModel = targetCluster.llm_config?.models?.[0] || '';
+    await expect(targetCell).toContainText(
+      `${targetCluster.name}/${targetModel}: 100%`,
+    );
     await utils.openViewRuleDrawer(page, ruleName);
     await expect(
       page.locator('.rule-view-panel').getByText(ruleName),

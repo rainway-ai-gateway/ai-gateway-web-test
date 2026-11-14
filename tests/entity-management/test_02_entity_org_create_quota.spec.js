@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 const { test, expect } = require('@playwright/test');
+const entityApi = require('../../api/entity-api-utils');
 const utils = require('../../pages/entity/EntityPage');
 
 const DOC = utils.DOC_ENTITY_ORG;
@@ -232,7 +233,7 @@ entityOrgDescribe(
       });
 
       await test.step('2. 填写基本信息，选择有限配额并清空默认总量', async () => {
-        // UI：无限配额=否时「配额总量」默认 100000000，需清空后才出必填 tip
+        // UI：配额限制=是（有限配额）时「配额总量」默认 100 百万Token，需清空后才出必填 tip
         // （Form.validate 对 quota_plan.quota 会漏校验，utils 走 FormItem.validate）
         await utils.fillEntityFormBasic(page, { name: entityName, typeName });
         await utils.fillEntityQuotaForm(page, { unlimited: false });
@@ -300,7 +301,7 @@ entityOrgDescribe(
     let entityName;
     let typeName;
 
-    test('验证有限配额时配额总量不可为小数', async ({ page }) => {
+    test('验证有限配额时配额总量允许 2 位小数', async ({ page }) => {
       entityName = await utils.generateTestEntityName();
       typeName = await utils.generateTestEntityTypeName();
       cleanup.trackEntityName(entityName);
@@ -321,23 +322,18 @@ entityOrgDescribe(
         await utils.openCreateEntityDrawer(page);
       });
 
-      await test.step('2-4. 填写基本信息并写入小数配额总量', async () => {
-        // UI InputNumber :precision=0，界面无法真正输入小数；utils 写模型触发「必须为非负整数」
+      await test.step('2-4. 填写基本信息并写入 2 位小数配额总量', async () => {
+        // issue #139：token 以百万Token 录入（最多 2 位小数），存储 1,230,000 token = 1.23 百万Token
         await utils.fillEntityFormBasic(page, { name: entityName, typeName });
         await utils.fillEntityQuotaForm(page, { unlimited: false });
-        await utils.fillEntityQuotaTotal(page, DOC.quotaDecimal);
-        await utils.expectEntityQuotaIntegerError(page);
+        await utils.fillEntityQuotaTotal(page, 1230000);
       });
 
-      await test.step('5. 再次触发校验并确认 tip 仍在', async () => {
-        // 不点提交：Form.validate 对 quota_plan.quota 会漏跑，提交可能仍成功
-        await utils.fillEntityQuotaTotal(page, DOC.quotaDecimal);
-        await utils.expectCreateEntityDrawerOpen(page);
-        await utils.expectEntityQuotaIntegerError(page);
-      });
-
-      await test.step('6. 关闭抽屉', async () => {
-        await utils.cancelEntityForm(page);
+      await test.step('5. 提交并验证创建成功', async () => {
+        await utils.submitEntityFormAndWaitForSuccess(page);
+        await utils.expectCreateEntityDrawerHidden(page);
+        await utils.searchEntityByName(page, entityName);
+        await utils.expectEntityVisible(page, entityName);
       });
     });
   },
@@ -349,7 +345,7 @@ entityOrgDescribe(
     let entityName;
     let typeName;
 
-    test('验证有限配额时配额总量不可超过 9999999999', async ({ page }) => {
+    test('验证有限配额时配额总量不可超过 9999.99 百万Token', async ({ page }) => {
       entityName = await utils.generateTestEntityName();
       typeName = await utils.generateTestEntityTypeName();
       cleanup.trackEntityName(entityName);
@@ -373,7 +369,7 @@ entityOrgDescribe(
       await test.step('2-4. 填写基本信息并输入超上界配额总量', async () => {
         await utils.fillEntityFormBasic(page, { name: entityName, typeName });
         await utils.fillEntityQuotaForm(page, { unlimited: false });
-        // InputNumber :max=9999999999 会钳制界面输入，自动化经 Vue 模型注入
+        // issue #139：上限为 9999.99 百万Token（=9,999,990,000 token）；直接注入模型触发校验
         await utils.setEntityQuotaTotalModel(page, DOC.quotaOverMax);
         await utils.expectEntityQuotaMaxError(page);
       });
@@ -484,7 +480,7 @@ entityOrgDescribe(
     let entityName;
     let typeName;
 
-    test('验证RMB单位下配额总量允许小数（最多4位）', async ({ page }) => {
+    test('验证RMB单位下配额总量允许小数（最多2位）', async ({ page }) => {
       entityName = await utils.generateTestEntityName();
       typeName = await utils.generateTestEntityTypeName();
       cleanup.trackEntityName(entityName);
@@ -523,7 +519,7 @@ entityOrgDescribe(
     let entityName;
     let typeName;
 
-    test('验证4位小数合法、5位小数被拦截', async ({ page }) => {
+    test('验证2位小数合法、5位小数被拦截', async ({ page }) => {
       entityName = await utils.generateTestEntityName();
       typeName = await utils.generateTestEntityTypeName();
       cleanup.trackEntityName(entityName);
@@ -535,11 +531,12 @@ entityOrgDescribe(
         await utils.gotoEntityOrgManagementPage(page);
       });
 
-      await test.step('5-6. 4位小数配额提交成功', async () => {
+      await test.step('5-6. 2位小数配额提交成功（3 位以上输入时被截断）', async () => {
         await utils.openCreateEntityDrawer(page);
         await utils.fillEntityFormBasic(page, { name: entityName, typeName });
         await utils.fillEntityQuotaForm(page, { unlimited: false });
         await utils.selectEntityQuotaUnit(page, 'RMB');
+        // issue #139：组件按 2 位小数截断，100.1234 → 100.12
         await utils.fillEntityQuotaTotal(page, 100.1234);
         await utils.submitEntityFormAndWaitForSuccess(page);
         await utils.expectCreateEntityDrawerHidden(page);
@@ -548,7 +545,7 @@ entityOrgDescribe(
       });
 
       await test.step('7-8. 5位小数写模型触发精度校验', async () => {
-        // 新实体验证 5 位小数：InputNumber :precision=4 界面截断，自动化经 Vue 模型注入
+        // 新实体验证 5 位小数：组件界面截断为 2 位，自动化经 Vue 模型注入触发精度校验
         const overPrecisionName = await utils.generateTestEntityName();
         cleanup.trackEntityName(overPrecisionName);
         await utils.openCreateEntityDrawer(page);
@@ -576,7 +573,7 @@ entityOrgDescribe(
     let entityName;
     let typeName;
 
-    test('验证total_token单位下配额总量不可为小数', async ({ page }) => {
+    test('验证total_token单位下配额总量允许 2 位小数（百万Token 口径）', async ({ page }) => {
       entityName = await utils.generateTestEntityName();
       typeName = await utils.generateTestEntityTypeName();
       cleanup.trackEntityName(entityName);
@@ -597,23 +594,19 @@ entityOrgDescribe(
         await utils.openCreateEntityDrawer(page);
       });
 
-      await test.step('2-4. 选择total_token并写入小数配额总量', async () => {
-        // InputNumber :precision=0 界面无法输入小数，自动化经 Vue 模型注入
+      await test.step('2-4. 选择total_token并写入 2 位小数配额总量', async () => {
+        // issue #139：百万Token 口径允许 2 位小数；存储 5,300,000 token = 5.3 百万Token
         await utils.fillEntityFormBasic(page, { name: entityName, typeName });
         await utils.fillEntityQuotaForm(page, { unlimited: false });
         await utils.selectEntityQuotaUnit(page, 'total_token');
-        await utils.setEntityQuotaTotalModel(page, DOC.quotaDecimal);
-        await utils.expectEntityQuotaIntegerError(page);
+        await utils.fillEntityQuotaTotal(page, 5300000);
       });
 
-      await test.step('5. 再次触发校验并确认 tip 仍在', async () => {
-        await utils.setEntityQuotaTotalModel(page, DOC.quotaDecimal);
-        await utils.expectCreateEntityDrawerOpen(page);
-        await utils.expectEntityQuotaIntegerError(page);
-      });
-
-      await test.step('6. 关闭抽屉', async () => {
-        await utils.cancelEntityForm(page);
+      await test.step('5. 提交并验证创建成功', async () => {
+        await utils.submitEntityFormAndWaitForSuccess(page);
+        await utils.expectCreateEntityDrawerHidden(page);
+        await utils.searchEntityByName(page, entityName);
+        await utils.expectEntityVisible(page, entityName);
       });
     });
   },
@@ -730,12 +723,12 @@ entityOrgDescribe(
         await utils.gotoEntityOrgManagementPage(page);
       });
 
-      await test.step('1. 打开编辑抽屉并确认单位回显RMB', async () => {
+      await test.step('1. 打开编辑抽屉并确认单位回显元（RMB）', async () => {
         await utils.openEditEntityDrawer(page, entityName);
         await utils.expectEntityFormSelectValue(
           page,
           '配额单位',
-          'RMB',
+          '元',
           utils.DRAWER_TITLE.editEntity,
         );
       });
@@ -864,7 +857,7 @@ entityOrgDescribe(
         await utils.expectResetQuotaDrawerOpen(page);
       });
 
-      await test.step('2. 写入超过 9999999999 的配额总量并点击"确认"', async () => {
+      await test.step('2. 写入超过 9999.99 百万Token 的配额总量并点击"确认"', async () => {
         await utils.setResetQuotaTotalModel(page, DOC.quotaOverMax);
         await utils.submitResetQuotaForm(page);
       });
@@ -874,7 +867,7 @@ entityOrgDescribe(
         await utils.expectResetQuotaDrawerOpen(page);
       });
 
-      await test.step('3. 修改为边界值 9999999999 并提交成功', async () => {
+      await test.step('3. 修改为边界值 9999.99 并提交成功', async () => {
         await utils.setResetQuotaTotalModel(page, DOC.quotaTokenMax);
         await utils.submitResetQuotaFormAndWaitForSuccess(page);
         await utils.expectResetQuotaDrawerHidden(page);
@@ -882,3 +875,83 @@ entityOrgDescribe(
     });
   },
 );
+
+// ==================== EM-CC-01/02 幂等与并发（覆盖缺口清单 #34/#35） ====================
+
+entityOrgDescribe('Entity组织管理 - EM-CC-01 创建Entity-重复点击提交幂等', (cleanup) => {
+  test('连点两次提交：同名 Entity 仅创建一条（#34）', async ({ page }) => {
+    const entityName = await utils.generateTestEntityName();
+    const typeName = await utils.generateTestEntityTypeName();
+    cleanup.trackEntityName(entityName);
+    cleanup.trackTypeName(typeName);
+
+    await utils.gotoEntityTypeManagementPage(page);
+    await utils.createEntityTypeViaUI(page, typeName, '幂等类型', 1);
+    await utils.gotoEntityOrgManagementPage(page);
+    await utils.openCreateEntityDrawer(page);
+    await utils.fillEntityFormBasic(page, { name: entityName, typeName });
+
+    const posts = [];
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().includes('/open-api/v1/entities')) {
+        posts.push(req.url());
+      }
+    });
+    await utils.submitEntityForm(page);
+    await utils.submitEntityForm(page).catch(() => {});
+    await page.waitForTimeout(2000);
+
+    const found = await utils.findEntityByNameViaApi(page, entityName);
+    expect(found, '同名 Entity 应创建成功').toBeTruthy();
+    expect(posts.length, 'POST /entities 次数应 ≤2（第二次被 UI 拦截或后端拒绝）').toBeLessThanOrEqual(2);
+    await utils.ensureEntityRowVisible(page, entityName);
+  });
+});
+
+entityOrgDescribe('Entity组织管理 - EM-CC-02 编辑期间他人修改', (cleanup) => {
+  test('UI 提交覆盖他人修改（last-write-wins，与 cluster BC-C-01 同语义的已知偏差）（#35）', async ({
+    page,
+  }) => {
+    const entityName = await utils.generateTestEntityName();
+    const typeName = await utils.generateTestEntityTypeName();
+    cleanup.trackEntityName(entityName);
+    cleanup.trackTypeName(typeName);
+
+    let entityId;
+
+    await test.step('前置：API 造数类型 + Entity（带描述）', async () => {
+      await utils.gotoEntityTypeManagementPage(page);
+      await utils.createEntityTypeViaApiAndRefresh(page, typeName, '并发类型', 1);
+      const entity = await utils.createEntityWithTypeViaApi(page, {
+        name: entityName,
+        type: typeName,
+        description: '初始描述',
+      });
+      expect(entity, 'Entity 应创建成功').toBeTruthy();
+      entityId = entity.id;
+    });
+
+    await test.step('打开编辑向导后，API 侧修改描述（模拟他人）', async () => {
+      await utils.gotoEntityOrgManagementPage(page);
+      await utils.openEditEntityDrawer(page, entityName);
+      const others = await entityApi.updateEntityViaApi(page, entityId, {
+        name: entityName,
+        type: typeName,
+        description: 'changed-by-others',
+      });
+      expect(others, '他人修改应成功').toBeTruthy();
+    });
+
+    await test.step('UI 填新描述并提交（不重新加载）', async () => {
+      await utils.fillEntityDescription(page, 'ui-value', '编辑Entity');
+      await utils.submitEntityFormAndWaitForEditSuccess(page);
+    });
+
+    await test.step('产品现状：无乐观锁 → 后写覆盖（已知偏差）', async () => {
+      const apiData = await utils.findEntityByNameViaApi(page, entityName);
+      expect(apiData.description, '后写覆盖（已知偏差，登记覆盖缺口清单 #35）').toBe(
+        'ui-value',
+      );
+    });
+  });
+});

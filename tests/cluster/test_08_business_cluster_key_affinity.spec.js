@@ -148,6 +148,9 @@ test.describe('AI业务集群 - RM-BC-87~91 Key 亲和性', () => {
       ttl: 600,
       redis_prefix: utils.DOC_BUSINESS_CLUSTER.defaultRedisPrefix,
       penalty_enable: true,
+      // dc9d7fc（11/4）Key 惩罚时长：留空按默认值 60 / 300 补齐后下发
+      penalty_ttl_429: 60,
+      penalty_ttl_auth: 300,
     });
   });
 
@@ -284,6 +287,18 @@ test.describe('AI业务集群 - RM-BC-87~91 Key 亲和性', () => {
     await utils.clickWizardNext(page);
     await utils.expectWizardStep(page, '复查&检查');
 
+    // 复查页 Key 亲和性摘要与第 4 步输入逐项一致（覆盖缺口清单 #1 补齐）
+    const DOC = utils.DOC_BUSINESS_CLUSTER;
+    const reviewAffinity = await utils.getReviewBlockValues(
+      page,
+      utils.DRAWER_TITLE.createBusinessCluster,
+      DOC.keyAffinityCard,
+    );
+    expect(reviewAffinity[DOC.keyAffinityEnabledLabel]).toBe('启用');
+    expect(reviewAffinity['绑定空闲超时(秒)']).toBe('300');
+    expect(reviewAffinity[DOC.keyAffinityPenaltyLabel]).toBe('停用');
+    expect(reviewAffinity[DOC.keyAffinityRedisPrefixLabel]).toBe('my:prefix');
+
     const request = await utils.waitForClusterCreateRequest(page, () =>
       utils.clickWizardSubmit(page),
     );
@@ -293,6 +308,9 @@ test.describe('AI业务集群 - RM-BC-87~91 Key 亲和性', () => {
       ttl: 300,
       redis_prefix: 'my:prefix',
       penalty_enable: false,
+      // dc9d7fc：惩罚未启用时仍按默认值补齐下发
+      penalty_ttl_429: 60,
+      penalty_ttl_auth: 300,
     });
   });
 });

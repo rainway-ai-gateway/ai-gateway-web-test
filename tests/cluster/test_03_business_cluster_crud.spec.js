@@ -42,6 +42,7 @@
 const { test, expect } = require('@playwright/test');
 const utils = require('../../pages/resource/ResourcePage');
 const routeApi = require('../../api/route-api-utils');
+const routeUtils = require('../../pages/route/RoutePage');
 const api = require('../../api/provider-api-utils');
 
 const MODEL_A1 = 'Qwen/Qwen2.5-3B-Instruct';
@@ -547,7 +548,9 @@ test.describe('AI业务集群管理 - RM-BC-02 CRUD与数据一致性', () => {
     const body = drawer.locator('.ivu-drawer-body');
     const protocolText = await body
       .locator('.ivu-form-item')
-      .filter({ hasText: '协议' })
+      .filter({
+        has: page.locator('.ivu-form-item-label', { hasText: /^\s*协议\s*$/ }),
+      })
       .locator('.ivu-select-selected-value')
       .textContent();
 
@@ -711,30 +714,75 @@ test.describe('AI业务集群管理 - RM-BC-14 删除约束', () => {
     const result = await utils.attemptDeleteBusinessCluster(page, clusterName);
     expect(result.ok).toBe(false);
 
-    // 2026-08-06 UI 变更：删除失败后弹自定义 Modal 展示引用规则信息+前往处理链接
-    // 先等弹窗出现（前端 findClusterReferences 需要查多个 API，可能较慢）
-    const deleteErrorModal = page
-      .locator('.ivu-modal-wrap')
-      .filter({ hasText: /删除失败|deleteFailed/ })
-      .first();
-    await expect(deleteErrorModal).toBeVisible({ timeout: 30000 });
+    // 2026-11-04 UI 变更：前端不再做引用预检/引用弹窗，删除失败直接 toast 后端
+    // 返回的错误消息（后端 409 校验，消息含引用规则名）
+    const errorToast = page.locator('.ivu-message').filter({ hasText: ruleName }).first();
+    await expect(errorToast).toBeVisible({ timeout: 15000 });
 
-    // 验证弹窗中包含引用规则名
-    await expect(deleteErrorModal).toContainText(ruleName);
-
-    // 验证存在"前往处理"链接
-    const gotoLink = deleteErrorModal
-      .locator('a')
-      .filter({ hasText: '前往处理' })
-      .first();
-    await expect(gotoLink).toBeVisible();
-
-    // 点击"前往处理"后跳转到路由规则页面
-    await gotoLink.click();
-    await page.waitForURL(/route-tables|route-rules/, { timeout: 15000 });
-
-    // 回到集群列表，验证集群仍在（未被删除）
+    // 集群仍在列表中（未被删除）
     await utils.gotoBusinessClusterManagementPage(page);
     await utils.ensureBusinessClusterRowVisible(page, clusterName);
+  });
+
+  test('BC-J-03 引用约束生命周期闭环：前往处理 → 删规则 → 删集群成功', async ({
+    page,
+  }) => {
+    test.setTimeout(300000);
+    const clusterName = utils.generateTestBusinessClusterName();
+    cleanup.trackBusinessCluster(clusterName);
+    const providerName = await createProvider({
+      page,
+      cleanup: providerCleanup,
+    });
+
+    await utils.createCluster(
+      page,
+      await buildClusterPayload(page, clusterName, providerName),
+    );
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await utils.ensureBusinessClusterRowVisible(page, clusterName);
+
+    // 1. API 造路由规则引用该集群
+    const current = await routeApi.getGlobalRouteRulesViaApi(page);
+    const ruleName = `bc_j03_${Date.now()}`;
+    const linked = await routeApi.setGlobalRouteRulesViaApi(page, {
+      enabled: false,
+      rules: [
+        ...(current?.rules || []),
+        {
+          name: ruleName,
+          cond: 'default_t()',
+          targets: [{ cluster_name: clusterName, model: '', weight: 100 }],
+          fallbacks: [],
+        },
+      ],
+    });
+    expect(linked).toBe(true);
+
+    // 2. 删除被拦截：toast 后端错误消息（含引用规则名；2026-11-04 起无引用弹窗）
+    const result = await utils.attemptDeleteBusinessCluster(page, clusterName);
+    expect(result.ok).toBe(false);
+    const errorToast = page.locator('.ivu-message').filter({ hasText: ruleName }).first();
+    await expect(errorToast).toBeVisible({ timeout: 15000 });
+
+    // 3. 用户路径：直接去路由页处理（导航闭环；引用弹窗/前往处理已移除）
+    await routeUtils.gotoRouteTableListPage(page);
+
+    // 4. 路由页删除该规则并提交生效（解除引用）
+    await routeUtils.deleteRuleByNameAndSubmit(page, ruleName);
+
+    // 5. 回集群页：删除成功、列表行消失
+    await utils.gotoBusinessClusterManagementPage(page);
+    await utils.ensureBusinessClusterRowVisible(page, clusterName);
+    const afterUnlink = await utils.attemptDeleteBusinessCluster(
+      page,
+      clusterName,
+    );
+    expect(afterUnlink.ok, '解除引用后集群应删除成功').toBe(true);
+    await utils.businessClusterTable(page).waitForLoaded();
+    await expect(
+      utils.businessClusterTable(page).rowByText(clusterName),
+    ).toHaveCount(0);
   });
 });

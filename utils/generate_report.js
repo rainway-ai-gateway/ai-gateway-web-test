@@ -47,7 +47,6 @@ const MODULE_LABELS = {
   'ai-context': 'AI 上下文压缩',
   'api-key': 'API-Key 管理',
   'batch-tasks': '批量任务',
-  cert: '证书管理（回归外）',
   cluster: 'AI 业务集群',
   'entity-management': 'Entity 组织管理',
   'entity-type': 'Entity 类型管理',

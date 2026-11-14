@@ -65,7 +65,9 @@ test.describe('模型定价 - MP-V-11 prices 科学计数法与失焦格式化',
     cleanup.trackCombo(comboSci.provider, comboSci.model, comboSci.mode);
     cleanup.trackCombo(comboDec.provider, comboDec.model, comboDec.mode);
 
-    await test.step('1.5e-6 失焦后仍为科学计数法', async () => {
+    // 2026-11-03 单位口径：UI 录入/回显为「元/百万 tokens」（token 计价键），
+    // 页对象 fill 自动 ×1e6（payload 语义仍为每 token 单价）；下列断言以 UI 单位为准。
+    await test.step('每 token 1.5e-6 → 录入 1.5（百万单位）失焦后保持', async () => {
       await mp.openCreateDrawer(page);
       await mp.fillCreateForm(page, {
         provider: comboSci.provider,
@@ -75,16 +77,17 @@ test.describe('模型定价 - MP-V-11 prices 科学计数法与失焦格式化',
         priceKey: mp.PRICE_KEY_INPUT_COST,
         priceValue: '1.5e-6',
       });
-      await mp.expectPriceRowInputValue(page, 0, '1.5e-6');
+      await mp.expectPriceRowInputValue(page, 0, '1.5');
     });
 
-    await test.step('0.0000015 失焦后格式化为 1.5e-6', async () => {
+    await test.step('每 token 0.0000015 → 录入 1.5（百万单位）失焦后保持', async () => {
       await mp.fillPriceRow(page, 0, { value: '0.0000015' });
-      await mp.expectPriceRowInputValue(page, 0, '1.5e-6');
+      await mp.expectPriceRowInputValue(page, 0, '1.5');
     });
 
-    await test.step('7.6234102728e-08 不被截断，提交后读回数值等价', async () => {
-      await mp.fillPriceRow(page, 0, { value: '7.6234102728e-08' });
+    await test.step('百万单位 7.6234102728e-8 科学计数不被截断，提交后每 token 读回等价', async () => {
+      // 每 token 7.6234102728e-14 → UI 录入值 7.6234102728e-8（仍为科学计数法）
+      await mp.fillPriceRow(page, 0, { value: '7.6234102728e-14' });
       const row = await mp.getPriceRowValues(page, 0);
       expect(row.value.toLowerCase()).toContain('e-');
       mp.expectNumericPriceEqual(row.value, '7.6234102728e-08');
@@ -99,9 +102,10 @@ test.describe('模型定价 - MP-V-11 prices 科学计数法与失焦格式化',
         comboSci.mode,
       );
       expect(record).not.toBeNull();
+      // 存储值 = payload 语义（每 token 单价）：录入 7.62e-8（百万单位）÷1e6 = 7.62e-14
       mp.expectNumericPriceEqual(
         record.prices.input_cost_per_token,
-        '7.6234102728e-08',
+        '7.6234102728e-14',
       );
     });
 
@@ -115,7 +119,8 @@ test.describe('模型定价 - MP-V-11 prices 科学计数法与失焦格式化',
         priceKey: mp.PRICE_KEY_INPUT_COST,
         priceValue: '0.04',
       });
-      await mp.expectPriceRowInputValue(page, 0, '0.04');
+      // 每 token 0.04 → UI 录入值 40000（0.04 × 1e6），失焦后仍为十进制
+      await mp.expectPriceRowInputValue(page, 0, '40000');
       await mp.submitUpsertAndWait(page);
       await mp.expectDrawerHidden(page);
       const record = await api.findModelPriceByComboViaApi(

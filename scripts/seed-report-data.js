@@ -220,6 +220,11 @@ function buildLogRows() {
           ? (0.2 + prand(b * 13 + i) * 0.3).toFixed(3)
           : (0.7 + prand(b * 13 + i) * 0.29).toFixed(3);
       const status = i === 3 ? 500 : 200;
+      // 2026-11-03 issue #1479：缺价信号造数——i=2 回退计费、i=3（500 拒绝行）转发前拒绝，
+      // 其余行 NULL（未缺价）；依赖 bfe_ai_request_log 已迁移 ai_price_miss/ai_price_warn 两列
+      const priceMiss = i === 2 ? '1' : i === 3 ? '1' : 'NULL';
+      const priceWarn =
+        i === 2 ? "'fallback'" : i === 3 ? "'reject'" : 'NULL';
       const errCode = status >= 400 ? `'upstream_error'` : 'NULL';
       const errMsg =
         status >= 400
@@ -238,7 +243,8 @@ function buildLogRows() {
           `${300 + Math.floor(prand(b * 61 + i) * 900)},` +
           `'${cache}',${mirrorHit},'${mirrorCluster}','task_type','${answer}',` +
           `${confidence},'${source}',` +
-          `${800 + Math.floor(prand(b * 67 + i) * 2500)},1,'')`,
+          `${800 + Math.floor(prand(b * 67 + i) * 2500)},1,'',` +
+          `${priceMiss},${priceWarn})`,
       );
     }
   }
@@ -324,7 +330,8 @@ try {
       `ai_protocol,ai_mode,ai_cost_value,ai_cost_currency,res_status_code,` +
       `all_time,ai_cache_status,mirror_hit,mirror_cluster,ai_intent_question,` +
       `ai_intent_answer,ai_intent_confidence,ai_intent_source,` +
-      `ai_intent_latency_us,ai_intent_cache_hit,ai_intent_questions_version) VALUES ` +
+      `ai_intent_latency_us,ai_intent_cache_hit,ai_intent_questions_version,` +
+      `ai_price_miss,ai_price_warn) VALUES ` +
       logRows.join(',\n') +
       ';',
   );

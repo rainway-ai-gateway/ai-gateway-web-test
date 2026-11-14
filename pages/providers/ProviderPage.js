@@ -20,6 +20,7 @@ const path = require('path');
 const rc = require('../resource/ResourcePageCommon');
 const sessionUtils = require('../../utils/session');
 const readonly = require('../../utils/readonly');
+const providerApi = require('../../api/provider-api-utils');
 const { PageTableComponent } = require('../../components/layout');
 const {
   IvuMessageComponent,
@@ -77,6 +78,7 @@ const LABEL = {
   name: '名称',
   description: '描述',
   instanceSource: '实例来源',
+  // 2026-10-26「bugfix」改为 iView Select + 标签「K8s 池名称」（原 el-select「K8s 实例池」作废）
   k8sPoolName: 'K8s 池名称',
   instanceMode: '实例形态',
   instanceList: '实例IP列表',
@@ -137,13 +139,19 @@ const DOC = {
   protocolPathMustStartSlash: '上游 API 基路径必须以 / 开头',
   protocolPathNoTrailingSlash: '上游 API 基路径不能以 / 结尾',
   protocolPathInvalidChars: '上游 API 基路径包含非法字符（? $ # ..）',
-  // PR-C-20~24 实例来源（人工维护 / K8s 池）
+  // PR-C-20~25 / PR-V-19/21：实例来源（人工维护 / K8s 池）；K8s 池为可搜索下拉
   instanceSourceManual: '人工维护实例池（instance_pool）',
   instanceSourceK8s: 'K8s 实例池（k8s_pool）',
-  k8sPoolNamePlaceholder: '例如 llm-inference-pool',
+  k8sPoolSelectPlaceholder: '请选择 K8s 实例池',
   k8sPoolNameRequired: '请填写 K8s 池名称',
-  // PR-C-24：详情页镜像实例空态（ProviderView `provider.k8sPoolEmpty`）
+  k8sPoolNoOptions: '暂无可用的 K8s 实例池',
+  k8sPoolNotExistSuffix: '池不存在',
+  // PR-D-04/05：详情页 K8s 分支只读标签与实例表（数据源 GET /k8s_pools/{name}）
+  k8sPoolReadonlyLabel: 'K8s 池名称',
+  k8sPoolInstanceHeaders: ['实例地址', '端口', '权重'],
+  // 空池（200 + instances: []）与池不存在（404）两种降级文案
   k8sPoolEmpty: '暂无镜像实例（池不存在 ≡ 零实例）',
+  k8sPoolNotFound: 'K8s 池不存在（≡ 零实例）',
   instanceCreateButton: '创建',
 };
 
@@ -428,6 +436,34 @@ async function fillInstanceRow(page, index, { addr, port, weight }) {
   await page.waitForTimeout(200);
 }
 
+/**
+ * 实例池行「删除」按钮（#46）：InstancePool 的 deleteAble 在仅剩 1 行时禁用
+ */
+function instanceRowDeleteButton(page, index) {
+  return instanceRows(page)
+    .nth(index)
+    .locator('td')
+    .nth(3)
+    .getByRole('button', { name: /删除|删除行/ })
+    .first();
+}
+
+async function removeInstanceRow(page, index) {
+  const btn = instanceRowDeleteButton(page, index);
+  await expect(btn).toBeVisible({ timeout: 10000 });
+  await btn.click();
+  await page.waitForTimeout(300);
+}
+
+async function expectInstanceRowDeleteDisabled(page, index, disabled = true) {
+  const btn = instanceRowDeleteButton(page, index);
+  if (disabled) {
+    await expect(btn).toBeDisabled();
+  } else {
+    await expect(btn).toBeEnabled();
+  }
+}
+
 async function fillInputNumber(input, value) {
   await expect(input).toBeVisible({ timeout: 10000 });
   await input.click({ clickCount: 3 });
@@ -519,6 +555,21 @@ function k8sPoolNameItem(page) {
   return upsertFormItem(upsertScope(page), LABEL.k8sPoolName);
 }
 
+function k8sPoolSelect(page) {
+  return new IvuSelectComponent(
+    page,
+    k8sPoolNameItem(page).locator('.ivu-select').first(),
+  );
+}
+
+function k8sPoolDropdown(page) {
+  return k8sPoolNameItem(page).locator('.ivu-select-dropdown');
+}
+
+function k8sPoolDropdownItems(page) {
+  return k8sPoolDropdown(page).locator('.ivu-select-item');
+}
+
 async function expectK8sPoolNameVisible(page) {
   await expect(k8sPoolNameItem(page)).toBeVisible({ timeout: 10000 });
 }
@@ -527,19 +578,193 @@ async function expectK8sPoolNameHidden(page) {
   await expect(k8sPoolNameItem(page)).toHaveCount(0);
 }
 
-async function expectK8sPoolNamePlaceholder(page, text) {
+/**
+ * 断言「K8s 实例池」为必填项（iView 必填红星由 ::before 渲染，不进 innerText，
+ * 以 `ivu-form-item-required` 类 + 标签文案断言）
+ */
+async function expectK8sPoolRequired(page) {
+  const item = k8sPoolNameItem(page);
+  await expect(item).toHaveClass(/ivu-form-item-required/);
+  await expect(item.locator('.ivu-form-item-label').first()).toHaveText(
+    LABEL.k8sPoolName,
+  );
+}
+
+/**
+ * 断言「K8s 实例池」带红色必填星号（label 的 ivu-form-item-required 伪元素颜色）
+ */
+async function expectK8sPoolRequiredMark(page) {
+  const color = await k8sPoolNameItem(page)
+    .locator('.ivu-form-item-label')
+    .first()
+    .evaluate((el) => getComputedStyle(el, '::before').color);
+  // 红色系（iView 默认 #ed4014 → rgb(237, 64, 20)）
+  expect(color).toMatch(/^rgb\((2[0-5]\d|19\d),\s*(\d|[1-9]\d),\s*(\d|[1-9]\d)\)$/);
+}
+
+/**
+ * 断言「K8s 实例池」为可搜索下拉（filterable → 渲染 input.ivu-select-input）
+ */
+async function expectK8sPoolFilterable(page) {
   const input = k8sPoolNameItem(page)
-    .locator('input:not([type="hidden"])')
+    .locator('input.ivu-select-input')
+    .first();
+  await expect(input).toBeVisible({ timeout: 10000 });
+  await expect(input).toHaveAttribute('autocomplete', 'off');
+}
+
+async function expectK8sPoolPlaceholder(page, text) {
+  const input = k8sPoolNameItem(page)
+    .locator('input.ivu-select-input')
     .first();
   await expect(input).toHaveAttribute('placeholder', text);
 }
 
-async function fillK8sPoolName(page, value) {
-  await fillInputByLabel(page, upsertScope(page), LABEL.k8sPoolName, value);
+/**
+ * 读取当前选中池的展示文案（filterable 单选把选中项文案回填到输入框；
+ * 已保存池不在列表中时为「<名>(池不存在)」）
+ */
+async function getK8sPoolSelectedLabel(page) {
+  const input = k8sPoolNameItem(page)
+    .locator('input.ivu-select-input')
+    .first();
+  await expect(input).toBeVisible({ timeout: 10000 });
+  return ((await input.inputValue()) || '').trim();
 }
 
-async function getK8sPoolNameValue(page) {
-  return getInputByLabelValue(page, upsertScope(page), LABEL.k8sPoolName);
+/**
+ * 读取当前选中池的真实取值（iView Select 隐藏 input 的 value，去除「(池不存在)」后缀）
+ */
+async function getK8sPoolSelectedValue(page) {
+  const hidden = k8sPoolNameItem(page)
+    .locator('input[type="hidden"]')
+    .first();
+  await expect(hidden).toHaveCount(1);
+  return ((await hidden.inputValue()) || '').trim();
+}
+
+/**
+ * 展开「K8s 实例池」下拉并返回全部选项（含选中态/禁用态）
+ * @returns {Promise<Array<{text:string, disabled:boolean, selected:boolean}>>}
+ */
+async function openK8sPoolOptions(page) {
+  const dropdown = k8sPoolDropdown(page).first();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (!(await dropdown.isVisible().catch(() => false))) {
+      await k8sPoolSelect(page).trigger.click();
+    }
+    await page.waitForTimeout(450);
+    if (await dropdown.isVisible().catch(() => false)) {
+      break;
+    }
+  }
+  await expect(dropdown).toBeVisible({ timeout: 10000 });
+
+  const items = k8sPoolDropdownItems(page);
+  const count = await items.count();
+  const options = [];
+  for (let index = 0; index < count; index += 1) {
+    const className = (await items.nth(index).getAttribute('class')) || '';
+    options.push({
+      text: ((await items.nth(index).innerText()) || '').trim(),
+      disabled: className.includes('ivu-select-item-disabled'),
+      selected: className.includes('ivu-select-item-selected'),
+    });
+  }
+  return options;
+}
+
+async function closeK8sPoolOptions(page) {
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+}
+
+/**
+ * 断言下拉选项文案与顺序（PR-C-25 预期 1：与 GET /k8s_pools 的 Data.list[].name 完全一致）
+ */
+async function expectK8sPoolOptions(page, expectedNames) {
+  const options = await openK8sPoolOptions(page);
+  await closeK8sPoolOptions(page);
+  expect(options.map((option) => option.text)).toEqual(expectedNames);
+}
+
+/**
+ * 断言下拉可搜索：输入关键字后仅保留匹配项，清空后恢复全量
+ */
+async function expectK8sPoolSearchable(page, keyword, expectedMatches) {
+  await openK8sPoolOptions(page);
+  const input = k8sPoolNameItem(page)
+    .locator('input.ivu-select-input')
+    .first();
+  await input.fill(keyword);
+  await page.waitForTimeout(500);
+  const matched = (await k8sPoolDropdownItems(page).allInnerTexts()).map((text) =>
+    text.trim(),
+  );
+  await input.fill('');
+  await page.waitForTimeout(300);
+  await closeK8sPoolOptions(page);
+  if (expectedMatches) {
+    expect(matched).toEqual(expectedMatches);
+  }
+  return matched;
+}
+
+/**
+ * 选择「K8s 实例池」下拉选项（按选项展示文案精确匹配）
+ */
+async function selectK8sPool(page, optionLabel) {
+  await k8sPoolSelect(page).selectOptionExact(optionLabel);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+}
+
+/**
+ * 断言系统无池时下拉内为唯一禁用项「暂无可用的 K8s 实例池」（PR-C-25 预期 2）
+ */
+async function expectK8sPoolNoOptions(page) {
+  const options = await openK8sPoolOptions(page);
+  await closeK8sPoolOptions(page);
+  expect(options).toEqual([
+    { text: DOC.k8sPoolNoOptions, disabled: true, selected: false },
+  ]);
+}
+
+/**
+ * 断言已保存池不在列表中时追加「<名>(池不存在)」并保持选中（PR-C-25 预期 3）
+ */
+async function expectK8sPoolNotExistOptionSelected(page, poolName) {
+  const expectedLabel = poolName + '(' + DOC.k8sPoolNotExistSuffix + ')';
+  expect(await getK8sPoolSelectedLabel(page)).toBe(expectedLabel);
+  expect(await getK8sPoolSelectedValue(page)).toBe(poolName);
+
+  const options = await openK8sPoolOptions(page);
+  await closeK8sPoolOptions(page);
+  const appended = options.filter((option) => option.text === expectedLabel);
+  expect(appended, '下拉应追加「' + expectedLabel + '」选项').toHaveLength(1);
+  expect(appended[0].selected, '追加项应保持选中').toBe(true);
+  return options;
+}
+
+/**
+ * 断言「K8s 实例池」表单项的校验提示（PR-V-19：留空提示「请选择 K8s 实例池」）
+ */
+async function expectK8sPoolValidationError(page, text) {
+  const item = k8sPoolNameItem(page);
+  await expect(item).toHaveClass(/ivu-form-item-error/);
+  const tip = item.locator('.ivu-form-item-error-tip');
+  await expect(tip).toBeVisible({ timeout: 10000 });
+  if (text !== undefined) {
+    await expect(tip).toHaveText(text);
+  }
+}
+
+/**
+ * 断言「实例池」Card 内不展示实例数 / 同步时间等辅助小字（PR-C-25 预期 1）
+ */
+async function expectK8sPoolNoAuxText(page) {
+  const text = await instancePoolCard(page).innerText();
+  expect(text).not.toMatch(/实例数|同步时间|instance_count|last_sync/i);
 }
 
 /**
@@ -690,6 +915,16 @@ async function fillKeyRow(page, index, { name, key }) {
 }
 
 // ---------- 提交 / 取消 ----------
+
+/** 关闭服务商编辑/创建抽屉（右上角 X；iView Drawer 无取消按钮场景） */
+async function closeProviderDrawer(page) {
+  // 关闭按钮在抽屉头部（drawer-wrap 层），不在 .provider-upsert 作用域内
+  const activeDrawer = page
+    .locator('.ivu-drawer-wrap:not(.ivu-drawer-hidden)')
+    .last();
+  await activeDrawer.locator('.ivu-drawer-close').click();
+  await expect(upsertScope(page)).toBeHidden({ timeout: 10000 });
+}
 
 async function clickSubmit(page) {
   await upsertScope(page).getByRole('button', { name: '提交' }).click();
@@ -1048,10 +1283,15 @@ async function filterListByName(page, keyword) {
 async function expectListFilterCleared(page, title) {
   await expect(searchInput(page, title)).toHaveValue('');
   const pageNumbers = await providerTable(page).pageNumberCount();
+  // 2026-11-02 环境清理后（providers 7 条 < 20/页）暴露：原断言「页码 > 1」依赖
+  // 环境数据量 >20，属数据规模依赖（坑位 28 同类）。改为与 API 全量总数核对：
+  // 分页页数应等于 ceil(total/20)（至少 1 页），与环境数据量解耦。
+  const total = (await providerApi.fetchProvidersViaApi(page)).length;
+  const expectedPages = Math.max(1, Math.ceil(total / 20));
   expect(
     pageNumbers,
-    '清空「' + title + '」筛选后应恢复全量分页（页码 > 1）',
-  ).toBeGreaterThan(1);
+    `清空「${title}」筛选后应恢复全量分页（API 总数 ${total} → 期望 ${expectedPages} 页，实际 ${pageNumbers} 页）`,
+  ).toBe(expectedPages);
 }
 
 /**
@@ -1445,6 +1685,161 @@ async function expectViewNoInputs(page) {
   await expect(viewScope(page).locator('input')).toHaveCount(0);
 }
 
+/**
+ * 编辑/创建抽屉内不存在已下线的镜像字段 k8s_instance_pool
+ * （issue #276 后续：后端字段删除后前端同步移除，防止重新引入）
+ * 同时校验 formData 键与 FormItem prop 两处的「不存在」
+ */
+async function expectUpsertNoMirrorInstancePool(page) {
+  const result = await upsertScope(page).evaluate((el) => {
+    const formEl = el.querySelector('.ivu-form');
+    if (!formEl || !formEl.__vue__) {
+      return { ok: false, reason: 'no-form-vue' };
+    }
+    let vm = formEl.__vue__;
+    while (vm && !vm.formData) {
+      vm = vm.$parent;
+    }
+    if (!vm || !vm.formData) {
+      return { ok: false, reason: 'no-formData' };
+    }
+    const formRef = (vm.$refs && (vm.$refs.formData || vm.$refs.form)) || null;
+    const props =
+      formRef && Array.isArray(formRef.fields)
+        ? formRef.fields.map((f) => String(f.prop || ''))
+        : [];
+    return {
+      ok: true,
+      hasKey: Object.prototype.hasOwnProperty.call(
+        vm.formData,
+        'k8s_instance_pool',
+      ),
+      props,
+    };
+  });
+  expect(result.ok, '应能读取抽屉表单模型: ' + JSON.stringify(result)).toBe(
+    true,
+  );
+  expect(result.hasKey, 'formData 不应再包含 k8s_instance_pool').toBe(false);
+  expect(
+    result.props.filter((p) => p.indexOf('k8s_instance_pool') !== -1),
+    'FormItem 不应再声明 k8s_instance_pool 字段',
+  ).toEqual([]);
+}
+
+/** 详情页不渲染已下线的镜像字段（纯回归护栏：文本中不应再出现该字段名） */
+async function expectViewNoMirrorInstancePool(page) {
+  const text = await viewScope(page).innerText();
+  expect(text).not.toContain('k8s_instance_pool');
+}
+
+// ---------- 详情页 K8s 分支（PR-D-04 / PR-D-05） ----------
+
+function viewInstancePoolCard(page) {
+  return viewCard(page, LABEL.instancePoolCard);
+}
+
+/**
+ * 按 label 文案精确匹配读取只读行的值
+ *
+ * 与 viewInfoValue 的差别：后者用 filter({ hasText }) 子串匹配，
+ * 「实例来源」行的值「K8s 实例池（k8s_pool）」包含「K8s 实例池」，
+ * 会把「K8s 实例池」行误命中成「实例来源」行。
+ */
+async function viewInfoValueExact(page, cardTitle, label) {
+  const card = viewCard(page, cardTitle);
+  await expect(card).toBeVisible({ timeout: 10000 });
+  const exactLabel = new RegExp(
+    '^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
+  );
+  const row = card
+    .locator('.info-row')
+    .filter({ has: page.locator('.info-label', { hasText: exactLabel }) })
+    .first();
+  await expect(row).toBeVisible({ timeout: 10000 });
+  return ((await row.locator('.info-value').textContent()) || '').trim();
+}
+
+/**
+ * 断言详情「实例池」Card 进入 K8s 分支：实例来源 + 只读标签「K8s 实例池」（PR-D-04 预期 2/3）
+ */
+async function expectViewK8sPool(page, poolName) {
+  expect(
+    await viewInfoValueExact(page, LABEL.instancePoolCard, LABEL.instanceSource),
+  ).toBe(DOC.instanceSourceK8s);
+  expect(
+    await viewInfoValueExact(
+      page,
+      LABEL.instancePoolCard,
+      DOC.k8sPoolReadonlyLabel,
+    ),
+  ).toBe(poolName);
+}
+
+/**
+ * 断言 K8s 分支实例表表头（实例地址 / 端口 / 权重）
+ */
+async function expectViewK8sInstanceHeaders(page) {
+  await expectViewTableHeaders(
+    page,
+    LABEL.instancePoolCard,
+    DOC.k8sPoolInstanceHeaders,
+  );
+}
+
+function viewK8sInstanceRows(page) {
+  return viewTableRows(page, LABEL.instancePoolCard);
+}
+
+/**
+ * 断言 K8s 分支实例表逐行与给定实例一致（addr / port / weight）
+ */
+async function expectViewK8sInstances(page, instances) {
+  const rows = viewK8sInstanceRows(page);
+  await expect(rows).toHaveCount(instances.length, { timeout: 15000 });
+  for (let index = 0; index < instances.length; index += 1) {
+    const cells = rows.nth(index).locator('td');
+    await expect(cells.nth(0)).toHaveText(String(instances[index].addr));
+    await expect(cells.nth(1)).toHaveText(String(instances[index].port));
+    await expect(cells.nth(2)).toHaveText(String(instances[index].weight));
+  }
+}
+
+/**
+ * 断言 K8s 分支降级文案（空池 / 池不存在）且不渲染实例表
+ */
+async function expectViewK8sEmptyText(page, text) {
+  const empty = viewInstancePoolCard(page).locator('.empty-text');
+  await expect(empty).toHaveText(text, { timeout: 15000 });
+  await expect(viewK8sInstanceRows(page)).toHaveCount(0);
+}
+
+/**
+ * 断言详情「实例池」Card 无编辑入口（只读卡片：无按钮、无输入框）
+ */
+async function expectViewInstancePoolReadonly(page) {
+  const card = viewInstancePoolCard(page);
+  await expect(card.getByRole('button')).toHaveCount(0);
+  await expect(card.locator('input')).toHaveCount(0);
+}
+
+/**
+ * 打开详情抽屉并等待该服务商引用池的实时查询 GET /open-api/v1/k8s_pools/{name}
+ * @returns {Promise<import('@playwright/test').Response>} 用于断言 200 / 404
+ */
+async function openViewDrawerWaitingK8sPool(page, rowText, poolName) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes('/open-api/v1/k8s_pools/' + encodeURIComponent(poolName)) &&
+        r.request().method() === 'GET',
+      { timeout: 20000 },
+    ),
+    openViewDrawer(page, rowText),
+  ]);
+  return response;
+}
+
 // ---------- 分段计价：适用时段 Checkbox / 快捷 / 行删除（PR-T-01~07/09/10） ----------
 
 function weekdayCheckbox(page, rowIndex, dayLabel) {
@@ -1760,6 +2155,8 @@ module.exports = {
   fillDescription,
   selectInstanceMode,
   fillInstanceRow,
+  removeInstanceRow,
+  expectInstanceRowDeleteDisabled,
   fillDomainName,
   expectInstanceListError,
   instanceSourceItem,
@@ -1771,9 +2168,21 @@ module.exports = {
   k8sPoolNameItem,
   expectK8sPoolNameVisible,
   expectK8sPoolNameHidden,
-  expectK8sPoolNamePlaceholder,
-  fillK8sPoolName,
-  getK8sPoolNameValue,
+  expectK8sPoolRequired,
+  expectK8sPoolRequiredMark,
+  expectK8sPoolFilterable,
+  expectK8sPoolPlaceholder,
+  getK8sPoolSelectedLabel,
+  getK8sPoolSelectedValue,
+  openK8sPoolOptions,
+  closeK8sPoolOptions,
+  expectK8sPoolOptions,
+  expectK8sPoolSearchable,
+  selectK8sPool,
+  expectK8sPoolNoOptions,
+  expectK8sPoolNotExistOptionSelected,
+  expectK8sPoolValidationError,
+  expectK8sPoolNoAuxText,
   expectInstanceListHidden,
   expectInstanceListVisible,
   getInstanceRowValue,
@@ -1788,12 +2197,22 @@ module.exports = {
   addKeyRow,
   fillKeyRow,
   clickSubmit,
+  closeProviderDrawer,
   expectDrawerHidden,
   submitUpsertAndWait,
   submitEditAndWait,
   viewScope,
   expectViewScopeVisible,
   viewInfoValue,
+  viewInfoValueExact,
+  viewInstancePoolCard,
+  expectViewK8sPool,
+  expectViewK8sInstanceHeaders,
+  viewK8sInstanceRows,
+  expectViewK8sInstances,
+  expectViewK8sEmptyText,
+  expectViewInstancePoolReadonly,
+  openViewDrawerWaitingK8sPool,
   pricingTiersScope,
   expectPricingTiersScopeVisible,
   expectPricingTiersScopeHidden,
@@ -1866,6 +2285,8 @@ module.exports = {
   viewTableRows,
   expectViewTableHeaders,
   expectViewNoInputs,
+  expectUpsertNoMirrorInstancePool,
+  expectViewNoMirrorInstancePool,
   weekdayCheckbox,
   clickWeekdayCheckbox,
   expectWeekdayChecked,

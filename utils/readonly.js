@@ -314,7 +314,7 @@ const INTERACTIVE_SELECTOR = 'button, a[href], .ivu-btn, [role="button"]';
 
 /**
  * 遍历前端路由（`ai-gateway-web/src/router/router.js`）。
- * `cert` 未列入：该模块 2026-09-11 随菜单移除，`playwright.config.js` 有 testIgnore。
+ * `cert` 未列入：证书管理模块 2026-09-11 随菜单移除，相关用例与 pages 封装已删除。
  */
 const SWEEP_ROUTES = [
   { slug: 'user', label: '用户管理' },
@@ -410,7 +410,8 @@ async function expectRouteReachable(page, slug, options = {}) {
   expect(page.url(), `路由应停留在 /${slug}`).toContain(`/${slug}`);
   await expect(
     page.locator('.ivu-modal-wrap').filter({ visible: true }).filter({
-      hasText: /当前url非法|当前未登录或者登录已过期|Session Key/,
+      hasText:
+        /当前url非法|当前账号没有控制台访问权限|控制台前端与后端版本不一致|当前未登录或者登录已过期|Session Key/,
     }),
     `路由 /${slug} 不应出现会话/URL 异常弹窗`,
   ).toHaveCount(0);

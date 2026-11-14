@@ -62,34 +62,20 @@ function formatTimestamp(timestamp) {
 }
 
 /**
- * 与前端 EntityView/ApiKeyView formatNumber 一致的金额/数值格式化
- * （zh-CN 千分位，RMB 最多 4 位小数，total_token 0 位；
- *   与前端一致使用 minimumFractionDigits=0，不足 4 位小数不补零，
- *   如 0 显示为 ¥0 而非 ¥0.0000）
+ * 与前端 const.js formatQuotaDisplay 一致的配额展示格式化（issue #139）：
+ * total_token → 百万Token（÷1e6，截断 2 位小数）；RMB → 元（toFixed 2 位）。
  */
-function formatQuotaNumber(num, decimals) {
+function formatMillionTokens(tokens) {
+  const num = Number(tokens);
+  if (Number.isNaN(num)) return '-';
+  return (Math.floor((num / 1e6) * 100) / 100).toFixed(2);
+}
+function formatYuan(num) {
   const value = Number(num);
   if (Number.isNaN(value)) return '-';
-  return value.toLocaleString('zh-CN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals,
-  });
+  return value.toFixed(2);
 }
 
-// 复刻 ApiKeyList.vue formatNumber：decimals=0 时对 >=1000 做 K/M 缩写
-function formatApiKeyListNumber(num, decimals) {
-  const value = Number(num);
-  if (Number.isNaN(value)) return '-';
-  if (decimals === 0) {
-    if (value >= 1000000) {
-      return (value / 1000000).toFixed(1) + 'M';
-    }
-    if (value >= 1000) {
-      return (value / 1000).toFixed(1) + 'K';
-    }
-  }
-  return formatQuotaNumber(value, decimals);
-}
 
 apiKeyDescribe(
   'API-Key展示 - AKD-01 详情页全字段与接口数据一致性',
@@ -258,33 +244,27 @@ apiKeyDescribe(
         const quotaCheckText = quota.unlimited ? '否' : '是';
         await expect(drawerText).toContain(quotaCheckText);
 
-        // 配额总量（带千位分隔符）
+        // 配额总量（issue #139：百万Token 展示，2 位小数）
         if (quota.quota !== undefined) {
-          const formattedQuota = quota.quota
-            .toString()
-            .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-          await expect(drawerText).toContain(formattedQuota);
+          await expect(drawerText).toContain(formatMillionTokens(quota.quota));
         }
 
         // 已使用
         if (quota.used !== undefined) {
-          const formattedUsed = quota.used
-            .toString()
-            .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-          await expect(drawerText).toContain(formattedUsed);
+          await expect(drawerText).toContain(formatMillionTokens(quota.used));
         }
 
         // 剩余量
         if (quota.remaining !== undefined) {
-          const formattedRemaining = quota.remaining
-            .toString()
-            .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-          await expect(drawerText).toContain(formattedRemaining);
+          await expect(drawerText).toContain(
+            formatMillionTokens(quota.remaining),
+          );
         }
 
         // 配额单位
         if (quota.unit) {
-          const unitText = quota.unit === 'total_token' ? 'tokens' : 'requests';
+          const unitText =
+            quota.unit === 'total_token' ? '百万Token' : '元';
           await expect(drawerText).toContain(unitText);
         }
 
@@ -450,19 +430,14 @@ apiKeyDescribe(
           .first();
         const drawerText = await drawer.textContent();
 
-        // API-Key 详情抽屉未渲染单位行（无 RMB 文本），仅验证 ¥ 前缀与小数位
-        // 配额总量：¥ 前缀 + 4 位小数
-        await expect(drawerText).toContain(
-          '¥' + formatQuotaNumber(quota.quota, 4),
-        );
+        // issue #139：详情 RMB 按「元」展示（2 位小数）
+        await expect(drawerText).toContain(formatYuan(quota.quota));
 
-        // 已使用 / 剩余量同样 ¥ 前缀，最多 4 位小数（0 值不补零，如 ¥0）
+        // 已使用 / 剩余量同样 2 位小数
         const used = quota.balance ? Number(quota.balance.used) || 0 : 0;
         const remaining = Math.max(0, Number(quota.quota) - used);
-        await expect(drawerText).toContain('¥' + formatQuotaNumber(used, 4));
-        await expect(drawerText).toContain(
-          '¥' + formatQuotaNumber(remaining, 4),
-        );
+        await expect(drawerText).toContain(formatYuan(used));
+        await expect(drawerText).toContain(formatYuan(remaining));
 
         // 进度条百分比与 used / quota 比例一致（前端 quotaPercent 计算方式）
         const percent = Math.round((used / Number(quota.quota)) * 10000) / 100;
@@ -539,11 +514,8 @@ apiKeyDescribe(
         );
         const tq = tokenData.quota_plan;
         const tUsed = tq.balance ? Number(tq.balance.used) || 0 : 0;
-        // 前端格式：`{used} tokens / {quota} tokens`，且 decimals=0 时 >=1000 缩写为 K/M
-        const tText = `${formatApiKeyListNumber(
-          tUsed,
-          0,
-        )} tokens / ${formatApiKeyListNumber(tq.quota, 0)} tokens`;
+        // issue #139：列表格式 `{used} 百万Token / {quota} 百万Token`
+        const tText = `${formatMillionTokens(tUsed)} 百万Token / ${formatMillionTokens(tq.quota)} 百万Token`;
         const tokenRow = page
           .locator('.show-iView-Table .ivu-table tbody tr')
           .filter({ hasText: tokenDesc })
@@ -560,16 +532,14 @@ apiKeyDescribe(
         );
         const rq = rmbData.quota_plan;
         const rUsed = rq.balance ? Number(rq.balance.used) || 0 : 0;
-        const rText = `¥${formatQuotaNumber(
-          rUsed,
-          4,
-        )} / ¥${formatQuotaNumber(rq.quota, 4)}`;
+        // issue #139：列表 RMB 按「元」展示（2 位小数）
+        const rText = `${formatYuan(rUsed)} 元 / ${formatYuan(rq.quota)} 元`;
         const rmbRow = page
           .locator('.show-iView-Table .ivu-table tbody tr')
           .filter({ hasText: rmbDesc })
           .first();
         await expect(rmbRow).toContainText(rText);
-        await expect(rmbRow).not.toContainText('tokens');
+        await expect(rmbRow).not.toContainText('百万Token');
       });
     });
   },

@@ -193,3 +193,28 @@
 
 *文档版本: v0.2*
 *最后更新: 2026-10-16（EPP 分配粒度收敛为实例组：删除主/备/状态列与抽屉主实例下拉，覆写请求体仅 `{ group_name }`；对应 [变更记录](../../../../ai-gateway-web/design-docs/modifications/2026-10-16-epp-single-instance/ui-code-changes.md)）*
+
+
+---
+
+### EP-ASGN-07：EPP 集群生命周期与分配释放（跨模块，覆盖缺口清单 #42）
+
+**功能模块**: EPP 调度分配  
+**优先级**: P1  
+**自动化**: `tests/epp-pool/test_04_epp_cluster_assignment_lifecycle.spec.js`
+
+#### 测试步骤
+
+1. API 造 Provider + `balance_mode=EPP` 集群
+2. `GET /epp-assignments?cluster={name}` 读分配；UI 切「EPP 调度分配」Tab 查看该集群行
+3. 删除该集群
+4. 再次 `GET /epp-assignments?cluster={name}`
+
+#### 预期结果
+
+1. EPP 集群创建即参与分配（实例池非空时自动分配；池组被占满时分配为空——环境观察项）
+2. 分配视图可见该集群行
+3. 删除集群后**分配释放**：GET 返回 404（集群不存在）或无分配记录，两种均属释放
+4. 同 spec 另含「EPP 实例池接口 500 容错」用例（覆盖缺口清单 #33 尾条，最小不变量：不白屏 + 错误提示 + 恢复可用）
+
+*2026-10-30 新增（定向 2/2 通过：ASGN-07 52s / 错误容错 1.1m）*
