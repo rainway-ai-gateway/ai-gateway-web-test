@@ -3438,6 +3438,130 @@ async function probeClusterDeleteAsReadonly(page, clusterName) {
   return { status: response.status(), body };
 }
 
+// ====== 单 Key 最大并发会话数（llm_config.max_concurrency_per_key，RM-BC-128，2026-11-16）======
+
+function maxConcurrencyPerKeyItem(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  return modelStepBody(page, drawerTitle)
+    .locator('.ivu-form-item')
+    .filter({ hasText: DOC_BUSINESS_CLUSTER.maxConcurrencyPerKeyLabel })
+    .first();
+}
+
+async function getMaxConcurrencyPerKeyValue(
+  page,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const input = maxConcurrencyPerKeyItem(page, drawerTitle)
+    .locator('input')
+    .first();
+  return ((await input.inputValue()) || '').trim();
+}
+
+// InputNumber 会钳制输入，负值/小数经 Vue 模型注入触发 FormItem 校验（对齐 Key 亲和性写法）
+async function setMaxConcurrencyPerKeyViaModel(page, value) {
+  const injected = await page.evaluate((payload) => {
+    const allForms = document.querySelectorAll('.ivu-form');
+    for (const formEl of allForms) {
+      const formVue = formEl.__vue__;
+      if (!formVue) continue;
+      let current = formVue;
+      for (let i = 0; i < 10 && current; i++) {
+        if (
+          current.formData &&
+          'model_mappings' in current.formData &&
+          'max_concurrency_per_key' in current.formData
+        ) {
+          current.formData.max_concurrency_per_key = payload.value;
+          current.$forceUpdate();
+          if (current.$refs.formData) {
+            current.$nextTick(() => {
+              try {
+                current.$refs.formData.validateField('max_concurrency_per_key');
+              } catch (e) {
+                /* 字段未挂载：无校验可执行 */
+              }
+            });
+          }
+          return true;
+        }
+        current = current.$parent;
+      }
+    }
+    return false;
+  }, { value });
+  if (!injected) {
+    throw new Error('无法通过表单设置 max_concurrency_per_key 字段');
+  }
+  await waitAfterResourceMutation(page, 200);
+}
+
+async function fillMaxConcurrencyPerKey(
+  page,
+  value,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const input = maxConcurrencyPerKeyItem(page, drawerTitle)
+    .locator('input')
+    .first();
+  await input.fill(String(value));
+  await input.blur();
+  await waitAfterResourceMutation(page, 200);
+}
+
+async function expectMaxConcurrencyPerKeyError(
+  page,
+  message,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const matcher = message instanceof RegExp ? message : String(message);
+  await expect(
+    maxConcurrencyPerKeyItem(page, drawerTitle)
+      .locator('.ivu-form-item-error-tip')
+      .filter({ hasText: matcher })
+      .first(),
+  ).toBeVisible({ timeout: 10000 });
+}
+
+async function expectMaxConcurrencyPerKeyErrorHidden(
+  page,
+  message,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const matcher = message instanceof RegExp ? message : String(message);
+  await expect(
+    maxConcurrencyPerKeyItem(page, drawerTitle)
+      .locator('.ivu-form-item-error-tip')
+      .filter({ hasText: matcher })
+      .first(),
+  ).toBeHidden({ timeout: 5000 });
+}
+
+/**
+ * 复查页/详情页「大模型配置」内的普通行（ul.clearFloat > li.title / li.value），
+ * 返回该行展示值；行不存在时返回 null。
+ */
+async function getLlmReviewRowValue(
+  page,
+  label,
+  drawerTitle = DRAWER_TITLE.createBusinessCluster,
+) {
+  const rows = ivuDrawer(page)
+    .withTitle(drawerTitle)
+    .locator('.ivu-drawer-body')
+    .locator('ul.clearFloat')
+    .filter({ hasText: label });
+  if ((await rows.count()) === 0) return null;
+  const value = await rows
+    .first()
+    .locator('li.value')
+    .first()
+    .textContent();
+  return ((value || '') + '').trim();
+}
+
 module.exports = {
   openCreateBusinessClusterDrawer,
   openEditBusinessClusterDrawer,
@@ -3494,6 +3618,13 @@ module.exports = {
   setNormalizeUpstreamErrorFieldViaModel,
   getNormalizeReviewValues,
   getReviewBlockValues,
+  maxConcurrencyPerKeyItem,
+  getMaxConcurrencyPerKeyValue,
+  setMaxConcurrencyPerKeyViaModel,
+  fillMaxConcurrencyPerKey,
+  expectMaxConcurrencyPerKeyError,
+  expectMaxConcurrencyPerKeyErrorHidden,
+  getLlmReviewRowValue,
   getModelMappingRowCount,
   deleteModelMappingRow,
   getReviewKeysTable,

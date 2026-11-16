@@ -119,6 +119,11 @@ const DOC_BUSINESS_CLUSTER = {
   keyAffinityPenaltyTtlAuthInvalidMsg: '401/402/403 惩罚时长须为 60–1800 的整数（秒）',
   keyAffinityTtlInvalidMsg: '须为大于 0 的整数',
   keyAffinityRedisPrefixRequiredMsg: 'Redis Key 前缀不能为空',
+  // 2026-11-16 llm_config.max_concurrency_per_key（RM-BC-128；文案与 i18n gatewayConfig.* 逐字一致）
+  maxConcurrencyPerKeyLabel: '单 Key 最大并发会话数',
+  maxConcurrencyPerKeyPlaceholder: '0 表示不限制',
+  maxConcurrencyPerKeyInvalidMsg: '单 Key 最大并发会话数须为 ≥ 0 的整数（0 = 不限）',
+  maxConcurrencyPerKeyUnlimitedReview: '0（不限）',
   defaultRedisPrefix: 'bfe:ai:key_affinity',
   // 2026-10-10 上游错误归一（新增 Card，渲染在「Key 亲和性」与「均衡模式配置」之间，
   // WRR/EPP 两种均衡模式下均展示；文案对齐 i18n gatewayConfig.normalizeUpstreamError）

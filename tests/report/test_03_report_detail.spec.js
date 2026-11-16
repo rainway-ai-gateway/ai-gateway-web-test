@@ -106,8 +106,8 @@ async function loadMockedDetailRows(page, items, options = {}) {
 // ====== 展示口径（与 Logs.vue / index.vue 对齐，见 04 文档 RP-L-12 ~ RP-L-15、RP-L-24）======
 
 function fmtUsDetail(us) {
-  // fmtUsDetail：null 或 0 视为「未设置」→ '-'，否则 (us/1000).toFixed(1) ms
-  if (us == null || us === 0) return '-';
+  // fmtUsDetail：仅 null 视为「未记录」→ '-'；0 为实测值（BFE 对非流式响应也记录首包耗时，issue #315）
+  if (us == null) return '-';
   return `${(us / 1000).toFixed(1)} ms`;
 }
 
@@ -404,6 +404,12 @@ test.describe('数据报表 - RP-L-13 意图延迟格式化', () => {
         ai_ttft_us: null,
         ai_tpot_us: null,
       }),
+      // issue #315：非流式行同样携带 BFE 实测的 TTFT/TPOT（可为非 0）
+      buildDetailItem({
+        ai_stream: 0,
+        ai_ttft_us: 450000,
+        ai_tpot_us: 22000,
+      }),
     ];
     await loadMockedDetailRows(page, items);
 
@@ -417,15 +423,17 @@ test.describe('数据报表 - RP-L-13 意图延迟格式化', () => {
       await rp.closeDetailDrawer(page);
     });
 
-    await test.step('0 与 null：详情侧统一展示 -（0 视为未设置）', async () => {
+    await test.step('0 为实测值：详情 TTFT / TPOT 展示 0.0 ms（不再是「未设置」）', async () => {
       await rp.openDetailByRowIndex(page, 1);
       await expectDetailMatchesItem(page, items[1], {
         意图延迟: '0.0 ms',
-        TTFT: '-',
-        TPOT: '-',
+        TTFT: '0.0 ms',
+        TPOT: '0.0 ms',
       });
       await rp.closeDetailDrawer(page);
+    });
 
+    await test.step('null 为未记录：详情 TTFT / TPOT 展示 -', async () => {
       await rp.openDetailByRowIndex(page, 2);
       await expectDetailMatchesItem(page, items[2], {
         意图延迟: '-',
@@ -435,11 +443,22 @@ test.describe('数据报表 - RP-L-13 意图延迟格式化', () => {
       await rp.closeDetailDrawer(page);
     });
 
+    await test.step('非流式行（ai_stream=0）的实测值照常换算展示', async () => {
+      await rp.openDetailByRowIndex(page, 3);
+      await expectDetailMatchesItem(page, items[3], {
+        流式: '否',
+        TTFT: '450.0 ms',
+        TPOT: '22.0 ms',
+      });
+      await rp.closeDetailDrawer(page);
+    });
+
     await test.step('列表侧 TTFT 列仍为 fmtUs 口径（0 展示 0.0 ms，未随详情改动）', async () => {
       expect(await columnCells(page, 'TTFT')).toEqual([
         '687.3 ms',
         '0.0 ms',
         '-',
+        '450.0 ms',
       ]);
     });
   });

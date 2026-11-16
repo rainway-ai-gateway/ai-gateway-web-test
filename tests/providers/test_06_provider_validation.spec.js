@@ -19,7 +19,7 @@
  * 覆盖用例（docs/providers/02-功能测试用例/06-字段校验矩阵.md）：
  * - PR-V-01 name 必填校验（留空 / 仅空白提交被拦截；创建成功后名称不可修改）
  * - PR-V-02 name 格式校验（非法字符 / 首尾非法 / 含空白拦截；合法值通过）
- * - PR-V-03 description 长度与控制字符校验（256 通过 / 257 截断 / 控制字符拦截 / 留空合法）
+ * - PR-V-03 description 长度与控制字符校验（256 通过 / 257 截断 / **UTF-8 字节口径：85 中文通过、86 中文拦截** / 控制字符拦截 / 留空合法）
  * - PR-V-04 instance_pool 至少 1 个（至少保留 1 行，删除按钮禁用；单行可提交）
  * - PR-V-05 instance.addr 必填与格式校验（IP 模式仅接受 IP；域名模式接受域名）
  * - PR-V-06 instance.port 范围校验（边界 1/65535/443 通过；空值拦截）
@@ -333,6 +333,33 @@ test.describe('模型服务商 - PR-V-03 description 长度与控制字符校验
     const response = await pp.submitUpsertAndWait(page);
     const body = response.request().postDataJSON();
     expect(body.description.length).toBe(256);
+    cleanup.trackName(name);
+    await pp.expectProviderRowVisibleByName(page, name, 15000);
+  });
+
+  test('描述长度按 UTF-8 字节计：85 中文（255 字节）通过，86 中文（258 字节）拦截', async ({
+    page,
+  }) => {
+    const name = uniqueName('provider');
+    await pp.openCreateDrawer(page);
+    await pp.fillName(page, name);
+
+    // 1. 86 个中文 = 258 字节 > 256 字节 → blur 校验拦截（maxlength=256 为字符上限，不参与本判定）
+    await pp.fillDescription(page, '描'.repeat(86));
+    await pp.expectFormItemError(page, '描述');
+
+    // 2. 85 个中文 = 255 字节 ≤ 256 字节 → 通过并提交成功
+    await pp.fillDescription(page, '描'.repeat(85));
+    await fillModels(page);
+    await pp.fillInstanceRow(page, 0, {
+      addr: IP_ADDR,
+      port: IP_PORT,
+      weight: IP_WEIGHT,
+    });
+    const response = await pp.submitUpsertAndWait(page);
+    const body = response.request().postDataJSON();
+    expect(body.description).toBe('描'.repeat(85));
+    expect(Buffer.byteLength(body.description, 'utf8')).toBe(255);
     cleanup.trackName(name);
     await pp.expectProviderRowVisibleByName(page, name, 15000);
   });
