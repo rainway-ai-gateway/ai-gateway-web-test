@@ -86,7 +86,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 │   ├── seed-report-data.js            # 报表造数
 │   ├── capture-*.js                   # 手册/新模块/报表截图
 │   └── cleanup-*.cjs                  # 各模块测试数据清理
-├── docs/                              # 17 个模块的两层测试文档（每模块 01-测试场景概览 + 02-功能测试用例/）
+├── docs/                              # 18 个模块的两层测试文档（每模块 01-测试场景概览 + 02-功能测试用例/）
 ├── global-setup.js                    # Playwright 全局登录
 ├── global-teardown.js                 # Playwright 全局清理
 ├── playwright.config.js               # Playwright 配置
@@ -133,6 +133,7 @@ AI 网关 GUI 自动化测试项目，采用 Playwright 对 AI 网关管理控�
 | 批量任务 | `docs/batch-tasks/` | `tests/batch-tasks/` | 4 | 列表、详情、取消、只读视角 |
 | 密钥收敛 | `docs/reencrypt-sweep/` | `tests/reencrypt-sweep/` | 6 | 触发与轮询、列表筛选、详情与错误、只读视角 |
 | 操作日志 | `docs/operation-logs/` | `tests/operation-logs/` | 3 | 列表筛选、详情、跨模块联动 |
+| 访问日志 | `docs/access-log/` | `tests/access-log/` | 0（待生成） | 访问日志 Header 白名单的展示态/编辑态、增删与保存、名称归一去重、敏感头拦截、只读视角 |
 
 > **已下线模块**：
 >
